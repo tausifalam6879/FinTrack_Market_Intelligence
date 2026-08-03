@@ -23,8 +23,8 @@ const readSentAlerts = () => {
 };
 
 export default function MarketPulse({ onResearch }) {
-  const [result, setResult] = useState(null);
-  const [loading, setLoading] = useState(true);
+  const [result, setResult] = useState(() => marketApi.seed.overview());
+  const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [sector, setSector] = useState("All");
   const [alertThreshold, setAlertThreshold] = useState(readAlertThreshold);
@@ -47,7 +47,7 @@ export default function MarketPulse({ onResearch }) {
   };
 
   useEffect(() => {
-    load();
+    load(false, true);
     const intervalId = window.setInterval(() => load(true, true), ALERT_SCAN_INTERVAL_MS);
     return () => window.clearInterval(intervalId);
   }, []);
@@ -116,6 +116,7 @@ export default function MarketPulse({ onResearch }) {
         </div>
       </div>
 
+      {result?.mode === "snapshot" && <div className="notice warning">Showing the packaged verified snapshot from {new Date(result.savedAt).toLocaleString("en-IN")} while the latest live feed loads in the background.</div>}
       {result?.mode === "cache" && <div className="notice warning">The live provider did not respond. Values below are the last verified browser response from {new Date(result.savedAt).toLocaleString("en-IN")}.</div>}
       {error && <div className="notice error">{error}</div>}
 

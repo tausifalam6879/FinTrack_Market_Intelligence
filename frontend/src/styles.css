@@ -72,8 +72,10 @@ main { width: min(1500px, calc(100% - 40px)); margin: 0 auto; }
 .heading-actions { display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: 10px; }
 .status-badge { display: inline-flex; align-items: center; gap: 8px; white-space: nowrap; padding: 8px 11px; border: 1px solid #bbe3d2; border-radius: 999px; color: #176640; background: #eefaf3; font-size: 12px; font-weight: 800; }
 .status-badge.status-cache { color: #955018; border-color: #f1d3a8; background: #fff7e9; }
+.status-badge.status-snapshot { color: #62508f; border-color: #d8cdef; background: #f6f1ff; }
 .status-dot { width: 7px; height: 7px; border-radius: 50%; background: #2aa260; }
 .status-cache .status-dot { background: #ed8a27; }
+.status-snapshot .status-dot { background: #8065b3; }
 .primary-button, .secondary-button { min-height: 44px; padding: 0 18px; border-radius: 12px; font-weight: 800; }
 .primary-button { border: 0; color: white; background: linear-gradient(100deg, var(--teal), var(--blue)); box-shadow: 0 8px 20px rgba(22,117,148,.18); }
 .secondary-button { border: 1px solid #aacbd0; color: var(--teal-dark); background: white; }

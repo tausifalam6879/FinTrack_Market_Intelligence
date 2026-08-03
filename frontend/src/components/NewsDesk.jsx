@@ -20,25 +20,25 @@ const relatedLabel = (symbol = "") => ({
 const sentimentLabel = (value) => Number(value) > 0.15 ? "Positive" : Number(value) < -0.15 ? "Negative" : "Neutral";
 
 export default function NewsDesk({ onResearch }) {
-  const [result, setResult] = useState(null);
-  const [loading, setLoading] = useState(true);
+  const [result, setResult] = useState(() => marketApi.seed.newsFeed());
+  const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [activeFilter, setActiveFilter] = useState("All");
   const [search, setSearch] = useState("");
 
-  const load = async (refresh = false) => {
-    setLoading(true);
-    setError("");
+  const load = async (refresh = false, silent = false) => {
+    if (!silent) setLoading(true);
+    if (!silent) setError("");
     try {
       setResult(await marketApi.newsFeed(refresh));
     } catch {
-      setError("The headline provider is temporarily unavailable. Please retry after a moment.");
+      if (!silent) setError("The headline provider is temporarily unavailable. The packaged verified snapshot remains visible.");
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
   };
 
-  useEffect(() => { load(); }, []);
+  useEffect(() => { load(false, true); }, []);
 
   const articles = useMemo(() => {
     const query = search.trim().toLowerCase();
@@ -63,6 +63,7 @@ export default function NewsDesk({ onResearch }) {
         </div>
       </div>
 
+      {result?.mode === "snapshot" && <div className="notice warning">Showing the packaged verified headlines from {new Date(result.savedAt).toLocaleString("en-IN")} while current news loads in the background.</div>}
       {result?.mode === "cache" && <div className="notice warning">The live headline provider did not respond. Showing the last successful browser response from {new Date(result.savedAt).toLocaleString("en-IN")}.</div>}
       {error && <div className="notice error">{error}</div>}
 

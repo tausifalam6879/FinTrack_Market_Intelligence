@@ -10,20 +10,20 @@ const displayName = (code) => {
 const formatRate = (value, digits = 2) => Number(value).toLocaleString("en-IN", { minimumFractionDigits: digits, maximumFractionDigits: digits });
 
 export default function CurrencyDesk() {
-  const [result, setResult] = useState(null);
-  const [loading, setLoading] = useState(true);
+  const [result, setResult] = useState(() => marketApi.seed.currencies());
+  const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [search, setSearch] = useState("");
 
-  const load = async (refresh = false) => {
-    setLoading(true);
-    setError("");
+  const load = async (refresh = false, silent = false) => {
+    if (!silent) setLoading(true);
+    if (!silent) setError("");
     try { setResult(await marketApi.currencies(refresh)); }
-    catch { setError("Currency feed is temporarily unavailable and no verified browser cache exists yet."); }
-    finally { setLoading(false); }
+    catch { if (!silent) setError("Currency feed is temporarily unavailable. The packaged verified snapshot remains visible."); }
+    finally { if (!silent) setLoading(false); }
   };
 
-  useEffect(() => { load(); }, []);
+  useEffect(() => { load(false, true); }, []);
 
   const directory = useMemo(() => Object.entries(result?.data?.referenceRates || {})
     .map(([code, value]) => ({ code, value, name: displayName(code) }))
@@ -37,6 +37,7 @@ export default function CurrencyDesk() {
         <div className="heading-actions">{result && <StatusBadge mode={result.mode} label={result.mode === "live" ? "Currency feed connected" : undefined} />}<button className="secondary-button" onClick={() => load(true)} disabled={loading}>{loading ? "Checking…" : "Refresh now"}</button></div>
       </div>
 
+      {result?.mode === "snapshot" && <div className="notice warning">Showing the packaged verified snapshot from {new Date(result.savedAt).toLocaleString("en-IN")} while the latest currency feed loads in the background.</div>}
       {result?.mode === "cache" && <div className="notice warning">Showing the last verified response from {new Date(result.savedAt).toLocaleString("en-IN")} while the provider reconnects.</div>}
       {error && <div className="notice error">{error}</div>}
 
@@ -61,4 +62,3 @@ export default function CurrencyDesk() {
     </section>
   );
 }
-

@@ -13,6 +13,8 @@ A focused public financial-information dashboard extracted as a new, independent
 
 > Market quotes can be delayed by the upstream exchange/provider. Every screen displays its data timestamp and never presents cached values as live.
 
+The frontend uses a stale-while-revalidate startup flow. A fresh browser renders a packaged, timestamped verified snapshot immediately; an existing browser prefers its last successful response. The live API is requested in the background and replaces the visible values as soon as it responds, so a sleeping backend never leaves the dashboard blank. Use `python scripts/update_bundled_snapshot.py` while the local API is running to refresh the packaged release snapshot.
+
 The downside monitor is deliberately rule-based and fast: it evaluates the verified percentage move against the user's chosen threshold without waiting for Gemini. Browser notifications require explicit permission, work while the site is open, and are deduplicated per quote timestamp. Alerts are risk signals, not automated sell instructions.
 
 ## Project structure
@@ -20,6 +22,7 @@ The downside monitor is deliberately rule-based and fast: it evaluates the verif
 ```text
 frontend/        React + Vite public website
 market-service/  FastAPI market, currency and grounded-agent API
+scripts/         Release-snapshot maintenance utility
 ```
 
 ## Run locally

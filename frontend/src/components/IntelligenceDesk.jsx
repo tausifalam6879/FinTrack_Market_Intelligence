@@ -12,8 +12,8 @@ const formatNumber = (value) => value === null || value === undefined ? "—" : 
 export default function IntelligenceDesk({ initialSymbol = "^NSEI" }) {
   const [symbol, setSymbol] = useState(initialSymbol);
   const [draftSymbol, setDraftSymbol] = useState(initialSymbol);
-  const [result, setResult] = useState(null);
-  const [loading, setLoading] = useState(true);
+  const [result, setResult] = useState(() => marketApi.seed.analysis(initialSymbol));
+  const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [messages, setMessages] = useState([]);
   const [question, setQuestion] = useState("");
@@ -21,16 +21,21 @@ export default function IntelligenceDesk({ initialSymbol = "^NSEI" }) {
 
   useEffect(() => { setSymbol(initialSymbol); setDraftSymbol(initialSymbol); }, [initialSymbol]);
 
-  const load = async (nextSymbol = symbol, refresh = false) => {
+  const load = async (nextSymbol = symbol, refresh = false, silent = false) => {
     const normalized = nextSymbol.trim().toUpperCase();
     if (!normalized) return;
-    setLoading(true); setError(""); setSymbol(normalized); setDraftSymbol(normalized);
+    const seed = !refresh ? marketApi.seed.analysis(normalized) : null;
+    if (seed) setResult(seed);
+    else if (!refresh) setResult(null);
+    if (!silent || !seed) setLoading(true);
+    if (!silent) setError("");
+    setSymbol(normalized); setDraftSymbol(normalized);
     try { setResult(await marketApi.analysis(normalized, refresh)); }
-    catch { setError(`Research for ${normalized} is temporarily unavailable.`); }
+    catch { if (!silent) setError(`Research for ${normalized} is temporarily unavailable.`); }
     finally { setLoading(false); }
   };
 
-  useEffect(() => { load(initialSymbol); }, [initialSymbol]);
+  useEffect(() => { load(initialSymbol, false, true); }, [initialSymbol]);
 
   const analysis = result?.data;
   const history = useMemo(() => analysis?.history || [], [analysis]);
@@ -59,6 +64,8 @@ export default function IntelligenceDesk({ initialSymbol = "^NSEI" }) {
         <button className="primary-button" disabled={loading}>{loading ? "Researching…" : "Run research"}</button>
       </form>
       <div className="preset-row">{presets.map(([value, label]) => <button key={value} className={symbol === value ? "sector active" : "sector"} onClick={() => load(value)}>{label}</button>)}</div>
+      {result?.mode === "snapshot" && <div className="notice warning">Showing packaged verified research while the live backend refreshes this symbol in the background.</div>}
+      {result?.mode === "cache" && <div className="notice warning">Showing the last verified browser research while the live backend reconnects.</div>}
       {error && <div className="notice error">{error}</div>}
 
       {analysis && <>
@@ -113,4 +120,3 @@ function Sparkline({ history }) {
   const path = points.map((value, index) => `${(index / (points.length - 1)) * 100},${90 - ((value - min) / range) * 75}`).join(" ");
   return <div className="sparkline"><svg viewBox="0 0 100 100" preserveAspectRatio="none" role="img" aria-label="Historical price line"><defs><linearGradient id="chartFill" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stopColor="#168f9e" stopOpacity=".28"/><stop offset="1" stopColor="#168f9e" stopOpacity="0"/></linearGradient></defs><polygon points={`0,100 ${path} 100,100`} fill="url(#chartFill)"/><polyline points={path} fill="none" stroke="#087d8c" strokeWidth="2" vectorEffect="non-scaling-stroke"/></svg><div><span>{formatNumber(min)}</span><span>{formatNumber(max)}</span></div></div>;
 }
-

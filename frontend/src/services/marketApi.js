@@ -1,3 +1,5 @@
+import bundledSnapshot from "../data/bundledMarketSnapshot.json";
+
 const DEFAULT_API = "http://localhost:8002";
 const API_BASE = String(import.meta.env.VITE_MARKET_API_BASE_URL || DEFAULT_API).replace(/\/$/, "");
 const CACHE_PREFIX = "fintrack.market.intelligence.v1";
@@ -19,6 +21,30 @@ const writeCache = (name, data) => {
   } catch {
     // Private browsing or full storage must not break the public dashboard.
   }
+};
+
+const bundledData = (name) => {
+  if (name === "overview") return bundledSnapshot.overview;
+  if (name === "currencies") return bundledSnapshot.currencies;
+  if (name === "news-feed") return bundledSnapshot.newsFeed;
+  if (name.startsWith("analysis.")) return bundledSnapshot.analysis?.[name.slice("analysis.".length)];
+  return null;
+};
+
+const seedResult = (name) => {
+  const cached = readCache(name);
+  if (cached?.data) {
+    return { data: cached.data, mode: "cache", savedAt: cached.savedAt, seedSource: "browser" };
+  }
+
+  const data = bundledData(name);
+  if (!data) return null;
+  return {
+    data,
+    mode: "snapshot",
+    savedAt: data.generatedAt || data.dataAsOf || bundledSnapshot.packagedAt,
+    seedSource: "bundled"
+  };
 };
 
 const request = async (path, { method = "GET", body, timeout = 30000 } = {}) => {
@@ -62,6 +88,12 @@ const query = (params) => {
 
 export const marketApi = {
   baseUrl: API_BASE,
+  seed: {
+    overview: () => seedResult("overview"),
+    newsFeed: () => seedResult("news-feed"),
+    currencies: () => seedResult("currencies"),
+    analysis: (symbol) => seedResult(`analysis.${String(symbol || "").trim().toUpperCase()}`)
+  },
   overview: (refresh = false) => withCache("overview", () => request(`/market/overview${query({ refresh })}`, { timeout: 45000 })),
   newsFeed: (refresh = false, limit = 20) => withCache("news-feed", () => request(`/market/news-feed${query({ refresh, limit })}`, { timeout: 45000 })),
   currencies: (refresh = false) => withCache("currencies", () => request(`/market/currencies${query({ refresh })}`, { timeout: 45000 })),
