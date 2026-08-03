@@ -67,7 +67,13 @@ Never place API keys in the React app or commit them to Git.
 
 For a public demo, keep this focused application in its own GitHub repository. Deploy `frontend/` to GitHub Pages and deploy `market-service/` as a separate Render web service using the included `render.yaml`. A new Render account is not required, but the Python API needs its own service because GitHub Pages can host only the static frontend.
 
-After Render provides the API URL, set `VITE_MARKET_API_BASE_URL` during the GitHub Pages build. Do not deploy until the local version has been reviewed.
+The public frontend workflow builds against:
+
+```text
+https://fintrack-market-intelligence-api.onrender.com
+```
+
+GitHub Pages publishes the frontend from `.github/workflows/deploy-pages.yml`. The bundled verified snapshot renders immediately, then the page replaces it with the newest Render response in the background.
 
 ## Scope
 
