@@ -1,5 +1,9 @@
 # FinTrack Market Intelligence
 
+## Live Demo
+
+**Open the deployed application:** [https://tausifalam6879.github.io/FinTrack_Market_Intelligence/](https://tausifalam6879.github.io/FinTrack_Market_Intelligence/)
+
 A focused public financial-information dashboard extracted as a new, independent project from the larger FinTrack platform. It opens directly without login and concentrates on:
 
 - latest available company and global-index quotes;
