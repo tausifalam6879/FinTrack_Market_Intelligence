@@ -8,6 +8,7 @@ const presets = [
 ];
 
 const formatNumber = (value) => value === null || value === undefined ? "—" : Number(value).toLocaleString("en-IN", { maximumFractionDigits: 2 });
+const formatPercent = (value) => value === null || value === undefined ? "—" : `${Number(value).toFixed(1)}%`;
 
 export default function IntelligenceDesk({ initialSymbol = "^NSEI" }) {
   const [symbol, setSymbol] = useState(initialSymbol);
@@ -39,6 +40,9 @@ export default function IntelligenceDesk({ initialSymbol = "^NSEI" }) {
 
   const analysis = result?.data;
   const history = useMemo(() => analysis?.history || [], [analysis]);
+  const modelComparisons = analysis?.model?.modelsCompared || [];
+  const featureImportance = analysis?.model?.featureImportance || [];
+  const predictionAudit = analysis?.predictionAudit || [];
   const send = async (value = question) => {
     const clean = value.trim();
     if (!clean || asking) return;
@@ -77,7 +81,7 @@ export default function IntelligenceDesk({ initialSymbol = "^NSEI" }) {
           <Metric label="Probability up" value={`${analysis.probabilityUp}%`} hint={`${analysis.probabilityDown}% probability down`} />
           <Metric label="Expected range" value={`${formatNumber(analysis.expectedRange?.low)} – ${formatNumber(analysis.expectedRange?.high)}`} hint={analysis.expectedRange?.currency} />
           <Metric label="RSI (14)" value={formatNumber(analysis.technicalIndicators?.rsi14)} hint="Below 30 oversold · above 70 overbought" />
-          <Metric label="Historical test" value={`${analysis.model?.backtestAccuracy}%`} hint={`${analysis.model?.quality} signal quality`} />
+          <Metric label="Walk-forward score" value={`${analysis.model?.balancedAccuracy ?? analysis.model?.backtestAccuracy}%`} hint={`${analysis.model?.walkForwardFolds || 1} time-ordered folds · ${analysis.model?.quality} quality`} />
         </div>
         <div className="research-grid">
           <article className="chart-panel"><div className="panel-title"><h3>One-year evidence</h3><span>Daily close</span></div><Sparkline history={history} /></article>
@@ -92,11 +96,17 @@ export default function IntelligenceDesk({ initialSymbol = "^NSEI" }) {
             </dl>
           </article>
         </div>
+        {modelComparisons.length > 0 && <ModelEvidence
+          model={analysis.model}
+          comparisons={modelComparisons}
+          importance={featureImportance}
+          audit={predictionAudit}
+        />}
         <div className="notice warning"><strong>Research limitation:</strong> {analysis.disclaimer}</div>
       </>}
 
       <article className="agent-panel">
-        <div className="panel-title"><div><p className="eyebrow">GROUNDED RESEARCH AGENT</p><h3>Ask using verified market evidence</h3></div><span>Tools first · Gemini second</span></div>
+        <div className="panel-title"><div><p className="eyebrow">GROUNDED RESEARCH AGENT</p><h3>Ask using verified market evidence</h3></div><span>Prediction model first · Gemini explanation second</span></div>
         <div className="suggested-row">
           {["Gold aur crude ka Nifty par kya impact hai?", "Top gainers aur losers batao", `Why is ${symbol} outlook ${analysis?.outlook || "neutral"}?`].map((item) => <button key={item} onClick={() => send(item)}>{item}</button>)}
         </div>
@@ -112,6 +122,54 @@ export default function IntelligenceDesk({ initialSymbol = "^NSEI" }) {
 }
 
 function Metric({ label, value, hint }) { return <article className="metric-card"><small>{label}</small><strong>{value}</strong><span>{hint}</span></article>; }
+
+function ModelEvidence({ model, comparisons, importance, audit }) {
+  const maxImportance = Math.max(...importance.map((item) => Number(item.importance) || 0), 1);
+  return <section className="model-evidence" aria-labelledby="model-validation-title">
+    <div className="panel-title">
+      <div><p className="eyebrow">PREDICTIVE ML EVIDENCE</p><h3 id="model-validation-title">Model validation and prediction audit</h3></div>
+      <span>Time order preserved · no random shuffle</span>
+    </div>
+    <div className="validation-summary">
+      <ValidationStat label="Selected classifier" value={model.type} />
+      <ValidationStat label="Walk-forward folds" value={model.walkForwardFolds} />
+      <ValidationStat label="Balanced accuracy" value={formatPercent(model.balancedAccuracy)} />
+      <ValidationStat label="ROC AUC" value={formatPercent(model.rocAuc)} />
+      <ValidationStat label="Reliability weight" value={model.reliabilityWeight} />
+      <ValidationStat label="Training rows" value={model.trainingRows} />
+    </div>
+    <div className="validation-columns">
+      <div className="model-table-wrap">
+        <h4>Candidate model comparison</h4>
+        <div className="table-scroll"><table className="model-table">
+          <thead><tr><th>Model</th><th>Balanced accuracy</th><th>ROC AUC</th><th>F1</th><th>Brier</th></tr></thead>
+          <tbody>{comparisons.map((item) => <tr key={item.id} className={item.selected ? "selected-row" : ""}>
+            <td>{item.name}{item.selected && <span className="selected-pill">Selected</span>}</td>
+            <td>{formatPercent(item.balancedAccuracy)}</td><td>{formatPercent(item.rocAuc)}</td><td>{formatPercent(item.f1)}</td><td>{item.brierScore ?? "—"}</td>
+          </tr>)}</tbody>
+        </table></div>
+      </div>
+      <div className="importance-panel">
+        <h4>Feature importance</h4>
+        {importance.slice(0, 7).map((item) => <div className="importance-row" key={item.feature}>
+          <div><span>{item.label}</span><strong>{item.importance}%</strong></div>
+          <div className="importance-track"><span style={{ width: `${(Number(item.importance) / maxImportance) * 100}%` }} /></div>
+        </div>)}
+      </div>
+    </div>
+    <div className="audit-panel">
+      <h4>Prediction audit</h4>
+      {audit.length === 0 ? <p>No completed-session audit record yet. The first prediction will be evaluated after a later trading session becomes available.</p> :
+        <div className="audit-grid">{audit.slice(0, 4).map((item) => <article className="audit-record" key={item.id}>
+          <span>{item.modelDataDate}</span><strong>{item.outlook} · {item.probabilityUp}% up</strong>
+          <small>{item.status === "evaluated" ? `Actual: ${item.actualDirection} (${item.actualReturnPercent}%) · ${item.correct ? "correct" : "not correct"}` : "Awaiting next session"}</small>
+        </article>)}</div>}
+    </div>
+    <p className="method-note">Target: next trading session direction. Validation uses expanding historical windows with a one-session gap. Low out-of-sample skill shrinks confidence toward 50%, and only probabilities outside 42%-58% become directional. Feature importance is a diagnostic, not proof of causality.</p>
+  </section>;
+}
+
+function ValidationStat({ label, value }) { return <article className="validation-card"><small>{label}</small><strong>{value ?? "—"}</strong></article>; }
 
 function Sparkline({ history }) {
   const points = history.map((item) => Number(item.close)).filter(Number.isFinite);

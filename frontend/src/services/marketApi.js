@@ -98,6 +98,7 @@ export const marketApi = {
   newsFeed: (refresh = false, limit = 20) => withCache("news-feed", () => request(`/market/news-feed${query({ refresh, limit })}`, { timeout: 45000 })),
   currencies: (refresh = false) => withCache("currencies", () => request(`/market/currencies${query({ refresh })}`, { timeout: 45000 })),
   analysis: (symbol, refresh = false) => withCache(`analysis.${symbol}`, () => request(`/market/analysis${query({ symbol, refresh })}`, { timeout: 60000 })),
+  predictions: (symbol, limit = 12) => request(`/market/predictions${query({ symbol, limit })}`, { timeout: 15000 }),
   company: (symbol, refresh = false) => withCache(`company.${symbol}`, () => request(`/market/company${query({ symbol, refresh })}`, { timeout: 60000 })),
   agent: (payload) => request("/market/agent", { method: "POST", body: payload, timeout: 90000 })
 };

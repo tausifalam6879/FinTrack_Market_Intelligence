@@ -16,8 +16,19 @@ import pandas as pd
 import yfinance as yf
 from fastapi import APIRouter, HTTPException, Request as FastApiRequest
 from pydantic import BaseModel, Field
+from sklearn.ensemble import HistGradientBoostingClassifier, RandomForestClassifier
 from sklearn.linear_model import LogisticRegression
-from sklearn.metrics import accuracy_score
+from sklearn.inspection import permutation_importance
+from sklearn.metrics import (
+    accuracy_score,
+    balanced_accuracy_score,
+    brier_score_loss,
+    f1_score,
+    precision_score,
+    recall_score,
+    roc_auc_score,
+)
+from sklearn.model_selection import TimeSeriesSplit
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 
@@ -183,8 +194,11 @@ NEGATIVE_WORDS = {
 CACHE_TTL_SECONDS = int(os.getenv("MARKET_CACHE_TTL_SECONDS", "120"))
 QUOTE_CACHE_TTL_SECONDS = int(os.getenv("MARKET_QUOTE_CACHE_TTL_SECONDS", "15"))
 OVERVIEW_CACHE_TTL_SECONDS = int(os.getenv("MARKET_OVERVIEW_CACHE_TTL_SECONDS", "900"))
+PREDICTION_CACHE_TTL_SECONDS = int(os.getenv("MARKET_PREDICTION_CACHE_TTL_SECONDS", "900"))
 _cache: Dict[str, Dict[str, Any]] = {}
 _overview_lock = Lock()
+_prediction_audit: Dict[str, List[Dict[str, Any]]] = {}
+_prediction_audit_lock = Lock()
 
 
 class MarketAgentRequest(BaseModel):
@@ -769,16 +783,237 @@ def _macro_adjustment(symbol: str) -> Dict[str, Any]:
     }
 
 
+FEATURE_LABELS = {
+    "return_1": "1-session return",
+    "return_5": "5-session return",
+    "sma_10_ratio": "Price vs SMA 10",
+    "sma_20_ratio": "Price vs SMA 20",
+    "volatility_10": "10-session volatility",
+    "volume_change": "Volume change",
+    "rsi_14": "RSI 14",
+}
+
+
+def _candidate_models() -> Dict[str, Dict[str, Any]]:
+    """Return fresh estimators so every time-series fold is isolated."""
+    return {
+        "logistic_regression": {
+            "name": "Logistic Regression",
+            "estimator": Pipeline([
+                ("scale", StandardScaler()),
+                ("classifier", LogisticRegression(
+                    max_iter=1000,
+                    class_weight="balanced",
+                    random_state=42,
+                    solver="liblinear",
+                )),
+            ]),
+        },
+        "random_forest": {
+            "name": "Random Forest",
+            "estimator": Pipeline([
+                ("classifier", RandomForestClassifier(
+                    n_estimators=120,
+                    max_depth=5,
+                    min_samples_leaf=7,
+                    class_weight="balanced",
+                    random_state=42,
+                    # Render's free container has limited CPU. Parallel workers can
+                    # make a small model slower because of process start-up cost.
+                    n_jobs=1,
+                )),
+            ]),
+        },
+        "hist_gradient_boosting": {
+            "name": "Histogram Gradient Boosting",
+            "estimator": Pipeline([
+                ("classifier", HistGradientBoostingClassifier(
+                    max_iter=100,
+                    learning_rate=0.05,
+                    max_depth=3,
+                    min_samples_leaf=12,
+                    l2_regularization=1.0,
+                    random_state=42,
+                )),
+            ]),
+        },
+    }
+
+
+def _classification_metrics(y_true: np.ndarray, predictions: np.ndarray, probabilities: np.ndarray) -> Dict[str, Any]:
+    roc_auc = None
+    if len(np.unique(y_true)) == 2:
+        roc_auc = float(roc_auc_score(y_true, probabilities))
+    return {
+        "accuracy": float(accuracy_score(y_true, predictions)),
+        "balancedAccuracy": float(balanced_accuracy_score(y_true, predictions)),
+        "precision": float(precision_score(y_true, predictions, zero_division=0)),
+        "recall": float(recall_score(y_true, predictions, zero_division=0)),
+        "f1": float(f1_score(y_true, predictions, zero_division=0)),
+        "rocAuc": roc_auc,
+        "brierScore": float(brier_score_loss(y_true, probabilities)),
+    }
+
+
+def _walk_forward_model_comparison(
+    dataset: pd.DataFrame,
+    feature_columns: List[str],
+) -> Dict[str, Any]:
+    """Compare models using expanding-window validation without random shuffle."""
+    fold_count = 5 if len(dataset) >= 180 else 4
+    splitter = TimeSeriesSplit(n_splits=fold_count, gap=1)
+    comparisons: List[Dict[str, Any]] = []
+
+    for model_id, candidate in _candidate_models().items():
+        fold_truth: List[int] = []
+        fold_predictions: List[int] = []
+        fold_probabilities: List[float] = []
+        used_folds = 0
+        for train_indices, test_indices in splitter.split(dataset):
+            train = dataset.iloc[train_indices]
+            test = dataset.iloc[test_indices]
+            if train["target"].nunique() < 2 or test.empty:
+                continue
+            estimator = _candidate_models()[model_id]["estimator"]
+            estimator.fit(train[feature_columns], train["target"])
+            probabilities = estimator.predict_proba(test[feature_columns])[:, 1]
+            predictions = (probabilities >= 0.50).astype(int)
+            fold_truth.extend(test["target"].astype(int).tolist())
+            fold_predictions.extend(predictions.tolist())
+            fold_probabilities.extend(probabilities.tolist())
+            used_folds += 1
+
+        if not fold_truth:
+            continue
+        metrics = _classification_metrics(
+            np.asarray(fold_truth),
+            np.asarray(fold_predictions),
+            np.asarray(fold_probabilities),
+        )
+        auc_component = metrics["rocAuc"] if metrics["rocAuc"] is not None else 0.50
+        selection_score = (
+            metrics["balancedAccuracy"] * 0.55
+            + auc_component * 0.30
+            + (1 - metrics["brierScore"]) * 0.15
+        )
+        comparisons.append({
+            "id": model_id,
+            "name": candidate["name"],
+            "folds": used_folds,
+            "testRows": len(fold_truth),
+            "selectionScore": selection_score,
+            **metrics,
+        })
+
+    if not comparisons:
+        raise ValueError("Time-series validation could not produce a valid model comparison.")
+    comparisons.sort(key=lambda item: item["selectionScore"], reverse=True)
+    selected = comparisons[0]
+    return {"selected": selected, "comparisons": comparisons, "folds": fold_count}
+
+
+def _feature_importance(
+    estimator: Pipeline,
+    dataset: pd.DataFrame,
+    feature_columns: List[str],
+) -> List[Dict[str, Any]]:
+    evaluation_rows = max(30, int(len(dataset) * 0.20))
+    evaluation = dataset.tail(evaluation_rows)
+    try:
+        result = permutation_importance(
+            estimator,
+            evaluation[feature_columns],
+            evaluation["target"],
+            scoring="accuracy",
+            n_repeats=4,
+            random_state=42,
+            n_jobs=1,
+        )
+        raw = np.maximum(result.importances_mean, 0)
+    except Exception:
+        raw = np.zeros(len(feature_columns))
+    total = float(raw.sum())
+    normalized = (raw / total * 100) if total > 0 else np.zeros(len(feature_columns))
+    values = [
+        {
+            "feature": feature,
+            "label": FEATURE_LABELS.get(feature, feature),
+            "importance": _round(float(value), 1),
+        }
+        for feature, value in zip(feature_columns, normalized)
+    ]
+    return sorted(values, key=lambda item: item["importance"] or 0, reverse=True)
+
+
+def _record_prediction(payload: Dict[str, Any], model_data_date: str) -> List[Dict[str, Any]]:
+    """Keep an explainable runtime audit and score it when a later session arrives."""
+    symbol = payload["symbol"]
+    with _prediction_audit_lock:
+        records = _prediction_audit.setdefault(symbol, [])
+        if records and records[-1]["modelDataDate"] != model_data_date and records[-1]["status"] == "pending":
+            previous = records[-1]
+            reference = float(previous["referenceClose"])
+            actual_return = ((float(payload["lastClose"]) / reference) - 1) * 100 if reference else 0
+            actual_direction = "UP" if actual_return > 0.10 else "DOWN" if actual_return < -0.10 else "FLAT"
+            expected = previous["outlook"]
+            previous["status"] = "evaluated"
+            previous["actualReturnPercent"] = _round(actual_return, 2)
+            previous["actualDirection"] = actual_direction
+            previous["correct"] = (
+                (expected == "BULLISH" and actual_direction == "UP")
+                or (expected == "BEARISH" and actual_direction == "DOWN")
+                or (expected == "NEUTRAL" and abs(actual_return) <= 0.50)
+            )
+
+        if not records or records[-1]["modelDataDate"] != model_data_date:
+            records.append({
+                "id": f"{symbol}:{model_data_date}",
+                "symbol": symbol,
+                "modelDataDate": model_data_date,
+                "issuedAt": payload["generatedAt"],
+                "target": "Next trading session",
+                "outlook": payload["outlook"],
+                "probabilityUp": payload["probabilityUp"],
+                "referenceClose": payload["lastClose"],
+                "expectedRange": payload["expectedRange"],
+                "selectedModel": payload["model"]["type"],
+                "status": "pending",
+                "actualReturnPercent": None,
+                "actualDirection": None,
+                "correct": None,
+            })
+            del records[:-30]
+        return [dict(item) for item in reversed(records[-12:])]
+
+
+def prediction_audit(symbol: str, limit: int = 12) -> Dict[str, Any]:
+    symbol = _sanitize_symbol(symbol)
+    with _prediction_audit_lock:
+        records = [dict(item) for item in reversed(_prediction_audit.get(symbol, [])[-limit:])]
+    evaluated = [item for item in records if item["status"] == "evaluated"]
+    correct = [item for item in evaluated if item.get("correct")]
+    return {
+        "symbol": symbol,
+        "records": records,
+        "evaluatedCount": len(evaluated),
+        "observedAccuracy": _round(len(correct) / len(evaluated) * 100, 1) if evaluated else None,
+        "storage": "Runtime audit; the browser also caches successful research responses.",
+        "generatedAt": datetime.now(timezone.utc).isoformat(),
+    }
+
+
 def market_prediction(symbol: str) -> Dict[str, Any]:
     symbol = _sanitize_symbol(symbol)
+    cache_key = f"prediction:{symbol}"
+    cached = _cache_get(cache_key, PREDICTION_CACHE_TTL_SECONDS)
+    if cached is not None:
+        return cached
+
     frame = _history(symbol, "2y")
     if len(frame) < 100:
         raise ValueError("At least 100 daily observations are required for a next-session outlook.")
 
-    feature_columns = [
-        "return_1", "return_5", "sma_10_ratio", "sma_20_ratio",
-        "volatility_10", "volume_change", "rsi_14",
-    ]
+    feature_columns = list(FEATURE_LABELS)
     features = _features(frame)
     dataset = features.copy()
     dataset["target"] = (frame["Close"].shift(-1) > frame["Close"]).astype(int)
@@ -787,23 +1022,15 @@ def market_prediction(symbol: str) -> Dict[str, Any]:
     if len(dataset) < 80 or latest_features.empty or dataset["target"].nunique() < 2:
         raise ValueError("Not enough clean historical data to train the direction model.")
 
-    split = max(60, int(len(dataset) * 0.8))
-    split = min(split, len(dataset) - 20)
-    train = dataset.iloc[:split]
-    test = dataset.iloc[split:]
-    model = Pipeline([
-        ("scale", StandardScaler()),
-        ("classifier", LogisticRegression(
-            max_iter=1000,
-            class_weight="balanced",
-            random_state=42,
-            solver="liblinear",
-        )),
-    ])
-    model.fit(train[feature_columns], train["target"])
-    backtest_accuracy = accuracy_score(test["target"], model.predict(test[feature_columns]))
+    validation = _walk_forward_model_comparison(dataset, feature_columns)
+    selected = validation["selected"]
+    model = _candidate_models()[selected["id"]]["estimator"]
+    model.fit(dataset[feature_columns], dataset["target"])
     raw_technical_probability = float(model.predict_proba(latest_features[feature_columns])[0][1])
-    reliability_weight = max(0.15, min(1.0, (backtest_accuracy - 0.50) / 0.15))
+    balanced_accuracy = float(selected["balancedAccuracy"])
+    auc = float(selected["rocAuc"] if selected["rocAuc"] is not None else 0.50)
+    reliability_signal = ((balanced_accuracy - 0.50) * 0.65) + ((auc - 0.50) * 0.35)
+    reliability_weight = max(0.12, min(1.0, reliability_signal / 0.12))
     technical_probability = 0.50 + ((raw_technical_probability - 0.50) * reliability_weight)
 
     news = market_news(symbol)
@@ -812,9 +1039,11 @@ def market_prediction(symbol: str) -> Dict[str, Any]:
     macro_adjustment = float(macro["probabilityAdjustmentPoints"] or 0) / 100
     probability_up = max(0.05, min(0.95, technical_probability + news_adjustment + macro_adjustment))
     probability_down = 1 - probability_up
-    if probability_up >= 0.55:
+    bullish_threshold = 0.58
+    bearish_threshold = 0.42
+    if probability_up >= bullish_threshold:
         outlook = "BULLISH"
-    elif probability_up <= 0.45:
+    elif probability_up <= bearish_threshold:
         outlook = "BEARISH"
     else:
         outlook = "NEUTRAL"
@@ -826,11 +1055,32 @@ def market_prediction(symbol: str) -> Dict[str, Any]:
     sma20 = float(frame["Close"].rolling(20).mean().iloc[-1])
     sma50 = float(frame["Close"].rolling(50).mean().iloc[-1])
     snapshot = market_snapshot(symbol)
+    baseline_accuracy = max(float(dataset["target"].mean()), 1 - float(dataset["target"].mean()))
+    quality = "useful" if balanced_accuracy >= 0.58 and auc >= 0.57 else "weak" if balanced_accuracy < 0.53 else "limited"
+    importance = _feature_importance(model, dataset, feature_columns)
+    comparisons = [
+        {
+            "id": item["id"],
+            "name": item["name"],
+            "selected": item["id"] == selected["id"],
+            "folds": item["folds"],
+            "testRows": item["testRows"],
+            "accuracy": _round(item["accuracy"] * 100, 1),
+            "balancedAccuracy": _round(item["balancedAccuracy"] * 100, 1),
+            "precision": _round(item["precision"] * 100, 1),
+            "recall": _round(item["recall"] * 100, 1),
+            "f1": _round(item["f1"] * 100, 1),
+            "rocAuc": _round(item["rocAuc"] * 100, 1) if item["rocAuc"] is not None else None,
+            "brierScore": _round(item["brierScore"], 3),
+        }
+        for item in validation["comparisons"]
+    ]
 
-    return {
+    payload = {
         "symbol": symbol,
         "name": snapshot["name"],
         "outlook": outlook,
+        "predictionHorizon": "Next trading session",
         "probabilityUp": _round(probability_up * 100, 1),
         "probabilityDown": _round(probability_down * 100, 1),
         "expectedRange": {
@@ -853,24 +1103,39 @@ def market_prediction(symbol: str) -> Dict[str, Any]:
         },
         "macroFactor": macro,
         "model": {
-            "type": "StandardScaler + Logistic Regression",
-            "trainingRows": len(train),
-            "testRows": len(test),
-            "backtestAccuracy": _round(backtest_accuracy * 100, 1),
-            "quality": "useful" if backtest_accuracy >= 0.58 else "weak" if backtest_accuracy < 0.53 else "limited",
+            "type": selected["name"],
+            "selection": "Best of three classifiers by walk-forward validation score.",
+            "trainingRows": len(dataset),
+            "testRows": selected["testRows"],
+            "walkForwardFolds": selected["folds"],
+            "backtestAccuracy": _round(selected["accuracy"] * 100, 1),
+            "balancedAccuracy": _round(balanced_accuracy * 100, 1),
+            "precision": _round(selected["precision"] * 100, 1),
+            "recall": _round(selected["recall"] * 100, 1),
+            "f1": _round(selected["f1"] * 100, 1),
+            "rocAuc": _round(selected["rocAuc"] * 100, 1) if selected["rocAuc"] is not None else None,
+            "brierScore": _round(selected["brierScore"], 3),
+            "naiveAccuracy": _round(baseline_accuracy * 100, 1),
+            "quality": quality,
             "rawTechnicalProbabilityUp": _round(raw_technical_probability * 100, 1),
             "reliabilityWeight": _round(reliability_weight, 2),
-            "calibration": "Weak holdout accuracy shrinks technical probability toward 50%.",
-            "validation": "Chronological holdout; no random shuffle.",
+            "confidenceThresholds": {"bullish": 58, "bearish": 42},
+            "calibration": "Out-of-sample skill controls shrinkage toward 50%; low-confidence results remain NEUTRAL.",
+            "validation": "Expanding-window TimeSeriesSplit with a one-session gap; no random shuffle.",
+            "modelsCompared": comparisons,
+            "featureImportance": importance,
         },
         "dataAsOf": snapshot["dataAsOf"],
+        "modelDataDate": frame.index[-1].strftime("%Y-%m-%d"),
         "generatedAt": datetime.now(timezone.utc).isoformat(),
         "history": [
             {"date": index.strftime("%Y-%m-%d"), "close": _round(row["Close"])}
             for index, row in frame.tail(90).iterrows()
         ],
-        "disclaimer": "Probabilistic educational outlook, not a guaranteed price forecast or investment advice.",
+        "disclaimer": "Probabilistic next-session research experiment, not a guaranteed price forecast or investment advice.",
     }
+    payload["predictionAudit"] = _record_prediction(payload, payload["modelDataDate"])
+    return _cache_put(cache_key, payload)
 
 
 def _ollama_chat(messages: List[Dict[str, str]]) -> str:
@@ -1096,8 +1361,10 @@ def _verified_tool_answer(
         + f"\n- {prediction['name']} model: {prediction['outlook']}, probability-up {prediction['probabilityUp']}%, "
         + f"range {prediction['expectedRange']['low']} to {prediction['expectedRange']['high']} "
         + f"{prediction['expectedRange']['currency']}; news {news['sentimentLabel']}."
-        + f"\n- Historical test accuracy {model['backtestAccuracy']}% ({model.get('quality', 'unknown')}). "
-        + ("Is model me reliable directional edge nahi hai. " if float(model["backtestAccuracy"]) < 53 else "Uncertainty abhi bhi high hai. ")
+        + f"\n- Walk-forward balanced accuracy {model['balancedAccuracy']}% across "
+        + f"{model['walkForwardFolds']} time-ordered folds; ROC AUC {model.get('rocAuc')}% "
+        + f"({model.get('quality', 'unknown')}). "
+        + ("Is model me reliable directional edge nahi hai. " if float(model["balancedAccuracy"]) < 53 else "Uncertainty abhi bhi high hai. ")
         + "Guaranteed return ya buy/sell advice nahi hai."
     )
 
@@ -1119,7 +1386,7 @@ def _llm_grounding_issue(answer: str, message: str, prediction: Dict[str, Any], 
         expected_number = f"{abs(float(factor['changePercent'])):.2f}".rstrip("0").rstrip(".")
         if expected_number not in normalized_answer:
             return f"missing live {keyword} move"
-    if float(prediction["model"]["backtestAccuracy"]) < 53:
+    if float(prediction["model"]["balancedAccuracy"]) < 53:
         weak_markers = ["weak", "no reliable", "reliable nahi", "kamzor", "below 53", "less than 53", "53 se kam"]
         if not any(marker in normalized_answer for marker in weak_markers):
             return "missing weak-model warning"
@@ -1148,6 +1415,15 @@ def get_market_analysis(symbol: str = "^NSEI", refresh: bool = False):
         raise HTTPException(status_code=422, detail=str(error)) from error
     except Exception as error:
         raise HTTPException(status_code=503, detail=f"Market data provider is unavailable: {error}") from error
+
+
+@router.get("/predictions")
+def get_prediction_audit(symbol: str = "^NSEI", limit: int = 12):
+    """Expose the model's session-by-session prediction audit without invoking Gemini."""
+    try:
+        return prediction_audit(symbol, max(1, min(limit, 30)))
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
 
 
 @router.get("/news")
@@ -1237,6 +1513,10 @@ async def market_agent(request: FastApiRequest):
         "probabilityUp": prediction["probabilityUp"],
         "range": prediction["expectedRange"],
         "testAccuracy": prediction["model"]["backtestAccuracy"],
+        "balancedAccuracy": prediction["model"]["balancedAccuracy"],
+        "rocAuc": prediction["model"]["rocAuc"],
+        "walkForwardFolds": prediction["model"]["walkForwardFolds"],
+        "selectedClassifier": prediction["model"]["type"],
         "quality": prediction["model"]["quality"],
         "newsTone": prediction["newsFactor"]["sentimentLabel"],
         "macroSignal": prediction["macroFactor"]["signal"],
