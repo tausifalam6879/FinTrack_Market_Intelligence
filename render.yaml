@@ -5,8 +5,12 @@ services:
     dockerfilePath: ./market-service/Dockerfile
     dockerContext: ./market-service
     plan: free
-    healthCheckPath: /health
+    healthCheckPath: /health/ready
     envVars:
+      - key: APP_ENV
+        value: production
+      - key: APP_VERSION
+        value: render
       - key: LLM_PROVIDER
         value: gemini
       - key: LLM_MODEL
@@ -17,4 +21,3 @@ services:
         value: "12000"
       - key: MARKET_OVERVIEW_CACHE_TTL_SECONDS
         value: "900"
-

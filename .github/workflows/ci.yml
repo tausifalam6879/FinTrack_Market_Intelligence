@@ -1,0 +1,122 @@
+name: FinTrack CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fintrack-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_DB: fintrack_ci
+          POSTGRES_USER: fintrack
+          POSTGRES_PASSWORD: fintrack_ci_password
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U fintrack -d fintrack_ci"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: |
+            market-service/requirements.txt
+            market-service/requirements-runtime.txt
+            market-service/requirements-training.txt
+
+      - name: Install training and test dependencies
+        working-directory: market-service
+        run: python -m pip install -r requirements.txt
+
+      - name: Check dependency consistency
+        run: python -m pip check
+
+      - name: Compile backend modules
+        working-directory: market-service
+        run: python -m compileall -q .
+
+      - name: Run backend test suite
+        working-directory: market-service
+        env:
+          GIT_PYTHON_REFRESH: quiet
+        run: python -m unittest discover -s . -p "test_*.py" -v
+
+      - name: Verify PostgreSQL schema and readiness
+        working-directory: market-service
+        env:
+          DATABASE_URL: postgresql://fintrack:fintrack_ci_password@127.0.0.1:5432/fintrack_ci
+          MODEL_ARTIFACT_DIR: ${{ runner.temp }}/fintrack-artifacts
+        run: |
+          python -c "from runtime_health import initialize_runtime, readiness_report; initialize_runtime(); report=readiness_report(); assert report['status']=='ready', report; assert report['checks']['database']['backend']=='postgresql', report"
+
+  frontend-build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install locked frontend dependencies
+        working-directory: frontend
+        run: npm ci
+
+      - name: Build production frontend
+        working-directory: frontend
+        env:
+          VITE_MARKET_API_BASE_URL: https://fintrack-market-intelligence-api.onrender.com
+        run: npm run build
+
+  api-container:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    needs: [backend-tests, frontend-build]
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Build lightweight API image
+        run: docker build --file market-service/Dockerfile --tag fintrack-api:ci market-service
+
+      - name: Verify non-root container and readiness endpoint
+        shell: bash
+        run: |
+          set -euo pipefail
+          container_id=$(docker run --detach --publish 127.0.0.1:8002:8000 fintrack-api:ci)
+          trap 'docker logs "$container_id"; docker rm --force "$container_id" >/dev/null' EXIT
+          for attempt in $(seq 1 30); do
+            if curl --fail --silent http://127.0.0.1:8002/health/ready > readiness.json; then
+              break
+            fi
+            sleep 2
+          done
+          curl --fail --show-error http://127.0.0.1:8002/health/live
+          python -c "import json; report=json.load(open('readiness.json')); assert report['status']=='ready'; assert report['checks']['database']['status']=='ready'"
+          test "$(docker inspect --format '{{.Config.User}}' "$container_id")" = "fintrack"

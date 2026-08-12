@@ -1,0 +1,12 @@
+.env
+.env.*
+.venv/
+__pycache__/
+.pytest_cache/
+data/
+artifacts/
+mlruns/
+mlartifacts/
+*.db
+*.pyc
+test_*.py

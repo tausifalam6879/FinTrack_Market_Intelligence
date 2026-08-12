@@ -27,6 +27,12 @@ export default function MarketPulse({ onResearch }) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [sector, setSector] = useState("All");
+  const [companyQuery, setCompanyQuery] = useState("");
+  const [companyMatches, setCompanyMatches] = useState([]);
+  const [companySearchMode, setCompanySearchMode] = useState("");
+  const [companySearchError, setCompanySearchError] = useState("");
+  const [searchingCompanies, setSearchingCompanies] = useState(false);
+  const [touchPaused, setTouchPaused] = useState(false);
   const [alertThreshold, setAlertThreshold] = useState(readAlertThreshold);
   const [nextScanAt, setNextScanAt] = useState(() => Date.now() + ALERT_SCAN_INTERVAL_MS);
   const [notificationPermission, setNotificationPermission] = useState(() => (
@@ -55,6 +61,41 @@ export default function MarketPulse({ onResearch }) {
   useEffect(() => {
     window.localStorage.setItem(ALERT_THRESHOLD_KEY, String(alertThreshold));
   }, [alertThreshold]);
+
+  useEffect(() => {
+    const clean = companyQuery.trim();
+    if (clean.length < 2) {
+      setCompanyMatches([]);
+      setCompanySearchMode("");
+      setCompanySearchError("");
+      setSearchingCompanies(false);
+      return undefined;
+    }
+
+    let active = true;
+    const timer = window.setTimeout(async () => {
+      setSearchingCompanies(true);
+      setCompanySearchError("");
+      try {
+        const response = await marketApi.companies(clean, 8);
+        if (!active) return;
+        setCompanyMatches(response.items || []);
+        setCompanySearchMode(response.mode || "live");
+      } catch {
+        if (!active) return;
+        setCompanyMatches([]);
+        setCompanySearchMode("");
+        setCompanySearchError("Company search provider is temporarily unavailable.");
+      } finally {
+        if (active) setSearchingCompanies(false);
+      }
+    }, 350);
+
+    return () => {
+      active = false;
+      window.clearTimeout(timer);
+    };
+  }, [companyQuery]);
 
   const board = useMemo(() => {
     const items = result?.data?.watchlist || result?.data?.markets || [];
@@ -120,24 +161,51 @@ export default function MarketPulse({ onResearch }) {
       {result?.mode === "cache" && <div className="notice warning">The live provider did not respond. Values below are the last verified browser response from {new Date(result.savedAt).toLocaleString("en-IN")}.</div>}
       {error && <div className="notice error">{error}</div>}
 
+      <section className="company-discovery" aria-labelledby="company-discovery-title">
+        <div>
+          <p className="eyebrow">DYNAMIC COMPANY DISCOVERY</p>
+          <h3 id="company-discovery-title">Find any supported public company</h3>
+          <p>Search by company name or ticker. No account is required.</p>
+        </div>
+        <form className="company-search-form" onSubmit={(event) => {
+          event.preventDefault();
+          if (companyMatches[0]) onResearch(companyMatches[0].symbol);
+        }}>
+          <input
+            value={companyQuery}
+            onChange={(event) => setCompanyQuery(event.target.value)}
+            placeholder="Search Reliance, Tata Motors, Apple, Microsoft…"
+            aria-label="Search companies by name or ticker"
+            aria-describedby="company-search-help"
+          />
+          <button className="primary-button" disabled={!companyMatches.length || searchingCompanies}>
+            {searchingCompanies ? "Searching…" : "Open first match"}
+          </button>
+        </form>
+        <small id="company-search-help">Type at least two characters. Research opens with the selected Yahoo Finance symbol.</small>
+        {companyQuery.trim().length >= 2 && <div className="company-search-results" aria-label="Company search results">
+          {searchingCompanies && <div className="company-search-state">Searching the live company directory…</div>}
+          {!searchingCompanies && companySearchError && <div className="company-search-state error">{companySearchError}</div>}
+          {!searchingCompanies && !companySearchError && companyMatches.length === 0 && <div className="company-search-state">No matching public company was found.</div>}
+          {!searchingCompanies && companyMatches.map((company) => <button key={company.symbol} onClick={() => onResearch(company.symbol)}>
+            <span><strong>{company.name}</strong><small>{company.symbol} · {company.exchange}</small></span>
+            <span><small>{company.sector}</small><b>Research →</b></span>
+          </button>)}
+          {!searchingCompanies && companySearchMode === "fallback" && companyMatches.length > 0 && <p className="company-search-note">Live discovery is unavailable; showing matches from the verified FinTrack board.</p>}
+        </div>}
+      </section>
+
       <div className="sector-row" aria-label="Market sectors">
         {sectors.map((item) => <button key={item} className={sector === item ? "sector active" : "sector"} onClick={() => setSector(item)}>{item}</button>)}
       </div>
 
       {loading && !result ? <LoadingCards count={8} /> : (
-        <div className="quote-grid">
-          {board.map((quote) => {
-            const positive = Number(quote.changePercent) >= 0;
-            return (
-              <button className="quote-card" key={quote.symbol} onClick={() => onResearch(quote.symbol)}>
-                <div className="quote-card-top"><span>{quote.name}</span><span className={positive ? "trend up" : "trend down"}>{positive ? "↗" : "↘"}</span></div>
-                <strong>{formatNumber(quote.price)}</strong>
-                <span className={positive ? "change positive" : "change negative"}>{positive ? "+" : ""}{quote.changePercent}%</span>
-                <small>{quote.symbol} · {quote.sector || quote.region}</small>
-              </button>
-            );
-          })}
-        </div>
+        board.length > 0 ? <QuoteRail
+          quotes={board}
+          onResearch={onResearch}
+          touchPaused={touchPaused}
+          setTouchPaused={setTouchPaused}
+        /> : <div className="quote-empty">No verified quotes are available for this sector right now.</div>
       )}
 
       <section className="alert-center" aria-labelledby="alert-center-title">
@@ -208,4 +276,52 @@ export default function MarketPulse({ onResearch }) {
 
 function LoadingCards({ count }) {
   return <div className="quote-grid">{Array.from({ length: count }, (_, index) => <div className="quote-card skeleton" key={index}><i /><i /><i /></div>)}</div>;
+}
+
+function QuoteRail({ quotes, onResearch, touchPaused, setTouchPaused }) {
+  const repeatCount = Math.max(1, Math.ceil(8 / quotes.length));
+  const railItems = Array.from({ length: repeatCount }, (_, repeatIndex) => (
+    quotes.map((quote) => ({ quote, repeatIndex }))
+  )).flat();
+  const duration = Math.max(34, railItems.length * 3.2);
+
+  const renderGroup = (duplicate = false) => <div className="quote-group" aria-hidden={duplicate || undefined}>
+    {railItems.map(({ quote, repeatIndex }) => {
+      const positive = Number(quote.changePercent) >= 0;
+      const hiddenDuplicate = duplicate || repeatIndex > 0;
+      return <button
+        className="quote-card"
+        key={`${duplicate ? "duplicate" : "primary"}-${quote.symbol}-${repeatIndex}`}
+        onClick={() => onResearch(quote.symbol)}
+        tabIndex={hiddenDuplicate ? -1 : 0}
+        aria-hidden={hiddenDuplicate || undefined}
+      >
+        <div className="quote-card-top"><span>{quote.name}</span><span className={positive ? "trend up" : "trend down"}>{positive ? "↗" : "↘"}</span></div>
+        <strong>{formatNumber(quote.price)}</strong>
+        <span className={positive ? "change positive" : "change negative"}>{positive ? "+" : ""}{quote.changePercent}%</span>
+        <small>{quote.symbol} · {quote.sector || quote.region}</small>
+      </button>;
+    })}
+  </div>;
+
+  return <>
+    <div className="quote-rail-heading">
+      <span>{quotes.length} verified market cards in this view</span>
+      <small>{touchPaused ? "Animation paused" : "Hover, focus or touch a card to pause"}</small>
+    </div>
+    <div
+      className={`quote-marquee ${touchPaused ? "touch-paused" : ""}`}
+      style={{ "--quote-duration": `${duration}s` }}
+      role="region"
+      aria-label="Continuously moving market quote cards"
+      onPointerDown={(event) => { if (event.pointerType !== "mouse") setTouchPaused(true); }}
+      onPointerUp={(event) => { if (event.pointerType !== "mouse") setTouchPaused(false); }}
+      onPointerCancel={() => setTouchPaused(false)}
+    >
+      <div className="quote-track">
+        {renderGroup(false)}
+        {renderGroup(true)}
+      </div>
+    </div>
+  </>;
 }

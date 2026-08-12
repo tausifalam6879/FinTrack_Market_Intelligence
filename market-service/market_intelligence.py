@@ -5,11 +5,15 @@ import os
 import re
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from threading import Lock
 from typing import Any, Dict, List, Optional
 from urllib.error import HTTPError, URLError
 from urllib.request import Request as UrlRequest, urlopen
+
+# All estimators in this public service use one worker. Some minimal Windows/CI
+# images do not expose WMIC, so declare that limit before joblib is imported.
+os.environ.setdefault("LOKY_MAX_CPU_COUNT", "1")
 
 import numpy as np
 import pandas as pd
@@ -31,6 +35,9 @@ from sklearn.metrics import (
 from sklearn.model_selection import TimeSeriesSplit
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
+
+from agent_orchestrator import build_agent_plan, tool_trace
+from model_registry import approved_model, record_prediction as record_persistent_prediction
 
 
 router = APIRouter(prefix="/market", tags=["Global Market Intelligence"])
@@ -202,7 +209,7 @@ _prediction_audit_lock = Lock()
 
 
 class MarketAgentRequest(BaseModel):
-    message: str = Field(min_length=2, max_length=1200)
+    message: str = Field(min_length=2, max_length=3000)
     symbol: Optional[str] = Field(default=None, max_length=20)
     recent_messages: List[Dict[str, Any]] = Field(default_factory=list)
 
@@ -230,7 +237,7 @@ def clear_market_cache_prefix(prefix: str) -> None:
 
 def _sanitize_symbol(symbol: str) -> str:
     normalized = str(symbol or "").strip().upper()
-    if not re.fullmatch(r"[A-Z0-9.^=\-]{1,20}", normalized):
+    if not re.fullmatch(r"[A-Z0-9.^=&\-]{1,20}", normalized):
         raise ValueError("Invalid market symbol.")
     return normalized
 
@@ -256,6 +263,113 @@ def _history(symbol: str, period: str) -> pd.DataFrame:
         raise ValueError(f"Market data is unavailable for {symbol}.")
     frame = frame.dropna(subset=["Close"]).copy()
     return _cache_put(key, frame).copy()
+
+
+MONTH_ALIASES = {
+    "jan": 1, "january": 1, "feb": 2, "february": 2, "mar": 3, "march": 3,
+    "apr": 4, "april": 4, "may": 5, "jun": 6, "june": 6, "jul": 7, "july": 7,
+    "aug": 8, "august": 8, "sep": 9, "sept": 9, "september": 9,
+    "oct": 10, "october": 10, "nov": 11, "november": 11, "dec": 12, "december": 12,
+}
+
+
+def _extract_requested_date(message: str) -> Optional[date]:
+    """Extract a date from common English/Hinglish market questions."""
+    text = str(message or "").strip()
+    named = re.search(
+        r"\b(\d{1,2})(?:st|nd|rd|th)?[\s\-/]+"
+        r"(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|"
+        r"jul(?:y)?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)"
+        r"[\s,\-/]+(\d{4})\b",
+        text,
+        re.IGNORECASE,
+    )
+    if named:
+        try:
+            return date(int(named.group(3)), MONTH_ALIASES[named.group(2).lower()], int(named.group(1)))
+        except ValueError:
+            return None
+    for pattern, order in (
+        (r"\b(\d{4})[-/](\d{1,2})[-/](\d{1,2})\b", "ymd"),
+        (r"\b(\d{1,2})[-/](\d{1,2})[-/](\d{4})\b", "dmy"),
+    ):
+        match = re.search(pattern, text)
+        if not match:
+            continue
+        try:
+            values = [int(item) for item in match.groups()]
+            return date(values[0], values[1], values[2]) if order == "ymd" else date(values[2], values[1], values[0])
+        except ValueError:
+            return None
+    return None
+
+
+def _historical_session(symbol: str, requested_date: date) -> Dict[str, Any]:
+    """Return the nearest available trading session with transparent calculations."""
+    frame = _history(symbol, "5y")
+    sessions = [(index, index.date()) for index in frame.index]
+    if not sessions:
+        raise ValueError(f"Historical market data is unavailable for {symbol}.")
+    nearest_index, session_date = min(
+        sessions,
+        key=lambda item: (abs((item[1] - requested_date).days), item[1] > requested_date),
+    )
+    position = frame.index.get_loc(nearest_index)
+    if isinstance(position, slice):
+        position = position.start
+    row = frame.iloc[int(position)]
+    previous_close = float(frame.iloc[int(position) - 1]["Close"]) if int(position) > 0 else None
+    close = float(row["Close"])
+    change_percent = ((close / previous_close) - 1) * 100 if previous_close else None
+    next_session = None
+    if int(position) + 1 < len(frame):
+        next_row = frame.iloc[int(position) + 1]
+        next_close = float(next_row["Close"])
+        next_session = {
+            "date": frame.index[int(position) + 1].date().isoformat(),
+            "close": _round(next_close),
+            "changePercent": _round(((next_close / close) - 1) * 100, 2),
+        }
+    return {
+        "requestedDate": requested_date.isoformat(),
+        "sessionDate": session_date.isoformat(),
+        "exactSession": session_date == requested_date,
+        "open": _round(row.get("Open")),
+        "high": _round(row.get("High")),
+        "low": _round(row.get("Low")),
+        "close": _round(close),
+        "previousClose": _round(previous_close),
+        "change": _round(close - previous_close) if previous_close else None,
+        "changePercent": _round(change_percent, 2),
+        "intradayRange": _round(float(row.get("High", close)) - float(row.get("Low", close))),
+        "volume": _round(row.get("Volume"), 0),
+        "nextSession": next_session,
+        "source": "Yahoo Finance via yfinance",
+    }
+
+
+def _build_analysis_brief(snapshot: Dict[str, Any], prediction: Dict[str, Any]) -> Dict[str, Any]:
+    """Pre-calculate arithmetic so an LLM explains numbers instead of inventing them."""
+    price = float(snapshot.get("price") or prediction.get("lastClose") or 0)
+    expected_range = prediction.get("expectedRange") or {}
+    low = float(expected_range.get("low") or price)
+    high = float(expected_range.get("high") or price)
+    probability_up = float(prediction.get("probabilityUp") or 50)
+    balanced_accuracy = float(prediction.get("model", {}).get("balancedAccuracy") or 0)
+    return {
+        "currentPrice": _round(price),
+        "dailyChangePercent": _round(snapshot.get("changePercent"), 2),
+        "probabilityUp": _round(probability_up, 1),
+        "probabilityDown": _round(100 - probability_up, 1),
+        "distanceFromNeutralPoints": _round(abs(probability_up - 50), 1),
+        "expectedDownsidePoints": _round(max(price - low, 0)),
+        "expectedUpsidePoints": _round(max(high - price, 0)),
+        "expectedDownsidePercent": _round(((low / price) - 1) * 100, 2) if price else None,
+        "expectedUpsidePercent": _round(((high / price) - 1) * 100, 2) if price else None,
+        "expectedRangeWidth": _round(high - low),
+        "balancedAccuracy": _round(balanced_accuracy, 1),
+        "modelHasReliableDirectionalEdge": balanced_accuracy >= 53,
+    }
 
 
 def _intraday_history(symbol: str) -> pd.DataFrame:
@@ -1022,13 +1136,60 @@ def market_prediction(symbol: str) -> Dict[str, Any]:
     if len(dataset) < 80 or latest_features.empty or dataset["target"].nunique() < 2:
         raise ValueError("Not enough clean historical data to train the direction model.")
 
-    validation = _walk_forward_model_comparison(dataset, feature_columns)
-    selected = validation["selected"]
-    model = _candidate_models()[selected["id"]]["estimator"]
-    model.fit(dataset[feature_columns], dataset["target"])
+    registry_model = None
+    try:
+        registry_model = approved_model(symbol)
+    except Exception as error:
+        logger.warning("Approved model lookup failed for %s; using runtime fallback: %s", symbol, error)
+
+    if registry_model:
+        run = registry_model["run"]
+        registered_metrics = registry_model["metrics"]
+        artifact = registry_model["artifact"]
+        artifact_features = artifact.get("featureColumns") or []
+        if artifact_features != feature_columns:
+            raise ValueError("Approved model features do not match the current inference pipeline.")
+        model = artifact["estimator"]
+        selected = registered_metrics.get("selection") or {
+            "id": "approved_artifact",
+            "name": run["model_name"],
+            "folds": registered_metrics.get("walkForwardFolds", 0),
+            "testRows": run["holdout_rows"],
+        }
+        validation = {
+            "selected": selected,
+            "comparisons": registered_metrics.get("walkForwardCandidates") or [selected],
+            "folds": registered_metrics.get("walkForwardFolds", selected.get("folds", 0)),
+        }
+        evaluation_metrics = {
+            "accuracy": registered_metrics.get("accuracy", run["balanced_accuracy"]),
+            "balancedAccuracy": run["balanced_accuracy"],
+            "precision": registered_metrics.get("precision", 0.0),
+            "recall": registered_metrics.get("recall", 0.0),
+            "f1": registered_metrics.get("f1", 0.0),
+            "rocAuc": run["roc_auc"],
+            "brierScore": run["brier_score"],
+        }
+        model_run_id = run["id"]
+        model_dataset_version = run["dataset_version"]
+        serving_mode = "approved_artifact"
+        model_training_rows = int(run["training_rows"]) + int(run["holdout_rows"])
+        selection_description = "Approved offline artifact that passed the final chronological holdout quality gate."
+    else:
+        validation = _walk_forward_model_comparison(dataset, feature_columns)
+        selected = validation["selected"]
+        model = _candidate_models()[selected["id"]]["estimator"]
+        model.fit(dataset[feature_columns], dataset["target"])
+        evaluation_metrics = selected
+        model_run_id = None
+        model_dataset_version = None
+        serving_mode = "runtime_fallback"
+        model_training_rows = len(dataset)
+        selection_description = "Runtime fallback: best of three classifiers by walk-forward validation score."
+
     raw_technical_probability = float(model.predict_proba(latest_features[feature_columns])[0][1])
-    balanced_accuracy = float(selected["balancedAccuracy"])
-    auc = float(selected["rocAuc"] if selected["rocAuc"] is not None else 0.50)
+    balanced_accuracy = float(evaluation_metrics["balancedAccuracy"])
+    auc = float(evaluation_metrics["rocAuc"] if evaluation_metrics["rocAuc"] is not None else 0.50)
     reliability_signal = ((balanced_accuracy - 0.50) * 0.65) + ((auc - 0.50) * 0.35)
     reliability_weight = max(0.12, min(1.0, reliability_signal / 0.12))
     technical_probability = 0.50 + ((raw_technical_probability - 0.50) * reliability_weight)
@@ -1062,9 +1223,9 @@ def market_prediction(symbol: str) -> Dict[str, Any]:
         {
             "id": item["id"],
             "name": item["name"],
-            "selected": item["id"] == selected["id"],
-            "folds": item["folds"],
-            "testRows": item["testRows"],
+            "selected": item.get("id") == selected.get("id"),
+            "folds": item.get("folds", 0),
+            "testRows": item.get("testRows", 0),
             "accuracy": _round(item["accuracy"] * 100, 1),
             "balancedAccuracy": _round(item["balancedAccuracy"] * 100, 1),
             "precision": _round(item["precision"] * 100, 1),
@@ -1104,17 +1265,20 @@ def market_prediction(symbol: str) -> Dict[str, Any]:
         "macroFactor": macro,
         "model": {
             "type": selected["name"],
-            "selection": "Best of three classifiers by walk-forward validation score.",
-            "trainingRows": len(dataset),
-            "testRows": selected["testRows"],
-            "walkForwardFolds": selected["folds"],
-            "backtestAccuracy": _round(selected["accuracy"] * 100, 1),
+            "selection": selection_description,
+            "servingMode": serving_mode,
+            "modelRunId": model_run_id,
+            "datasetVersion": model_dataset_version,
+            "trainingRows": model_training_rows,
+            "testRows": selected.get("testRows", 0),
+            "walkForwardFolds": validation["folds"],
+            "backtestAccuracy": _round(evaluation_metrics["accuracy"] * 100, 1),
             "balancedAccuracy": _round(balanced_accuracy * 100, 1),
-            "precision": _round(selected["precision"] * 100, 1),
-            "recall": _round(selected["recall"] * 100, 1),
-            "f1": _round(selected["f1"] * 100, 1),
-            "rocAuc": _round(selected["rocAuc"] * 100, 1) if selected["rocAuc"] is not None else None,
-            "brierScore": _round(selected["brierScore"], 3),
+            "precision": _round(evaluation_metrics["precision"] * 100, 1),
+            "recall": _round(evaluation_metrics["recall"] * 100, 1),
+            "f1": _round(evaluation_metrics["f1"] * 100, 1),
+            "rocAuc": _round(evaluation_metrics["rocAuc"] * 100, 1) if evaluation_metrics["rocAuc"] is not None else None,
+            "brierScore": _round(evaluation_metrics["brierScore"], 3),
             "naiveAccuracy": _round(baseline_accuracy * 100, 1),
             "quality": quality,
             "rawTechnicalProbabilityUp": _round(raw_technical_probability * 100, 1),
@@ -1135,19 +1299,23 @@ def market_prediction(symbol: str) -> Dict[str, Any]:
         "disclaimer": "Probabilistic next-session research experiment, not a guaranteed price forecast or investment advice.",
     }
     payload["predictionAudit"] = _record_prediction(payload, payload["modelDataDate"])
+    try:
+        record_persistent_prediction(payload)
+    except Exception as error:
+        logger.warning("Persistent prediction audit failed for %s: %s", symbol, error)
     return _cache_put(cache_key, payload)
 
 
 def _ollama_chat(messages: List[Dict[str, str]]) -> str:
     base_url = os.getenv("OLLAMA_BASE_URL", "http://127.0.0.1:11434").rstrip("/")
     model = os.getenv("LLM_MODEL", "llama3.2:3b")
-    timeout = max(5, int(os.getenv("LLM_TIMEOUT_MS", "60000")) // 1000)
+    timeout = max(5, int(os.getenv("LLM_TIMEOUT_MS", "15000")) // 1000)
     body = json.dumps({
         "model": model,
         "messages": messages,
         "stream": False,
         "keep_alive": "10m",
-        "options": {"temperature": 0.1, "num_predict": 160},
+        "options": {"temperature": 0.1, "num_predict": 700},
     }).encode("utf-8")
     request = UrlRequest(
         f"{base_url}/api/chat",
@@ -1178,7 +1346,8 @@ def _gemini_chat(messages: List[Dict[str, str]]) -> str:
     if not api_key:
         raise RuntimeError("Gemini is not configured. Set GEMINI_API_KEY on the Python backend.")
     configured_model = os.getenv("LLM_MODEL", "gemini-3.5-flash-lite").strip()
-    timeout = max(5, int(os.getenv("LLM_TIMEOUT_MS", "15000")) // 1000)
+    timeout = max(5.0, int(os.getenv("LLM_TIMEOUT_MS", "15000")) / 1000)
+    deadline = time.monotonic() + timeout
     system_text = "\n".join(item["content"] for item in messages if item.get("role") == "system")
     contents = []
     for item in messages:
@@ -1194,11 +1363,14 @@ def _gemini_chat(messages: List[Dict[str, str]]) -> str:
         "contents": contents,
         # Gemini 3.x uses its default sampling behavior. Google deprecated
         # temperature/top-p/top-k for current models, so only cap the concise
-        # dashboard response length here.
-        "generationConfig": {"maxOutputTokens": 320},
+        # Keep enough room for evidence, arithmetic, scenarios and caveats.
+        "generationConfig": {"maxOutputTokens": 900},
     }).encode("utf-8")
     last_model_error: Optional[HTTPError] = None
     for model in _gemini_model_candidates(configured_model):
+        remaining = deadline - time.monotonic()
+        if remaining <= 0.25:
+            raise RuntimeError("Gemini provider timeout reached before a usable model responded.")
         request = UrlRequest(
             f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
             data=body,
@@ -1206,7 +1378,9 @@ def _gemini_chat(messages: List[Dict[str, str]]) -> str:
             method="POST",
         )
         try:
-            with urlopen(request, timeout=timeout) as response:
+            # LLM_TIMEOUT_MS is a total budget across model-alias fallbacks,
+            # rather than a fresh timeout for every retry.
+            with urlopen(request, timeout=max(0.25, remaining)) as response:
                 payload = json.loads(response.read().decode("utf-8"))
                 parts = payload.get("candidates", [{}])[0].get("content", {}).get("parts", [])
                 logger.info("Gemini connected using model %s", model)
@@ -1245,7 +1419,7 @@ def _openai_compatible_chat(messages: List[Dict[str, str]], provider: str) -> st
         "model": os.getenv("LLM_MODEL", default_model),
         "messages": messages,
         "temperature": 0.1,
-        "max_tokens": 320,
+        "max_tokens": 900,
     }).encode("utf-8")
     headers = {"Content-Type": "application/json"}
     if api_key:
@@ -1260,8 +1434,10 @@ def _openai_compatible_chat(messages: List[Dict[str, str]], provider: str) -> st
 
 
 def _provider_chat(messages: List[Dict[str, str]]) -> tuple[str, str]:
-    provider = os.getenv("LLM_PROVIDER", "ollama").strip().lower()
-    if provider in {"", "ollama", "local"}:
+    provider = os.getenv("LLM_PROVIDER", "").strip().lower()
+    if provider in {"", "none", "off", "disabled"}:
+        raise RuntimeError("LLM is not configured; deterministic evidence synthesis is active.")
+    if provider in {"ollama", "local"}:
         return _ollama_chat(messages), "ollama"
     if provider == "gemini":
         return _gemini_chat(messages), "gemini"
@@ -1296,10 +1472,14 @@ def _llm_failure_code(error: RuntimeError) -> str:
 
 def _verified_tool_answer(
     message: str,
+    snapshot: Dict[str, Any],
     prediction: Dict[str, Any],
     tools: List[str],
     factor_payload: Dict[str, Any],
     breadth: Optional[Dict[str, Any]] = None,
+    historical: Optional[Dict[str, Any]] = None,
+    document_matches: Optional[List[Dict[str, Any]]] = None,
+    document_requested: bool = False,
 ) -> str:
     news = prediction["newsFactor"]
     model = prediction["model"]
@@ -1348,30 +1528,150 @@ def _verified_tool_answer(
             impact = item.get("theme", "Contextual market factor.")
         factor_lines.append(f"- {item['name']}: {move:+.2f}% - {impact}")
 
+    brief = _build_analysis_brief(snapshot, prediction)
+    evidence_lines = [
+        f"- {prediction['name']} price: {brief['currentPrice']} {prediction['expectedRange']['currency']}; "
+        f"daily move {float(brief['dailyChangePercent'] or 0):+.2f}%.",
+        f"- Model outlook: {prediction['outlook']}; probability-up {brief['probabilityUp']}% aur "
+        f"probability-down {brief['probabilityDown']}%.",
+        f"- Expected range: {prediction['expectedRange']['low']}–{prediction['expectedRange']['high']} "
+        f"{prediction['expectedRange']['currency']}; data as of {prediction['dataAsOf']}.",
+    ]
+    historical_section = ""
+    if historical:
+        exact_note = "exact trading session" if historical["exactSession"] else "nearest available trading session"
+        historical_section = (
+            "\n\nHistorical date check\n"
+            f"- Requested date {historical['requestedDate']}; {exact_note}: {historical['sessionDate']}.\n"
+            f"- Open {historical['open']}, high {historical['high']}, low {historical['low']}, "
+            f"close {historical['close']}; change {float(historical.get('changePercent') or 0):+.2f}%.\n"
+            f"- Calculation: ({historical['close']} - {historical['previousClose']}) ÷ "
+            f"{historical['previousClose']} × 100 = {float(historical.get('changePercent') or 0):+.2f}%."
+        )
+        if historical.get("nextSession"):
+            next_session = historical["nextSession"]
+            historical_section += (
+                f" Next session {next_session['date']} par close {next_session['close']} "
+                f"({float(next_session.get('changePercent') or 0):+.2f}%) tha."
+            )
+
     breadth_line = ""
     if breadth:
         breadth_line = (
             f"\n- Watchlist breadth: {breadth['advances']} advances, {breadth['declines']} declines, "
             f"{breadth['unchanged']} unchanged ({breadth['coverageCount']} covered)."
         )
+        if breadth.get("topGainers"):
+            top = breadth["topGainers"][0]
+            breadth_line += f" Strongest covered mover: {top['name']} {float(top['changePercent']):+.2f}%."
+        if breadth.get("topLosers"):
+            bottom = breadth["topLosers"][0]
+            breadth_line += f" Weakest covered mover: {bottom['name']} {float(bottom['changePercent']):+.2f}%."
+
+    reliability = (
+        "Walk-forward balanced accuracy 53% se kam hai, isliye model me reliable directional edge nahi hai."
+        if not brief["modelHasReliableDirectionalEdge"] else
+        "Walk-forward score 53% threshold ke upar hai, phir bhi prediction probabilistic hai aur certainty nahi."
+    )
+    document_section = ""
+    if document_requested:
+        if document_matches:
+            document_lines = []
+            for match in document_matches[:4]:
+                citation = f"[{match['citation']} p.{match['page']}]"
+                document_lines.append(
+                    f"- {citation} {match['snippet']} (Source: {match['title']})"
+                )
+            document_section = (
+                "\n\nIndexed company-document evidence\n"
+                + "\n".join(document_lines)
+                + "\n- Document statements are kept separate from current prices and model estimates."
+            )
+        else:
+            document_section = (
+                "\n\nIndexed company-document evidence\n"
+                "- Is symbol ke liye is question ka retrievable indexed evidence available nahi hai. "
+                "Main annual report ya filing ka answer invent nahi kar raha hoon."
+            )
     return (
-        "Verified current evidence:\n"
-        + "\n".join(factor_lines)
+        "Seedha jawab\n"
+        f"{prediction['name']} ke liye model ka current scenario {prediction['outlook']} hai, lekin ise guaranteed "
+        "direction ya trading call nahi samajhna chahiye.\n\n"
+        "Verified figures\n"
+        + "\n".join(evidence_lines)
+        + historical_section
+        + "\n\nRelevant market factors\n"
+        + ("\n".join(factor_lines) if factor_lines else "- Requested live factor data abhi available nahi hai.")
         + breadth_line
-        + f"\n- {prediction['name']} model: {prediction['outlook']}, probability-up {prediction['probabilityUp']}%, "
-        + f"range {prediction['expectedRange']['low']} to {prediction['expectedRange']['high']} "
-        + f"{prediction['expectedRange']['currency']}; news {news['sentimentLabel']}."
-        + f"\n- Walk-forward balanced accuracy {model['balancedAccuracy']}% across "
-        + f"{model['walkForwardFolds']} time-ordered folds; ROC AUC {model.get('rocAuc')}% "
-        + f"({model.get('quality', 'unknown')}). "
-        + ("Is model me reliable directional edge nahi hai. " if float(model["balancedAccuracy"]) < 53 else "Uncertainty abhi bhi high hai. ")
-        + "Guaranteed return ya buy/sell advice nahi hai."
+        + "\n\nCalculation aur scenario\n"
+        + f"- Current price se lower range tak downside: {brief['currentPrice']} - "
+        + f"{prediction['expectedRange']['low']} = {brief['expectedDownsidePoints']} points "
+        + f"({brief['expectedDownsidePercent']}%).\n"
+        + f"- Current price se upper range tak upside: {prediction['expectedRange']['high']} - "
+        + f"{brief['currentPrice']} = {brief['expectedUpsidePoints']} points "
+        + f"(+{brief['expectedUpsidePercent']}%).\n"
+        + f"- Probability neutral 50% se sirf {brief['distanceFromNeutralPoints']} points door hai. "
+        + f"News tone {news['sentimentLabel']} hai.\n\n"
+        + "Assumptions aur confidence\n"
+        + f"- {reliability} Balanced accuracy {model['balancedAccuracy']}%, "
+        + f"{model['walkForwardFolds']} time-ordered folds, quality {model.get('quality', 'unknown')}.\n"
+        + "- Range historical volatility aur available factors par based hai; breaking news, gaps aur provider delay "
+        + "actual outcome badal sakte hain.\n\n"
+        + "Final assessment\n"
+        + f"Base case {prediction['outlook']} hai. Downside/neutral/upside tino scenario possible hain; "
+        + "FinTrack isse research estimate ke roop me dikhata hai, personalized buy/sell advice ke roop me nahi."
+        + document_section
     )
 
 
-def _llm_grounding_issue(answer: str, message: str, prediction: Dict[str, Any], factor_payload: Dict[str, Any]) -> Optional[str]:
+def _verified_document_answer(
+    symbol: str,
+    question: str,
+    document_matches: List[Dict[str, Any]],
+) -> str:
+    """Return citation-first evidence when a document question is asked offline."""
+    if not document_matches:
+        return (
+            "Seedha jawab\n"
+            f"{symbol} ke indexed documents me is question ka retrievable evidence available nahi hai. "
+            "Main annual report ya filing ka answer invent nahi kar raha hoon.\n\n"
+            "Evidence boundary\n"
+            "Current market prices, ML predictions aur company-document statements alag evidence types hain. "
+            "Document index ready hone ke baad isi question ko dobara poochha ja sakta hai.\n\n"
+            "Final assessment\n"
+            "Verified document evidence ke bina koi filing-based conclusion nahi diya gaya."
+        )
+    lines = []
+    for match in document_matches[:4]:
+        lines.append(
+            f"- [{match['citation']} p.{match['page']}] {match['snippet']} "
+            f"(Source: {match['title']})"
+        )
+    return (
+        "Seedha jawab\n"
+        "Neeche ka answer sirf retrieved company-document evidence dikhata hai; missing details infer nahi ki gayi hain.\n\n"
+        "Indexed evidence\n"
+        + "\n".join(lines)
+        + "\n\nEvidence boundary\n"
+        + "Ye excerpts current stock price ya ML outlook nahi hain. Har statement ke saath document page citation diya gaya hai.\n\n"
+        + "Final assessment\n"
+        + f"Question: {question}\nRetrieved evidence ko cited source pages ke context me verify karein; ye investment advice nahi hai."
+    )
+
+
+def _llm_grounding_issue(
+    answer: str,
+    message: str,
+    prediction: Dict[str, Any],
+    factor_payload: Dict[str, Any],
+    historical: Optional[Dict[str, Any]] = None,
+    document_matches: Optional[List[Dict[str, Any]]] = None,
+    document_requested: bool = False,
+) -> Optional[str]:
     normalized_answer = answer.lower()
     lowered = message.lower()
+    if len(answer.strip()) < 220:
+        return "answer too short for a complete analysis"
     factor_keywords = {
         "gold": "GC=F", "crude": "CL=F", "oil": "CL=F", "rupee": "INR=X",
         "dollar": "INR=X", "yield": "^TNX", "vix": "^VIX", "bitcoin": "BTC-USD",
@@ -1390,6 +1690,21 @@ def _llm_grounding_issue(answer: str, message: str, prediction: Dict[str, Any], 
         weak_markers = ["weak", "no reliable", "reliable nahi", "kamzor", "below 53", "less than 53", "53 se kam"]
         if not any(marker in normalized_answer for marker in weak_markers):
             return "missing weak-model warning"
+    if historical:
+        session_date = date.fromisoformat(historical["sessionDate"])
+        readable_date = f"{session_date.day} {session_date.strftime('%B %Y')}"
+        accepted_date_markers = {historical["sessionDate"].lower(), readable_date.lower()}
+        if not any(marker in normalized_answer for marker in accepted_date_markers):
+            return "missing requested historical session"
+    if document_requested and not document_matches:
+        return "no indexed document evidence available"
+    if document_matches:
+        allowed_citations = {
+            f"[{item['citation']} p.{item['page']}]".lower()
+            for item in document_matches
+        }
+        if not any(citation in normalized_answer for citation in allowed_citations):
+            return "missing indexed document citation"
     return None
 
 
@@ -1490,24 +1805,78 @@ async def market_agent(request: FastApiRequest):
 
     symbol = _infer_symbol(payload.message, payload.symbol)
     lowered = payload.message.lower()
-    tools = ["market_snapshot", "technical_prediction", "market_news", "macro_market_factors"]
-    context: Dict[str, Any] = {
-        "snapshot": market_snapshot(symbol),
-        "prediction": market_prediction(symbol),
-        "news": market_news(symbol, 6),
-        "macroFactors": macro_factors(),
+    requested_date = _extract_requested_date(payload.message)
+    plan = build_agent_plan(
+        payload.message,
+        symbol,
+        requested_date,
+        is_index=symbol in GLOBAL_INDICES or symbol in MACRO_FACTORS,
+    )
+    tools = [step["tool"] for step in plan["steps"]]
+    outcomes: Dict[str, Dict[str, Any]] = {}
+    context: Dict[str, Any] = {}
+
+    context["snapshot"] = market_snapshot(symbol)
+    outcomes["market_snapshot"] = {"status": "completed", "evidenceCount": 1}
+    context["prediction"] = market_prediction(symbol)
+    outcomes["technical_prediction"] = {
+        "status": "completed",
+        "evidenceCount": len(context["prediction"].get("history") or []),
     }
-    if symbol not in GLOBAL_INDICES and symbol not in MACRO_FACTORS:
-        tools.append("company_fundamentals")
+    if "market_news" in tools:
+        context["news"] = market_news(symbol, 6)
+        outcomes["market_news"] = {
+            "status": "completed",
+            "evidenceCount": len(context["news"].get("articles") or []),
+        }
+    if "macro_market_factors" in tools:
+        context["macroFactors"] = macro_factors()
+        outcomes["macro_market_factors"] = {
+            "status": "completed",
+            "evidenceCount": len(context["macroFactors"].get("factors") or []),
+        }
+    if "historical_market_session" in tools and requested_date:
+        context["historicalSession"] = _historical_session(symbol, requested_date)
+        outcomes["historical_market_session"] = {"status": "completed", "evidenceCount": 1}
+    if "company_fundamentals" in tools:
         context["company"] = company_research(symbol)
-    if any(word in lowered for word in ["gainer", "loser", "breadth", "advance", "decline", "active"]):
-        tools.append("market_breadth")
+        outcomes["company_fundamentals"] = {"status": "completed", "evidenceCount": 1}
+    if "market_breadth" in tools:
         context["breadth"] = market_breadth()
-    if any(word in lowered for word in ["world", "global", "markets", "indices"]):
-        tools.append("global_market_overview")
+        outcomes["market_breadth"] = {
+            "status": "completed",
+            "evidenceCount": int(context["breadth"].get("coverageCount") or 0),
+        }
+    if "global_market_overview" in tools:
         context["globalOverview"] = global_overview()
+        outcomes["global_market_overview"] = {
+            "status": "completed",
+            "evidenceCount": len(context["globalOverview"].get("markets") or []),
+        }
+    if "company_document_rag" in tools:
+        try:
+            # Runtime import avoids a module cycle: document_rag reuses this
+            # module's provider adapter for optional grounded generation.
+            from document_rag import retrieve_chunks
+            context["documentEvidence"] = retrieve_chunks(symbol, payload.message, 5)
+            document_count = len(context["documentEvidence"].get("matches") or [])
+            outcomes["company_document_rag"] = {
+                "status": "completed" if document_count else "no_evidence",
+                "evidenceCount": document_count,
+                **({"message": "No retrievable indexed company evidence was found; no document claim was invented."}
+                   if not document_count else {}),
+            }
+        except (RuntimeError, ValueError) as error:
+            logger.warning("Agent document retrieval failed for %s: %s", symbol, error)
+            context["documentEvidence"] = {"matches": [], "provider": None}
+            outcomes["company_document_rag"] = {
+                "status": "unavailable",
+                "evidenceCount": 0,
+                "message": "Indexed document retrieval is temporarily unavailable.",
+            }
 
     prediction = context["prediction"]
+    analysis_brief = _build_analysis_brief(context["snapshot"], prediction)
     model_context: Dict[str, Any] = {
         "outlook": prediction["outlook"],
         "probabilityUp": prediction["probabilityUp"],
@@ -1537,8 +1906,11 @@ async def market_agent(request: FastApiRequest):
             [item["factor"], item["changePercent"], item["scoreContribution"], item["reason"]]
             for item in prediction["macroFactor"]["factors"]
         ],
+        "derivedCalculations": analysis_brief,
     }
-    if any(word in lowered for word in ["news", "headline", "war", "ai", "factor", "gold", "oil", "crude", "rupee"]):
+    if "historicalSession" in context:
+        llm_context["historicalSession"] = context["historicalSession"]
+    if "news" in context:
         llm_context["headlines"] = [item["title"][:100] for item in context["news"]["articles"][:3]]
     if "company" in context:
         llm_context["company"] = {
@@ -1559,28 +1931,48 @@ async def market_agent(request: FastApiRequest):
             [item["name"], item.get("changePercent")]
             for item in context["globalOverview"]["markets"] if item.get("status") == "available"
         ]
+    document_matches = (context.get("documentEvidence") or {}).get("matches") or []
+    document_requested = "company_document_rag" in tools
+    if document_requested:
+        llm_context["indexedDocumentEvidence"] = [
+            {
+                "citation": f"[{item['citation']} p.{item['page']}]",
+                "title": item["title"],
+                "reportingPeriod": item.get("reportingPeriod"),
+                "sourceUrl": item.get("sourceUrl"),
+                "evidence": item["text"][:900],
+            }
+            for item in document_matches
+        ]
+        llm_context["documentEvidenceAvailable"] = bool(document_matches)
 
     system_prompt = (
-        "You are FinTrack Market Agent, a cautious market intelligence assistant. "
-        "Use only the supplied tool results. Explain factors, uncertainty, model backtest and data timestamp. "
-        "Never invent prices or news. Never guarantee direction, profit or return. Do not issue personalized "
-        "buy/sell instructions. changePct means the asset's daily price change, never buying or selling volume. "
-        "RSI belongs only to the analyzed asset: above 70 is overbought, below 30 is oversold, otherwise neutral. "
-        "If testAccuracy is below 53, explicitly say the model has no reliable directional edge. "
-        "Answer in the user's Hindi, Hinglish or English style using at most four short bullets and finish the answer."
+        "You are FinTrack's evidence-grounded market research analyst. Use only the supplied tool results; never "
+        "invent prices, dates, news or calculations. Match the user's Hindi, Hinglish or English. Give a useful, "
+        "detailed answer with these compact sections when relevant: Seedha jawab, Verified figures, Calculation, "
+        "Scenario/estimate, Assumptions and confidence, Final assessment. Show arithmetic explicitly using the "
+        "derived calculations. For a requested historical date, clearly say whether it is the exact session or "
+        "nearest trading session and use its OHLC/change; do not answer it with today's data. Distinguish verified "
+        "facts from model estimates. Explain downside, neutral and upside cases instead of pretending one outcome "
+        "is certain. Never guarantee direction, profit or return and never issue personalized buy/sell instructions. "
+        "When indexedDocumentEvidence is supplied, every document claim must use its exact [S# p.#] citation token. "
+        "If documentEvidenceAvailable is false, say that indexed evidence is unavailable and do not infer a filing answer. "
+        "changePct is daily price change, not trading volume. RSI above 70 is overbought, below 30 is oversold. "
+        "If balancedAccuracy is below 53, explicitly state that the model has no reliable directional edge. "
+        "Keep the response readable and normally within about 550 words."
     )
     recent = []
-    for item in payload.recent_messages[-2:]:
+    for item in payload.recent_messages[-6:]:
         if not isinstance(item, dict) or item.get("role") not in {"user", "assistant"}:
             continue
         content = item.get("content", "")
-        recent.append({"role": item["role"], "content": str(content)[:180]})
+        recent.append({"role": item["role"], "content": str(content)[:600]})
     messages = [
         {"role": "system", "content": system_prompt},
         *recent,
         {
             "role": "user",
-            "content": f"Question: {payload.message}\nEvidence: {json.dumps(llm_context, default=str)[:1900]}",
+            "content": f"Question: {payload.message}\nEvidence: {json.dumps(llm_context, default=str)[:8500]}",
         },
     ]
     llm_used = True
@@ -1588,35 +1980,77 @@ async def market_agent(request: FastApiRequest):
     llm_answer_accepted = True
     grounding_issue = None
     llm_failure = None
-    llm_provider = os.getenv("LLM_PROVIDER", "ollama").strip().lower() or "ollama"
+    llm_provider = os.getenv("LLM_PROVIDER", "").strip().lower() or "deterministic"
+    document_only = document_requested and not any(intent in plan["intents"] for intent in (
+        "model_and_technical_analysis", "historical_date_analysis", "news_analysis",
+        "macro_analysis", "market_breadth_analysis", "global_market_comparison",
+    ))
+
+    def verified_fallback() -> str:
+        if document_only:
+            return _verified_document_answer(symbol, payload.message, document_matches)
+        return _verified_tool_answer(
+            payload.message,
+            context["snapshot"],
+            prediction,
+            tools,
+            context.get("macroFactors") or {"factors": []},
+            context.get("breadth"),
+            context.get("historicalSession"),
+            document_matches,
+            document_requested,
+        )
+
     try:
         answer, llm_provider = _provider_chat(messages)
         if not answer:
             raise RuntimeError("The configured LLM returned an empty answer.")
-        grounding_issue = _llm_grounding_issue(answer, payload.message, prediction, context["macroFactors"])
+        grounding_issue = _llm_grounding_issue(
+            answer,
+            payload.message,
+            prediction,
+            context.get("macroFactors") or {"factors": []},
+            context.get("historicalSession"),
+            document_matches,
+            document_requested,
+        )
         if grounding_issue:
             llm_answer_accepted = False
             llm_status = "grounding_fallback"
-            answer = _verified_tool_answer(
-                payload.message,
-                prediction,
-                tools,
-                context["macroFactors"],
-                context.get("breadth"),
-            )
+            answer = verified_fallback()
     except RuntimeError as error:
         logger.warning("Configured market LLM unavailable; returning verified tool answer: %s", error)
         llm_used = False
         llm_status = "offline"
         llm_answer_accepted = False
         llm_failure = _llm_failure_code(error)
-        answer = _verified_tool_answer(
-            payload.message,
-            prediction,
-            tools,
-            context["macroFactors"],
-            context.get("breadth"),
-        )
+        answer = verified_fallback()
+
+    citations = [{key: match.get(key) for key in (
+        "citation", "documentId", "title", "reportingPeriod", "sourceUrl", "page", "score", "snippet"
+    )} for match in document_matches]
+    execution_trace = tool_trace(plan, outcomes)
+    evidence_sources = []
+    for item in execution_trace:
+        evidence_sources.append({
+            "id": f"E{len(evidence_sources) + 1}",
+            "tool": item["tool"],
+            "label": item["label"],
+            "evidenceType": item["evidenceType"],
+            "source": item["source"],
+            "status": item["status"],
+            "evidenceCount": item["evidenceCount"],
+        })
+    for citation in citations:
+        evidence_sources.append({
+            "id": citation["citation"],
+            "tool": "company_document_rag",
+            "label": f"{citation['title']} - page {citation['page']}",
+            "evidenceType": "cited_document_chunk",
+            "source": citation.get("sourceUrl") or "FinTrack trusted document index",
+            "status": "retrieved",
+            "evidenceCount": 1,
+        })
 
     return {
         "answer": answer,
@@ -1627,11 +2061,11 @@ async def market_agent(request: FastApiRequest):
         "llmFailure": llm_failure,
         "llmAnswerAccepted": llm_answer_accepted,
         "groundingIssue": grounding_issue,
+        "agentPlan": plan,
         "toolsUsed": tools,
-        "toolTrace": [
-            {"step": index + 1, "tool": tool, "status": "completed"}
-            for index, tool in enumerate(tools)
-        ],
+        "toolTrace": execution_trace,
+        "evidenceSources": evidence_sources,
+        "citations": citations,
         "usedLiveContext": True,
         "suggestedQuestions": [
             f"Why is {symbol} outlook {context['prediction']['outlook'].lower()}?",

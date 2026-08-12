@@ -3,7 +3,11 @@ frontend/dist/
 market-service/.venv/
 market-service/__pycache__/
 market-service/.pytest_cache/
+market-service/data/
+market-service/artifacts/
+market-service/mlruns/
+market-service/mlartifacts/
+market-service/mlflow.db
 .env
 .env.local
 *.pyc
-
