@@ -1,6 +1,14 @@
 import unittest
+from datetime import date
 
-from market_intelligence import _company_currency, _company_financial_sections, _fifty_two_week_position
+import pandas as pd
+
+from market_intelligence import (
+    _company_catalysts,
+    _company_currency,
+    _company_financial_sections,
+    _fifty_two_week_position,
+)
 
 
 class CompanyFundamentalNormalizationTests(unittest.TestCase):
@@ -43,6 +51,50 @@ class CompanyFundamentalNormalizationTests(unittest.TestCase):
         self.assertEqual("GBp", _company_currency(
             {"currency": "GBp"}, {"currency": "Local currency"}
         ))
+
+    def test_catalysts_keep_analyst_targets_separate_from_reported_surprises(self):
+        earnings = pd.DataFrame(
+            {
+                "EPS Estimate": [2.0, 1.8, 1.7],
+                "Reported EPS": [None, 1.9, 1.6],
+                "Surprise(%)": [None, 5.56, -5.88],
+            },
+            index=pd.to_datetime(["2026-10-30", "2026-07-30", "2026-04-30"]),
+        )
+        result = _company_catalysts(
+            {
+                "targetLowPrice": 90,
+                "targetMeanPrice": 120,
+                "targetMedianPrice": 118,
+                "targetHighPrice": 140,
+                "recommendationMean": 2.1,
+                "recommendationKey": "buy",
+                "numberOfAnalystOpinions": 12,
+            },
+            {
+                "Earnings Date": [date(2026, 10, 30)],
+                "Ex-Dividend Date": date(2026, 8, 10),
+                "Earnings Average": 2.0,
+                "Revenue Average": 5_000_000,
+            },
+            earnings,
+            100,
+            today=date(2026, 8, 14),
+        )
+
+        self.assertEqual("available", result["status"])
+        self.assertEqual(20.0, result["analystConsensus"]["targetGapPercent"])
+        self.assertEqual("Buy", result["analystConsensus"]["recommendation"])
+        self.assertEqual(1, result["surpriseSummary"]["beats"])
+        self.assertEqual(1, result["surpriseSummary"]["misses"])
+        self.assertEqual("upcoming", result["events"][0]["status"])
+        self.assertEqual("2026-10-30", result["events"][0]["date"])
+
+    def test_missing_catalyst_evidence_returns_unavailable_without_invention(self):
+        result = _company_catalysts({}, {}, None, None, today=date(2026, 8, 14))
+        self.assertEqual("unavailable", result["status"])
+        self.assertEqual([], result["events"])
+        self.assertEqual(0, result["analystConsensus"]["analystCount"])
 
 
 if __name__ == "__main__":

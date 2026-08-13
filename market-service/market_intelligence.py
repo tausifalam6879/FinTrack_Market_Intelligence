@@ -99,6 +99,11 @@ RISK_QUERY_TERMS = (
     "volatility",
 )
 
+CATALYST_QUERY_TERMS = (
+    "earnings date", "earnings calendar", "next earnings", "analyst", "price target",
+    "target price", "consensus", "ex-dividend", "ex dividend", "eps surprise", "catalyst",
+)
+
 MARKET_BOARD = {
     "^NSEI": {"name": "Nifty 50", "region": "India", "currency": "INR", "kind": "index", "sector": "Indices"},
     "^BSESN": {"name": "BSE Sensex", "region": "India", "currency": "INR", "kind": "index", "sector": "Indices"},
@@ -896,6 +901,144 @@ def _company_currency(info: Dict[str, Any], snapshot: Dict[str, Any]) -> str:
     return "Local currency"
 
 
+def _provider_date(value: Any) -> Optional[str]:
+    if isinstance(value, (list, tuple)):
+        for item in value:
+            normalized = _provider_date(item)
+            if normalized:
+                return normalized
+        return None
+    if value is None:
+        return None
+    if isinstance(value, (int, float)) and math.isfinite(float(value)):
+        try:
+            return datetime.fromtimestamp(float(value), timezone.utc).date().isoformat()
+        except (OverflowError, OSError, ValueError):
+            return None
+    if isinstance(value, (datetime, date, pd.Timestamp)):
+        return value.date().isoformat() if isinstance(value, (datetime, pd.Timestamp)) else value.isoformat()
+    match = re.match(r"(\d{4}-\d{2}-\d{2})", str(value))
+    return match.group(1) if match else None
+
+
+def _event_status(event_date: Optional[str], today: date) -> str:
+    if not event_date:
+        return "date-unavailable"
+    parsed = date.fromisoformat(event_date)
+    if parsed >= today:
+        return "upcoming"
+    return "recent" if (today - parsed).days <= 30 else "completed"
+
+
+def _normalized_earnings_history(earnings_dates: Optional[pd.DataFrame]) -> List[Dict[str, Any]]:
+    if earnings_dates is None or earnings_dates.empty:
+        return []
+    records = []
+    for index, row in earnings_dates.iterrows():
+        event_date = _provider_date(index)
+        if not event_date:
+            continue
+        estimate = _round(row.get("EPS Estimate"))
+        reported = _round(row.get("Reported EPS"))
+        surprise = _round(row.get("Surprise(%)"))
+        records.append({
+            "date": event_date,
+            "epsEstimate": estimate,
+            "reportedEps": reported,
+            "surprisePercent": surprise,
+            "status": "reported" if reported is not None else "estimate",
+        })
+    records.sort(key=lambda item: item["date"], reverse=True)
+    return records
+
+
+def _company_catalysts(
+    info: Dict[str, Any],
+    calendar: Dict[str, Any],
+    earnings_dates: Optional[pd.DataFrame],
+    current_price: Any,
+    *,
+    today: Optional[date] = None,
+) -> Dict[str, Any]:
+    today = today or datetime.now(timezone.utc).date()
+    earnings_history = _normalized_earnings_history(earnings_dates)
+    future_earnings = next(
+        (item["date"] for item in reversed(earnings_history) if item["status"] == "estimate" and item["date"] >= today.isoformat()),
+        None,
+    )
+    next_earnings = (
+        _provider_date(calendar.get("Earnings Date"))
+        or future_earnings
+        or _provider_date(info.get("earningsTimestampStart"))
+        or _provider_date(info.get("earningsTimestamp"))
+    )
+    ex_dividend = _provider_date(calendar.get("Ex-Dividend Date")) or _provider_date(info.get("exDividendDate"))
+    dividend_payment = _provider_date(calendar.get("Dividend Date")) or _provider_date(info.get("dividendDate"))
+    events = [
+        {"type": "earnings", "label": "Earnings release", "date": next_earnings},
+        {"type": "ex-dividend", "label": "Ex-dividend date", "date": ex_dividend},
+        {"type": "dividend-payment", "label": "Dividend payment", "date": dividend_payment},
+    ]
+    events = [
+        {**item, "status": _event_status(item["date"], today)}
+        for item in events if item["date"]
+    ]
+    event_order = {"upcoming": 0, "recent": 1, "completed": 2, "date-unavailable": 3}
+    events.sort(key=lambda item: (event_order.get(item["status"], 4), item["date"]))
+
+    price = _round(current_price)
+    target_mean = _round(info.get("targetMeanPrice"))
+    target_gap = (
+        _round(((target_mean / price) - 1) * 100, 2)
+        if price and target_mean is not None else None
+    )
+    analyst_consensus = {
+        "recommendation": str(info.get("recommendationKey") or "not_available").replace("_", " ").title(),
+        "recommendationMean": _round(info.get("recommendationMean")),
+        "analystCount": int(info.get("numberOfAnalystOpinions") or 0),
+        "targetLow": _round(info.get("targetLowPrice")),
+        "targetMean": target_mean,
+        "targetMedian": _round(info.get("targetMedianPrice")),
+        "targetHigh": _round(info.get("targetHighPrice")),
+        "targetGapPercent": target_gap,
+        "currentPrice": price,
+    }
+    reported_history = [item for item in earnings_history if item["status"] == "reported"][:5]
+    surprises = [float(item["surprisePercent"]) for item in reported_history if item["surprisePercent"] is not None]
+    surprise_summary = {
+        "reportedQuarters": len(reported_history),
+        "beats": sum(value > 0.05 for value in surprises),
+        "misses": sum(value < -0.05 for value in surprises),
+        "inLine": sum(-0.05 <= value <= 0.05 for value in surprises),
+        "averageSurprisePercent": _round(float(np.mean(surprises)), 2) if surprises else None,
+    }
+    estimate = {
+        "epsLow": _round(calendar.get("Earnings Low")),
+        "epsAverage": _round(calendar.get("Earnings Average")),
+        "epsHigh": _round(calendar.get("Earnings High")),
+        "revenueLow": _round(calendar.get("Revenue Low"), 0),
+        "revenueAverage": _round(calendar.get("Revenue Average"), 0),
+        "revenueHigh": _round(calendar.get("Revenue High"), 0),
+    }
+    has_analyst_evidence = analyst_consensus["analystCount"] > 0 or any(
+        analyst_consensus[key] is not None
+        for key in ("targetLow", "targetMean", "targetMedian", "targetHigh", "recommendationMean")
+    )
+    has_estimate = any(value is not None for value in estimate.values())
+    evidence_count = len(events) + int(has_analyst_evidence) + int(has_estimate) + len(reported_history)
+    return {
+        "status": "available" if evidence_count else "unavailable",
+        "events": events,
+        "analystConsensus": analyst_consensus,
+        "nextEarningsEstimate": estimate,
+        "earningsHistory": reported_history,
+        "surpriseSummary": surprise_summary,
+        "source": "Yahoo Finance calendar and analyst data via yfinance",
+        "method": "Provider calendar, third-party analyst consensus and reported-vs-estimated EPS history are kept separate from FinTrack's ML outlook.",
+        "disclaimer": "Calendar dates can change. Analyst targets and recommendations are external opinions, not FinTrack advice or guaranteed future prices.",
+    }
+
+
 def company_research(symbol: str) -> Dict[str, Any]:
     symbol = _sanitize_symbol(symbol)
     key = f"company:{symbol}"
@@ -910,6 +1053,14 @@ def company_research(symbol: str) -> Dict[str, Any]:
         info = ticker.get_info() or {}
     except Exception:
         info = {}
+    try:
+        calendar = ticker.calendar or {}
+    except Exception:
+        calendar = {}
+    try:
+        earnings_dates = ticker.get_earnings_dates(limit=6)
+    except Exception:
+        earnings_dates = None
 
     close = frame["Close"].astype(float)
     fifty_two_week_low = _round(frame["Low"].min()) if "Low" in frame else None
@@ -918,6 +1069,7 @@ def company_research(symbol: str) -> Dict[str, Any]:
     range_high = _round(info.get("fiftyTwoWeekHigh")) or fifty_two_week_high
     financials = _company_financial_sections(info)
     company_quote = {**snapshot, "currency": _company_currency(info, snapshot)}
+    catalysts = _company_catalysts(info, calendar, earnings_dates, snapshot.get("price"))
     result = {
         "symbol": symbol,
         "name": info.get("longName") or info.get("shortName") or snapshot["name"],
@@ -950,6 +1102,7 @@ def company_research(symbol: str) -> Dict[str, Any]:
             "dividendYield": _round(info.get("dividendYield")),
         },
         "financials": financials,
+        "catalysts": catalysts,
         "history": [
             {"date": index.strftime("%Y-%m-%d"), "close": _round(row["Close"])}
             for index, row in frame.tail(120).iterrows()
@@ -1735,6 +1888,11 @@ def _requests_risk_analysis(message: str) -> bool:
     return any(term in lowered for term in RISK_QUERY_TERMS) or " var " in f" {lowered} "
 
 
+def _requests_catalyst_analysis(message: str) -> bool:
+    lowered = str(message or "").lower()
+    return any(term in lowered for term in CATALYST_QUERY_TERMS)
+
+
 def market_prediction(symbol: str) -> Dict[str, Any]:
     symbol = _sanitize_symbol(symbol)
     cache_key = f"prediction:{symbol}"
@@ -2129,6 +2287,7 @@ def _verified_tool_answer(
     historical: Optional[Dict[str, Any]] = None,
     document_matches: Optional[List[Dict[str, Any]]] = None,
     document_requested: bool = False,
+    company_profile: Optional[Dict[str, Any]] = None,
 ) -> str:
     news = prediction["newsFactor"]
     model = prediction["model"]
@@ -2269,6 +2428,37 @@ def _verified_tool_answer(
             + "\n".join(risk_lines)
             + "\n- Ye trailing historical statistics hain; future loss limit ya recommendation nahi."
         )
+    catalyst_section = ""
+    if _requests_catalyst_analysis(lowered):
+        catalysts = (company_profile or {}).get("catalysts") or {}
+        if catalysts.get("status") == "available":
+            event_lines = [
+                f"- {item['label']}: {item['date']} ({item['status']})."
+                for item in (catalysts.get("events") or [])[:3]
+            ]
+            consensus = catalysts.get("analystConsensus") or {}
+            analyst_line = (
+                f"- External analyst consensus: {consensus.get('recommendation')}; "
+                f"{consensus.get('analystCount') or 0} opinions; mean target "
+                f"{consensus.get('targetMean')}; current-price gap {consensus.get('targetGapPercent')}%."
+                if consensus.get("analystCount") or consensus.get("targetMean") is not None else
+                "- External analyst target evidence provider ne return nahi kiya."
+            )
+            surprise = catalysts.get("surpriseSummary") or {}
+            catalyst_section = (
+                "\n\nCompany catalysts and external expectations\n"
+                + ("\n".join(event_lines) if event_lines else "- Dated corporate event provider ne return nahi kiya.")
+                + "\n" + analyst_line
+                + f"\n- Reported EPS history: {surprise.get('reportedQuarters') or 0} quarters, "
+                + f"{surprise.get('beats') or 0} beats, {surprise.get('misses') or 0} misses."
+                + "\n- Analyst opinions FinTrack ML prediction se separate hain; target guaranteed future price nahi."
+            )
+        else:
+            catalyst_section = (
+                "\n\nCompany catalysts and external expectations\n"
+                "- Is listing ke liye provider ne calendar, analyst target ya EPS-surprise evidence return nahi kiya. "
+                "Missing catalyst invent nahi kiya gaya."
+            )
     return (
         "Seedha jawab\n"
         f"{prediction['name']} ke liye model ka current scenario {prediction['outlook']} hai, lekin ise guaranteed "
@@ -2280,6 +2470,7 @@ def _verified_tool_answer(
         + ("\n".join(factor_lines) if factor_lines else "- Requested live factor data abhi available nahi hai.")
         + breadth_line
         + risk_section
+        + catalyst_section
         + "\n\nCalculation aur scenario\n"
         + f"- Current price se lower range tak downside: {brief['currentPrice']} - "
         + f"{prediction['expectedRange']['low']} = {brief['expectedDownsidePoints']} points "
@@ -2344,6 +2535,7 @@ def _llm_grounding_issue(
     historical: Optional[Dict[str, Any]] = None,
     document_matches: Optional[List[Dict[str, Any]]] = None,
     document_requested: bool = False,
+    company_profile: Optional[Dict[str, Any]] = None,
 ) -> Optional[str]:
     normalized_answer = answer.lower()
     lowered = message.lower()
@@ -2398,6 +2590,26 @@ def _llm_grounding_issue(
         accepted_date_markers = {historical["sessionDate"].lower(), readable_date.lower()}
         if not any(marker in normalized_answer for marker in accepted_date_markers):
             return "missing requested historical session"
+    if _requests_catalyst_analysis(lowered):
+        catalysts = (company_profile or {}).get("catalysts") or {}
+        consensus = catalysts.get("analystConsensus") or {}
+        if ("analyst" in lowered or "target" in lowered or "consensus" in lowered) and consensus.get("targetMean") is not None:
+            expected_target = f"{abs(float(consensus['targetMean'])):.2f}".rstrip("0").rstrip(".")
+            if expected_target not in normalized_answer:
+                return "missing requested analyst target evidence"
+        if "earnings" in lowered:
+            earnings_event = next(
+                (item for item in catalysts.get("events") or [] if item.get("type") == "earnings"),
+                None,
+            )
+            if earnings_event:
+                event_date = date.fromisoformat(earnings_event["date"])
+                markers = {
+                    earnings_event["date"].lower(),
+                    f"{event_date.day} {event_date.strftime('%B %Y')}".lower(),
+                }
+                if not any(marker in normalized_answer for marker in markers):
+                    return "missing requested earnings date evidence"
     if document_requested and not document_matches:
         return "no indexed document evidence available"
     if document_matches:
@@ -2641,6 +2853,7 @@ async def market_agent(request: FastApiRequest):
             "industry": context["company"]["industry"],
             "performance": context["company"]["performance"],
             "fundamentals": context["company"]["fundamentals"],
+            "catalysts": context["company"].get("catalysts"),
         }
     if context.get("sectorPeers", {}).get("status") == "available":
         peer_context = context["sectorPeers"]
@@ -2692,6 +2905,7 @@ async def market_agent(request: FastApiRequest):
         "When indexedDocumentEvidence is supplied, every document claim must use its exact [S# p.#] citation token. "
         "If documentEvidenceAvailable is false, say that indexed evidence is unavailable and do not infer a filing answer. "
         "When sectorPeerComparison is supplied, describe only above/below/in-line evidence and never turn a peer median into a buy/sell verdict. "
+        "Company catalyst dates can change; label analyst consensus and targets as external opinions separate from FinTrack ML. "
         "changePct is daily price change, not trading volume. RSI above 70 is overbought, below 30 is oversold. "
         "If balancedAccuracy is below 53, explicitly state that the model has no reliable directional edge. "
         "Keep the response readable and normally within about 550 words."
@@ -2734,6 +2948,7 @@ async def market_agent(request: FastApiRequest):
             context.get("historicalSession"),
             document_matches,
             document_requested,
+            context.get("company"),
         )
 
     try:
@@ -2748,6 +2963,7 @@ async def market_agent(request: FastApiRequest):
             context.get("historicalSession"),
             document_matches,
             document_requested,
+            context.get("company"),
         )
         if grounding_issue:
             llm_answer_accepted = False

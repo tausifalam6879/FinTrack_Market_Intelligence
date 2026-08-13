@@ -314,6 +314,50 @@ main { width: min(1500px, calc(100% - 40px)); margin: 0 auto; }
 .company-headlines a span, .company-headlines article span { margin-top: 6px; color: var(--muted); font-size: 7px; }
 .company-headlines > p { margin: 9px 0 0; color: var(--muted); font-size: 9px; }
 .fundamentals-method { margin: 11px 0 0; color: var(--muted); font-size: 8px; line-height: 1.55; }
+.catalyst-panel { margin-top: 11px; padding: 15px; border: 1px solid #d4d8e8; border-radius: 14px; background: linear-gradient(135deg,rgba(255,255,255,.88),rgba(247,245,253,.84)); }
+.catalyst-panel.catalyst-unavailable { border-style: dashed; }
+.catalyst-unavailable > p { margin: 9px 0 0; color: var(--muted); font-size: 9px; }
+.catalyst-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; }
+.catalyst-heading h4 { margin: 3px 0 0; font-size: 14px; }
+.catalyst-heading > span { padding: 6px 9px; border: 1px solid #d1c8e2; border-radius: 999px; color: #6b5380; background: #fff; font-size: 7px; font-weight: 900; text-transform: uppercase; }
+.catalyst-events { margin-top: 11px; display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); gap: 7px; }
+.catalyst-events article { padding: 10px; border: 1px solid #e0e1e9; border-left: 3px solid #8e78aa; border-radius: 10px; background: #fff; }
+.catalyst-events article.event-upcoming { border-left-color: #087d8c; }
+.catalyst-events article.event-recent { border-left-color: #d39d40; }
+.catalyst-events small, .catalyst-events strong, .catalyst-events span { display: block; }
+.catalyst-events small { color: var(--muted); font-size: 7px; font-weight: 850; text-transform: uppercase; }
+.catalyst-events strong { margin: 5px 0 3px; font-size: 10px; }
+.catalyst-events span { color: var(--muted); font-size: 8px; }
+.catalyst-events > p { grid-column: 1 / -1; margin: 0; color: var(--muted); font-size: 9px; }
+.catalyst-evidence-grid { margin-top: 9px; display: grid; grid-template-columns: 1fr 1fr; gap: 9px; }
+.analyst-consensus-card, .earnings-evidence-card { min-width: 0; padding: 13px; border: 1px solid #e0e1e9; border-radius: 11px; background: rgba(255,255,255,.9); }
+.analyst-card-heading, .earnings-card-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 9px; }
+.analyst-card-heading small, .analyst-card-heading strong, .earnings-card-heading small, .earnings-card-heading strong { display: block; }
+.analyst-card-heading small, .earnings-card-heading small { color: var(--muted); font-size: 7px; }
+.analyst-card-heading strong, .earnings-card-heading strong { margin-top: 4px; font-size: 11px; }
+.analyst-card-heading > span, .earnings-card-heading > span { color: #6b5380; font-size: 8px; font-weight: 850; }
+.target-metrics, .next-estimate-strip { margin-top: 10px; display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); gap: 6px; }
+.target-metrics > div, .next-estimate-strip > div { padding: 8px; border-radius: 8px; background: #f5f5f8; }
+.target-metrics small, .target-metrics strong, .next-estimate-strip small, .next-estimate-strip strong { display: block; }
+.target-metrics small, .next-estimate-strip small { color: var(--muted); font-size: 6px; }
+.target-metrics strong, .next-estimate-strip strong { margin-top: 4px; font-size: 9px; }
+.analyst-target-track { position: relative; height: 7px; margin: 16px 5px 8px; border-radius: 99px; background: linear-gradient(90deg,#e8c4c4,#ead99b 50%,#a5d9c0); }
+.analyst-target-track i { position: absolute; top: 50%; transform: translate(-50%,-50%); }
+.analyst-target-track .current-price-marker { width: 12px; height: 12px; border: 3px solid #fff; border-radius: 50%; background: #087d8c; box-shadow: 0 1px 5px rgba(0,0,0,.2); }
+.analyst-target-track .mean-target-marker { width: 9px; height: 9px; transform: translate(-50%,-50%) rotate(45deg); border: 2px solid #fff; background: #76559b; }
+.analyst-target-legend { display: flex; justify-content: space-between; gap: 8px; color: var(--muted); font-size: 6px; }
+.analyst-target-legend span:first-child { color: #087d8c; }
+.analyst-target-legend span:last-child { color: #76559b; }
+.target-gap { margin: 9px 0 0; color: var(--muted); font-size: 7px; line-height: 1.45; }
+.target-gap strong { color: var(--ink); font-size: 10px; }
+.target-unavailable { margin: 10px 0 0; color: var(--muted); font-size: 8px; }
+.earnings-history-list { margin-top: 9px; }
+.earnings-history-list > div { padding: 6px 0; display: grid; grid-template-columns: 80px 1fr auto; align-items: center; gap: 7px; border-top: 1px solid #ececf1; }
+.earnings-history-list span, .earnings-history-list small { color: var(--muted); font-size: 7px; }
+.earnings-history-list strong { font-size: 8px; }
+.earnings-history-list strong.positive { color: #08775e; }
+.earnings-history-list strong.negative { color: #b14646; }
+.catalyst-method { margin: 10px 0 0; color: var(--muted); font-size: 7px; line-height: 1.5; }
 .risk-benchmark-panel { margin: 16px 0; padding: 22px; border: 1px solid #b9d5df; border-radius: 19px; background: linear-gradient(135deg,#f8fcfd,#f3f8fc 55%,#f8f5fb); }
 .risk-benchmark-panel.risk-unavailable { border-style: dashed; }
 .risk-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 20px; }
@@ -588,6 +632,7 @@ footer p { margin: 5px 0 0; }
   .risk-evidence-strip { grid-template-columns: repeat(2,minmax(0,1fr)); }
   .company-performance-grid { grid-template-columns: repeat(3,minmax(0,1fr)); }
   .company-headlines > div:last-child { grid-template-columns: 1fr; }
+  .catalyst-evidence-grid { grid-template-columns: 1fr; }
   .validation-summary { grid-template-columns: repeat(3,minmax(0,1fr)); }
   .deep-learning-grid { grid-template-columns: repeat(2,minmax(0,1fr)); }
   .registry-metrics { grid-template-columns: repeat(3,minmax(0,1fr)); }
@@ -629,6 +674,8 @@ footer p { margin: 5px 0 0; }
   .fundamentals-heading, .fundamentals-panel.fundamentals-state { flex-direction: column; }
   .company-performance-grid { grid-template-columns: 1fr 1fr; }
   .company-range-card > div:first-child { align-items: flex-start; flex-direction: column; gap: 4px; }
+  .catalyst-heading { flex-direction: column; }
+  .catalyst-events { grid-template-columns: 1fr; }
   .risk-metric-grid, .risk-evidence-strip { grid-template-columns: 1fr; }
   .probability-path, .local-impact-grid { grid-template-columns: 1fr; }
   .probability-path b { display: none; }

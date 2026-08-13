@@ -115,6 +115,12 @@ def build_agent_plan(
     company_request = _contains(lowered, (
         "fundamental", "valuation", "market cap", "p/e", " pe ", "sector", "industry",
         "business", "company profile", "performance", "revenue", "profit", "debt",
+        "earnings date", "earnings calendar", "next earnings", "analyst", "price target",
+        "target price", "consensus", "ex-dividend", "ex dividend", "eps surprise", "catalyst",
+    ))
+    catalyst_request = _contains(lowered, (
+        "earnings date", "earnings calendar", "next earnings", "analyst", "price target",
+        "target price", "consensus", "ex-dividend", "ex dividend", "eps surprise", "catalyst",
     ))
     model_request = _contains(lowered, (
         "prediction", "forecast", "outlook", "bullish", "bearish", "next session", "model",
@@ -150,6 +156,8 @@ def build_agent_plan(
     if not is_index and (company_request or document_request or comprehensive):
         add_intent("company_research")
         require("company_fundamentals", "Provide company identity and available market-profile fundamentals.")
+    if not is_index and (catalyst_request or comprehensive):
+        add_intent("company_catalyst_analysis")
     if not is_index and (peer_request or comprehensive):
         add_intent("sector_peer_analysis")
         require("sector_peer_comparison", "Compare the company with dynamically discovered same-sector, same-market peers.")

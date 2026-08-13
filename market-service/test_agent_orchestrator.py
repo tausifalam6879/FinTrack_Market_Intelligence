@@ -58,6 +58,16 @@ class AgentOrchestratorTests(unittest.TestCase):
         peer_step = next(step for step in plan["steps"] if step["tool"] == "sector_peer_comparison")
         self.assertEqual("read-only", peer_step["access"])
 
+    def test_earnings_and_target_question_uses_company_catalyst_evidence(self):
+        plan = build_agent_plan(
+            "Cisco ka next earnings date aur analyst price target batao",
+            "CSCO",
+        )
+
+        tools = [step["tool"] for step in plan["steps"]]
+        self.assertIn("company_catalyst_analysis", plan["intents"])
+        self.assertIn("company_fundamentals", tools)
+
     def test_trace_preserves_plan_reason_and_honest_no_evidence_status(self):
         plan = build_agent_plan("annual report source citation", "AAPL")
         trace = tool_trace(plan, {

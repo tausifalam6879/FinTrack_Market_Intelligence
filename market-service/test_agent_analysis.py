@@ -157,6 +157,60 @@ class AgentAnalysisTests(unittest.TestCase):
         self.assertEqual("missing requested beta evidence", issue)
         self.assertIsNone(accepted)
 
+    def test_catalyst_fallback_labels_external_target_and_earnings_date(self):
+        company = {
+            "catalysts": {
+                "status": "available",
+                "events": [{
+                    "type": "earnings", "label": "Earnings release",
+                    "date": "2026-11-12", "status": "upcoming",
+                }],
+                "analystConsensus": {
+                    "recommendation": "Buy", "analystCount": 22,
+                    "targetMean": 132.59, "targetGapPercent": 18.33,
+                },
+                "surpriseSummary": {"reportedQuarters": 5, "beats": 5, "misses": 0},
+            }
+        }
+        answer = _verified_tool_answer(
+            "Next earnings date aur analyst price target batao",
+            self.snapshot,
+            self.prediction,
+            ["market_snapshot", "technical_prediction", "company_fundamentals"],
+            {"factors": []},
+            company_profile=company,
+        )
+
+        self.assertIn("2026-11-12", answer)
+        self.assertIn("mean target 132.59", answer)
+        self.assertIn("FinTrack ML prediction se separate", answer)
+
+    def test_generated_catalyst_answer_must_include_requested_target_and_date(self):
+        company = {
+            "catalysts": {
+                "events": [{"type": "earnings", "date": "2026-11-12"}],
+                "analystConsensus": {"targetMean": 132.59},
+            }
+        }
+        base = "Weak model warning with detailed evidence. " * 12
+        issue = _llm_grounding_issue(
+            base,
+            "Next earnings date aur analyst target batao",
+            self.prediction,
+            {"factors": []},
+            company_profile=company,
+        )
+        accepted = _llm_grounding_issue(
+            base + " External mean target 132.59 and earnings date 2026-11-12.",
+            "Next earnings date aur analyst target batao",
+            self.prediction,
+            {"factors": []},
+            company_profile=company,
+        )
+
+        self.assertEqual("missing requested analyst target evidence", issue)
+        self.assertIsNone(accepted)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -13,6 +13,7 @@ A focused public financial-information dashboard extracted as a new, independent
 - timestamped market headlines with theme filters and explicit publisher links;
 - sector filtering and company research;
 - visible dynamic company fundamentals, multi-period performance, 52-week range position and publisher headlines;
+- upcoming company events, external analyst target ranges and reported EPS-surprise history kept separate from the ML outlook;
 - configurable downside alerts with optional browser notifications and a 15-minute scan interval;
 - a draggable sliding section selector for quick market, currency, news and intelligence navigation;
 - transparent, experimental market analytics;

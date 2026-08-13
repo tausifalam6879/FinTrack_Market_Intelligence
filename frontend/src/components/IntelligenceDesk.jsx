@@ -468,6 +468,7 @@ function CompanyFundamentalsPanel({ data, loading, error }) {
       <div className="company-range-track">{rangePosition !== null && <><i style={{ width: `${rangePosition}%` }} /><b style={{ left: `${rangePosition}%` }} /></>}</div>
       <div><span>{formatNumber(range.fiftyTwoWeekLow)} low</span><strong>{formatNumber(data.quote?.price)} current</strong><span>{formatNumber(range.fiftyTwoWeekHigh)} high</span></div>
     </div>
+    <CompanyCatalystPanel data={data.catalysts} currency={currency} />
     <div className="fundamental-groups">{groups.map(([title, entries]) => <FundamentalGroup key={title} title={title} entries={entries} />)}</div>
     <div className="company-headlines">
       <div className="company-headlines-heading"><strong>Recent company headlines</strong><span>Publisher evidence, not a sentiment guarantee</span></div>
@@ -486,6 +487,75 @@ function PerformanceMetric({ label, value }) {
 
 function FundamentalGroup({ title, entries }) {
   return <article><h4>{title}</h4><dl>{entries.map(([label, value]) => <div key={label}><dt>{label}</dt><dd>{value}</dd></div>)}</dl></article>;
+}
+
+function CompanyCatalystPanel({ data, currency }) {
+  if (!data || data.status !== "available") return <section className="catalyst-panel catalyst-unavailable">
+    <div className="catalyst-heading"><div><p className="eyebrow">UPCOMING CATALYSTS & ANALYST CONSENSUS</p><h4>No provider catalyst evidence available</h4></div><span>Not estimated</span></div>
+    <p>No calendar event, analyst target or reported EPS-surprise history was returned for this listing.</p>
+  </section>;
+  const consensus = data.analystConsensus || {};
+  const estimates = data.nextEarningsEstimate || {};
+  const summary = data.surpriseSummary || {};
+  const events = data.events || [];
+  const history = data.earningsHistory || [];
+  const formatDate = (value) => {
+    if (!value) return "Date unavailable";
+    const parsed = new Date(`${value}T00:00:00`);
+    return Number.isNaN(parsed.getTime()) ? value : parsed.toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" });
+  };
+  const targetValues = [consensus.targetLow, consensus.targetMean, consensus.targetHigh, consensus.currentPrice]
+    .map(Number).filter(Number.isFinite);
+  const targetMin = targetValues.length ? Math.min(...targetValues) : null;
+  const targetMax = targetValues.length ? Math.max(...targetValues) : null;
+  const targetPosition = (value) => {
+    if (value === null || value === undefined || targetMin === null || targetMax === null || targetMax === targetMin) return null;
+    return Math.max(0, Math.min(100, ((Number(value) - targetMin) / (targetMax - targetMin)) * 100));
+  };
+  const currentPosition = targetPosition(consensus.currentPrice);
+  const meanPosition = targetPosition(consensus.targetMean);
+  const gap = consensus.targetGapPercent;
+  return <section className="catalyst-panel" aria-labelledby="company-catalyst-title">
+    <div className="catalyst-heading">
+      <div><p className="eyebrow">UPCOMING CATALYSTS & ANALYST CONSENSUS</p><h4 id="company-catalyst-title">Calendar events and external expectations</h4></div>
+      <span>Separate from FinTrack ML</span>
+    </div>
+    <div className="catalyst-events">
+      {events.length ? events.map((event) => <article key={`${event.type}-${event.date}`} className={`event-${event.status}`}>
+        <small>{event.status}</small><strong>{event.label}</strong><span>{formatDate(event.date)}</span>
+      </article>) : <p>No dated corporate event was returned.</p>}
+    </div>
+    <div className="catalyst-evidence-grid">
+      <article className="analyst-consensus-card">
+        <div className="analyst-card-heading"><div><small>Third-party analyst consensus</small><strong>{consensus.recommendation || "Not available"}</strong></div><span>{consensus.analystCount || 0} analysts</span></div>
+        <div className="target-metrics">
+          <div><small>Low target</small><strong>{formatCompactMoney(consensus.targetLow, currency)}</strong></div>
+          <div><small>Mean target</small><strong>{formatCompactMoney(consensus.targetMean, currency)}</strong></div>
+          <div><small>High target</small><strong>{formatCompactMoney(consensus.targetHigh, currency)}</strong></div>
+        </div>
+        {targetMin !== null && targetMax !== null && targetMax > targetMin ? <>
+          <div className="analyst-target-track">
+            <i className="current-price-marker" style={{ left: `${currentPosition}%` }} title="Current price" />
+            <i className="mean-target-marker" style={{ left: `${meanPosition}%` }} title="Mean analyst target" />
+          </div>
+          <div className="analyst-target-legend"><span>● Current {formatCompactMoney(consensus.currentPrice, currency)}</span><span>◆ Mean target</span></div>
+        </> : <p className="target-unavailable">Analyst target range was not returned.</p>}
+        <p className="target-gap"><strong>{gap === null || gap === undefined ? "—" : `${Number(gap) > 0 ? "+" : ""}${Number(gap).toFixed(1)}%`}</strong> mean-target gap versus current price—not a forecast guarantee.</p>
+      </article>
+      <article className="earnings-evidence-card">
+        <div className="earnings-card-heading"><div><small>Recent reported EPS</small><strong>{summary.reportedQuarters || 0} quarters available</strong></div><span>{summary.beats || 0} beats · {summary.misses || 0} misses</span></div>
+        <div className="next-estimate-strip">
+          <div><small>Next EPS average</small><strong>{estimates.epsAverage ?? "—"}</strong></div>
+          <div><small>Revenue average</small><strong>{formatCompactMoney(estimates.revenueAverage, currency)}</strong></div>
+          <div><small>Average surprise</small><strong>{summary.averageSurprisePercent === null || summary.averageSurprisePercent === undefined ? "—" : `${summary.averageSurprisePercent}%`}</strong></div>
+        </div>
+        {history.length ? <div className="earnings-history-list">{history.map((item) => <div key={item.date}>
+          <span>{formatDate(item.date)}</span><small>Est. {item.epsEstimate ?? "—"} · Actual {item.reportedEps ?? "—"}</small><strong className={Number(item.surprisePercent) >= 0 ? "positive" : "negative"}>{item.surprisePercent === null || item.surprisePercent === undefined ? "—" : `${Number(item.surprisePercent) > 0 ? "+" : ""}${item.surprisePercent}%`}</strong>
+        </div>)}</div> : <p className="target-unavailable">No reported EPS-surprise history was returned.</p>}
+      </article>
+    </div>
+    <p className="catalyst-method"><strong>Method:</strong> {data.method} {data.disclaimer}</p>
+  </section>;
 }
 
 function RiskBenchmarkPanel({ data, symbol }) {
