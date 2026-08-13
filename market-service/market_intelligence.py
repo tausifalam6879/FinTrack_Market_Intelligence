@@ -83,6 +83,16 @@ BENCHMARK_SUFFIXES = (
     (".KQ", "^KS11"), (".SS", "000001.SS"), (".SZ", "000001.SS"),
 )
 
+# Yahoo's equity screener uses market regions rather than exchange names. This
+# mapping is exchange-level metadata only; peer companies are always discovered
+# at request time and are never maintained in a company allowlist.
+PEER_REGION_SUFFIXES = (
+    (".NS", "in"), (".BO", "in"), (".L", "gb"), (".DE", "de"),
+    (".T", "jp"), (".HK", "hk"), (".AX", "au"), (".TO", "ca"),
+    (".PA", "fr"), (".AS", "nl"), (".SW", "ch"), (".KS", "kr"),
+    (".KQ", "kr"), (".SS", "cn"), (".SZ", "cn"),
+)
+
 RISK_QUERY_TERMS = (
     "risk", "benchmark", "beta", "correlation", "drawdown", "tracking error",
     "historical var", "value at risk", "relative return", "outperform", "underperform",
@@ -236,6 +246,7 @@ CACHE_TTL_SECONDS = int(os.getenv("MARKET_CACHE_TTL_SECONDS", "120"))
 QUOTE_CACHE_TTL_SECONDS = int(os.getenv("MARKET_QUOTE_CACHE_TTL_SECONDS", "15"))
 OVERVIEW_CACHE_TTL_SECONDS = int(os.getenv("MARKET_OVERVIEW_CACHE_TTL_SECONDS", "900"))
 PREDICTION_CACHE_TTL_SECONDS = int(os.getenv("MARKET_PREDICTION_CACHE_TTL_SECONDS", "900"))
+PEER_CACHE_TTL_SECONDS = int(os.getenv("MARKET_PEER_CACHE_TTL_SECONDS", "1800"))
 _cache: Dict[str, Dict[str, Any]] = {}
 _overview_lock = Lock()
 _prediction_audit: Dict[str, List[Dict[str, Any]]] = {}
@@ -871,6 +882,222 @@ def company_research(symbol: str) -> Dict[str, Any]:
         "source": "Yahoo Finance via yfinance",
         "missingDataNotice": "Some fundamentals may be unavailable for indices, commodities or unsupported listings.",
     }
+    return _cache_put(key, result)
+
+
+def _peer_region_and_suffix(symbol: str) -> tuple[str, str]:
+    for suffix, region in PEER_REGION_SUFFIXES:
+        if symbol.endswith(suffix):
+            return region, suffix
+    return "us", ""
+
+
+def _peer_listing_matches(candidate: str, region: str, suffix: str) -> bool:
+    candidate = str(candidate or "").upper()
+    if not candidate or candidate.startswith("^"):
+        return False
+    if suffix:
+        return candidate.endswith(suffix)
+    # Plain symbols are treated as US listings. Excluding known international
+    # suffixes prevents an ADR comparison from silently mixing exchanges.
+    return region == "us" and not any(candidate.endswith(item[0]) for item in PEER_REGION_SUFFIXES)
+
+
+def _peer_quote(raw: Dict[str, Any], selected_symbol: str) -> Dict[str, Any]:
+    symbol = str(raw.get("symbol") or "").upper()
+    return {
+        "symbol": symbol,
+        "name": raw.get("longName") or raw.get("shortName") or raw.get("displayName") or symbol,
+        "exchange": raw.get("fullExchangeName") or raw.get("exchange") or "Not available",
+        "currency": raw.get("currency"),
+        "marketCap": _round(raw.get("marketCap") or raw.get("intradaymarketcap"), 0),
+        "trailingPE": _round(raw.get("trailingPE")),
+        "forwardPE": _round(raw.get("forwardPE")),
+        "priceToBook": _round(raw.get("priceToBook")),
+        "dividendYield": _round(raw.get("dividendYield")),
+        "fiftyTwoWeekReturnPercent": _round(raw.get("fiftyTwoWeekChangePercent")),
+        "dailyChangePercent": _round(raw.get("regularMarketChangePercent")),
+        "analystRating": raw.get("averageAnalystRating"),
+        "isSelected": symbol == selected_symbol,
+    }
+
+
+def _peer_median(rows: List[Dict[str, Any]], field: str) -> Optional[float]:
+    values = [float(row[field]) for row in rows if row.get(field) is not None]
+    return _round(float(np.median(values)), 2) if values else None
+
+
+def _relative_to_peer_median(value: Any, median: Any) -> str:
+    numeric = _round(value, 6)
+    midpoint = _round(median, 6)
+    if numeric is None or midpoint is None:
+        return "not available"
+    tolerance = max(abs(midpoint) * 0.05, 0.05)
+    if numeric > midpoint + tolerance:
+        return "above peer median"
+    if numeric < midpoint - tolerance:
+        return "below peer median"
+    return "in line with peer median"
+
+
+def _build_sector_peer_payload(
+    symbol: str,
+    info: Dict[str, Any],
+    raw_quotes: List[Dict[str, Any]],
+    *,
+    region: str,
+    suffix: str,
+) -> Dict[str, Any]:
+    sector = str(info.get("sector") or "").strip()
+    if not sector:
+        return {
+            "status": "unavailable",
+            "symbol": symbol,
+            "message": "The provider did not publish a sector classification for this listing.",
+            "source": "Yahoo Finance via yfinance",
+        }
+
+    selected_raw = next(
+        (item for item in raw_quotes if str(item.get("symbol") or "").upper() == symbol),
+        {},
+    )
+    selected_source = {
+        **info,
+        **selected_raw,
+        "symbol": symbol,
+        "longName": info.get("longName") or selected_raw.get("longName"),
+        "shortName": info.get("shortName") or selected_raw.get("shortName"),
+        "marketCap": info.get("marketCap") or selected_raw.get("marketCap"),
+    }
+    selected = _peer_quote(selected_source, symbol)
+    candidates = []
+    seen = {symbol}
+    for raw in raw_quotes:
+        candidate_symbol = str(raw.get("symbol") or "").upper()
+        quote_type = str(raw.get("quoteType") or "EQUITY").upper()
+        if quote_type != "EQUITY" or candidate_symbol in seen or not _peer_listing_matches(candidate_symbol, region, suffix):
+            continue
+        normalized = _peer_quote(raw, symbol)
+        if normalized["marketCap"] is None:
+            continue
+        seen.add(candidate_symbol)
+        candidates.append(normalized)
+
+    target_cap = selected.get("marketCap")
+    if target_cap and target_cap > 0:
+        candidates.sort(key=lambda item: abs(math.log(max(float(item["marketCap"]), 1) / float(target_cap))))
+    else:
+        candidates.sort(key=lambda item: float(item.get("marketCap") or 0), reverse=True)
+    peers = candidates[:5]
+    if not peers:
+        return {
+            "status": "unavailable",
+            "symbol": symbol,
+            "sector": sector,
+            "region": region.upper(),
+            "message": "No comparable same-sector listings were returned for this market.",
+            "source": "Yahoo Finance via yfinance",
+        }
+
+    medians = {
+        "marketCap": _peer_median(peers, "marketCap"),
+        "trailingPE": _peer_median(peers, "trailingPE"),
+        "priceToBook": _peer_median(peers, "priceToBook"),
+        "dividendYield": _peer_median(peers, "dividendYield"),
+        "fiftyTwoWeekReturnPercent": _peer_median(peers, "fiftyTwoWeekReturnPercent"),
+    }
+    comparison = {
+        field: _relative_to_peer_median(selected.get(field), median)
+        for field, median in medians.items()
+    }
+    ranked = sorted([selected, *peers], key=lambda item: float(item.get("marketCap") or -1), reverse=True)
+    market_cap_rank = next((index + 1 for index, item in enumerate(ranked) if item["symbol"] == symbol), None)
+    selected["marketCapRank"] = market_cap_rank
+
+    return {
+        "status": "available",
+        "symbol": symbol,
+        "sector": sector,
+        "region": region.upper(),
+        "selected": selected,
+        "peers": peers,
+        "peerMedians": medians,
+        "comparison": comparison,
+        "method": (
+            "Runtime Yahoo equity screener: equities in the same provider sector, market region and listing suffix, "
+            "searched around the selected market-cap scale; then the five closest available companies by market-cap "
+            "ratio. Medians exclude the selected company."
+        ),
+        "source": "Yahoo Finance equity screener via yfinance",
+        "generatedAt": datetime.now(timezone.utc).isoformat(),
+        "disclaimer": "Relative market evidence only; above/below a peer median is not a buy, sell or valuation recommendation.",
+    }
+
+
+def sector_peer_intelligence(symbol: str) -> Dict[str, Any]:
+    symbol = _sanitize_symbol(symbol)
+    if symbol.startswith("^"):
+        return {
+            "status": "not_applicable",
+            "symbol": symbol,
+            "message": "Sector-company peer comparison does not apply to a broad market index.",
+        }
+    key = f"sector-peers:{symbol}"
+    cached = _cache_get(key, PEER_CACHE_TTL_SECONDS)
+    if cached is not None:
+        return cached
+
+    try:
+        info = yf.Ticker(symbol).get_info() or {}
+    except Exception as error:
+        logger.warning("Peer profile lookup failed for %s: %s", symbol, error)
+        info = {}
+    sector = str(info.get("sector") or "").strip()
+    region, suffix = _peer_region_and_suffix(symbol)
+    if not sector:
+        return _cache_put(key, _build_sector_peer_payload(symbol, info, [], region=region, suffix=suffix))
+
+    try:
+        base_conditions = [
+            yf.EquityQuery("eq", ["sector", sector]),
+            yf.EquityQuery("eq", ["region", region]),
+        ]
+        target_cap = _round(info.get("marketCap"), 0)
+        cap_condition = (
+            yf.EquityQuery("btwn", [
+                "intradaymarketcap",
+                max(1_000_000, float(target_cap) / 10),
+                float(target_cap) * 10,
+            ])
+            if target_cap and target_cap > 0
+            else yf.EquityQuery("gt", ["intradaymarketcap", 1_000_000])
+        )
+        query = yf.EquityQuery("and", [*base_conditions, cap_condition])
+        response = yf.screen(query, size=100, sortField="intradaymarketcap", sortAsc=False) or {}
+        quotes = response.get("quotes") or []
+        result = _build_sector_peer_payload(symbol, info, quotes, region=region, suffix=suffix)
+        if len(result.get("peers") or []) < 5 and target_cap:
+            broad_query = yf.EquityQuery("and", [
+                *base_conditions,
+                yf.EquityQuery("gt", ["intradaymarketcap", 1_000_000]),
+            ])
+            broad_response = yf.screen(
+                broad_query, size=100, sortField="intradaymarketcap", sortAsc=False
+            ) or {}
+            quotes = [*quotes, *(broad_response.get("quotes") or [])]
+            response["total"] = max(int(response.get("total") or 0), int(broad_response.get("total") or 0))
+            result = _build_sector_peer_payload(symbol, info, quotes, region=region, suffix=suffix)
+        result["providerCoverage"] = int(response.get("total") or len(quotes))
+    except Exception as error:
+        logger.warning("Dynamic peer discovery failed for %s: %s", symbol, error)
+        result = {
+            "status": "unavailable",
+            "symbol": symbol,
+            "sector": sector,
+            "region": region.upper(),
+            "message": "Dynamic sector peers are temporarily unavailable from the market-data provider.",
+            "source": "Yahoo Finance equity screener via yfinance",
+        }
     return _cache_put(key, result)
 
 
@@ -2173,6 +2400,17 @@ def get_company_research(symbol: str = "RELIANCE.NS", refresh: bool = False):
         raise HTTPException(status_code=503, detail=f"Company research data is unavailable: {error}") from error
 
 
+@router.get("/peer-comparison")
+def get_sector_peer_comparison(symbol: str = "RELIANCE.NS", refresh: bool = False):
+    try:
+        normalized = _sanitize_symbol(symbol)
+        if refresh:
+            _cache.pop(f"sector-peers:{normalized}", None)
+        return sector_peer_intelligence(normalized)
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+
+
 @router.get("/news-feed")
 def get_news_feed(limit: int = 12, refresh: bool = False):
     if refresh:
@@ -2239,6 +2477,14 @@ async def market_agent(request: FastApiRequest):
     if "company_fundamentals" in tools:
         context["company"] = company_research(symbol)
         outcomes["company_fundamentals"] = {"status": "completed", "evidenceCount": 1}
+    if "sector_peer_comparison" in tools:
+        context["sectorPeers"] = sector_peer_intelligence(symbol)
+        peer_count = len(context["sectorPeers"].get("peers") or [])
+        outcomes["sector_peer_comparison"] = {
+            "status": "completed" if peer_count else context["sectorPeers"].get("status", "unavailable"),
+            "evidenceCount": peer_count,
+            **({"message": context["sectorPeers"].get("message")} if not peer_count else {}),
+        }
     if "market_breadth" in tools:
         context["breadth"] = market_breadth()
         outcomes["market_breadth"] = {
@@ -2319,6 +2565,17 @@ async def market_agent(request: FastApiRequest):
             "performance": context["company"]["performance"],
             "fundamentals": context["company"]["fundamentals"],
         }
+    if context.get("sectorPeers", {}).get("status") == "available":
+        peer_context = context["sectorPeers"]
+        llm_context["sectorPeerComparison"] = {
+            "sector": peer_context["sector"],
+            "region": peer_context["region"],
+            "selected": peer_context["selected"],
+            "peerMedians": peer_context["peerMedians"],
+            "comparison": peer_context["comparison"],
+            "peers": peer_context["peers"],
+            "method": peer_context["method"],
+        }
     if "breadth" in context:
         llm_context["breadth"] = {
             "advances": context["breadth"]["advances"],
@@ -2357,6 +2614,7 @@ async def market_agent(request: FastApiRequest):
         "is certain. Never guarantee direction, profit or return and never issue personalized buy/sell instructions. "
         "When indexedDocumentEvidence is supplied, every document claim must use its exact [S# p.#] citation token. "
         "If documentEvidenceAvailable is false, say that indexed evidence is unavailable and do not infer a filing answer. "
+        "When sectorPeerComparison is supplied, describe only above/below/in-line evidence and never turn a peer median into a buy/sell verdict. "
         "changePct is daily price change, not trading volume. RSI above 70 is overbought, below 30 is oversold. "
         "If balancedAccuracy is below 53, explicitly state that the model has no reliable directional edge. "
         "Keep the response readable and normally within about 550 words."

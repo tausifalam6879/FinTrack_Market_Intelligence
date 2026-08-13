@@ -33,6 +33,9 @@ export default function IntelligenceDesk({ initialSymbol = "^NSEI" }) {
   const [experiments, setExperiments] = useState(null);
   const [experimentsLoading, setExperimentsLoading] = useState(false);
   const [experimentsError, setExperimentsError] = useState("");
+  const [peerComparison, setPeerComparison] = useState(null);
+  const [peerComparisonLoading, setPeerComparisonLoading] = useState(false);
+  const [peerComparisonError, setPeerComparisonError] = useState("");
   const [documents, setDocuments] = useState([]);
   const [documentsLoading, setDocumentsLoading] = useState(false);
   const [documentPreparation, setDocumentPreparation] = useState(null);
@@ -91,6 +94,8 @@ export default function IntelligenceDesk({ initialSymbol = "^NSEI" }) {
     setModelStatusError("");
     setExperimentsLoading(true);
     setExperimentsError("");
+    setPeerComparisonLoading(!normalized.startsWith("^"));
+    setPeerComparisonError("");
     setDocumentsLoading(true);
     setDocumentPreparation(null);
     setRagPrepareError("");
@@ -112,6 +117,22 @@ export default function IntelligenceDesk({ initialSymbol = "^NSEI" }) {
         }
       })
       .finally(() => { if (loadSequenceRef.current === requestId) setExperimentsLoading(false); });
+    const peersRequest = normalized.startsWith("^")
+      ? Promise.resolve().then(() => {
+          if (loadSequenceRef.current === requestId) {
+            setPeerComparison(null);
+            setPeerComparisonLoading(false);
+          }
+        })
+      : marketApi.peerComparison(normalized, refresh)
+        .then((response) => { if (loadSequenceRef.current === requestId) setPeerComparison(response); })
+        .catch(() => {
+          if (loadSequenceRef.current === requestId) {
+            setPeerComparison(null);
+            setPeerComparisonError("Dynamic sector comparison is temporarily unavailable.");
+          }
+        })
+        .finally(() => { if (loadSequenceRef.current === requestId) setPeerComparisonLoading(false); });
     const documentsRequest = normalized.startsWith("^")
       ? Promise.resolve().then(() => { setDocuments([]); setDocumentPreparation(null); setDocumentsLoading(false); })
       : marketApi.documents(normalized)
@@ -159,7 +180,7 @@ export default function IntelligenceDesk({ initialSymbol = "^NSEI" }) {
     } finally {
       if (loadSequenceRef.current === requestId) setLoading(false);
     }
-    await Promise.allSettled([monitoringRequest, experimentsRequest, documentsRequest]);
+    await Promise.allSettled([monitoringRequest, experimentsRequest, peersRequest, documentsRequest]);
   };
 
   useEffect(() => { load(initialSymbol, false, true); }, [initialSymbol]);
@@ -276,6 +297,7 @@ export default function IntelligenceDesk({ initialSymbol = "^NSEI" }) {
           <Metric label="Walk-forward score" value={`${analysis.model?.balancedAccuracy ?? analysis.model?.backtestAccuracy}%`} hint={`${analysis.model?.walkForwardFolds || 1} time-ordered folds · ${analysis.model?.quality} quality`} />
         </div>
         {analysis.riskBenchmark && <RiskBenchmarkPanel data={analysis.riskBenchmark} symbol={analysis.symbol} />}
+        {!analysis.symbol.startsWith("^") && <SectorPeerPanel data={peerComparison} loading={peerComparisonLoading} error={peerComparisonError} />}
         {localExplanation && <PredictionExplanation explanation={localExplanation} outlook={analysis.outlook} />}
         <ModelRegistryPanel status={modelStatus} loading={modelStatusLoading} error={modelStatusError} activeModel={analysis.model} />
         <ExperimentTrackingPanel data={experiments} loading={experimentsLoading} error={experimentsError} />
@@ -382,6 +404,56 @@ function RiskBenchmarkPanel({ data, symbol }) {
 
 function RiskMetric({ label, value, hint }) {
   return <article><small>{label}</small><strong>{value}</strong><span>{hint}</span></article>;
+}
+
+function SectorPeerPanel({ data, loading, error }) {
+  if (loading) return <section className="peer-panel peer-state" aria-live="polite">
+    <div><p className="eyebrow">SECTOR PEER INTELLIGENCE</p><h3>Discovering comparable companies…</h3></div>
+    <span>Dynamic screener</span>
+  </section>;
+  if (error || !data || data.status !== "available") return <section className="peer-panel peer-state peer-unavailable">
+    <div><p className="eyebrow">SECTOR PEER INTELLIGENCE</p><h3>Peer evidence is not available for this listing</h3><p>{error || data?.message || "The primary market analysis above remains available."}</p></div>
+    <span>Optional evidence</span>
+  </section>;
+
+  const selected = data.selected || {};
+  const medians = data.peerMedians || {};
+  const comparison = data.comparison || {};
+  const rows = [selected, ...(data.peers || [])];
+  const compactMoney = (value, currency) => value === null || value === undefined ? "—" : new Intl.NumberFormat("en", {
+    notation: "compact", maximumFractionDigits: 2, style: currency ? "currency" : "decimal", currency: currency || undefined
+  }).format(Number(value));
+  const metricValue = (value, suffix = "") => value === null || value === undefined ? "—" : `${Number(value).toFixed(2)}${suffix}`;
+  return <section className="peer-panel" aria-labelledby="sector-peer-title">
+    <div className="peer-heading">
+      <div><p className="eyebrow">SECTOR PEER INTELLIGENCE</p><h3 id="sector-peer-title">How does {selected.name || selected.symbol} compare with similar companies?</h3><p>{data.sector} · {data.region} · dynamically discovered by comparable market size</p></div>
+      <span>{data.peers.length} live peers</span>
+    </div>
+    <div className="peer-summary-grid">
+      <PeerSummary label="Market-cap rank" value={selected.marketCapRank ? `#${selected.marketCapRank} of ${rows.length}` : "—"} hint={comparison.marketCap} />
+      <PeerSummary label="Trailing P/E" value={metricValue(selected.trailingPE, "x")} hint={`${comparison.trailingPE} · median ${metricValue(medians.trailingPE, "x")}`} />
+      <PeerSummary label="Price / book" value={metricValue(selected.priceToBook, "x")} hint={`${comparison.priceToBook} · median ${metricValue(medians.priceToBook, "x")}`} />
+      <PeerSummary label="52-week return" value={metricValue(selected.fiftyTwoWeekReturnPercent, "%")} hint={`${comparison.fiftyTwoWeekReturnPercent} · median ${metricValue(medians.fiftyTwoWeekReturnPercent, "%")}`} />
+    </div>
+    <div className="peer-table-wrap">
+      <table className="peer-table">
+        <thead><tr><th>Company</th><th>Market cap</th><th>P/E</th><th>P/B</th><th>Dividend</th><th>52-week</th></tr></thead>
+        <tbody>{rows.map((row) => <tr key={row.symbol} className={row.isSelected ? "selected" : ""}>
+          <td><strong>{row.name}</strong><small>{row.symbol} · {row.exchange}{row.isSelected ? " · Selected" : ""}</small></td>
+          <td>{compactMoney(row.marketCap, row.currency || selected.currency)}</td>
+          <td>{metricValue(row.trailingPE, "x")}</td>
+          <td>{metricValue(row.priceToBook, "x")}</td>
+          <td>{metricValue(row.dividendYield, "%")}</td>
+          <td className={Number(row.fiftyTwoWeekReturnPercent) >= 0 ? "positive" : "negative"}>{metricValue(row.fiftyTwoWeekReturnPercent, "%")}</td>
+        </tr>)}</tbody>
+      </table>
+    </div>
+    <p className="peer-method"><strong>Method:</strong> {data.method} Provider coverage: {data.providerCoverage || rows.length} listings. {data.disclaimer}</p>
+  </section>;
+}
+
+function PeerSummary({ label, value, hint }) {
+  return <article><small>{label}</small><strong>{value}</strong><span>{hint || "not available"}</span></article>;
 }
 
 function BenchmarkChart({ history, symbol, benchmark }) {

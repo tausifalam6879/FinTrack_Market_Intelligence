@@ -17,7 +17,7 @@ public class GatewayRequestValidator {
     private static final Pattern SYMBOL = Pattern.compile("^[A-Za-z0-9.^=_:-]{1,40}$");
     private static final Pattern REQUEST_ID = Pattern.compile("^[A-Za-z0-9._:-]{1,80}$");
     private static final Set<String> SYMBOL_REQUIRED = Set.of(
-            "/market/analysis", "/market/predictions", "/market/company",
+            "/market/analysis", "/market/predictions", "/market/company", "/market/peer-comparison",
             "/market/model-status", "/market/model-drift", "/market/data-operations",
             "/market/experiments", "/market/documents", "/market/documents/discover");
     private static final Map<String, Set<String>> GET_ROUTES = Map.ofEntries(
@@ -29,6 +29,7 @@ public class GatewayRequestValidator {
             Map.entry("/market/factors", Set.of("refresh")),
             Map.entry("/market/breadth", Set.of("refresh")),
             Map.entry("/market/company", Set.of("symbol", "refresh")),
+            Map.entry("/market/peer-comparison", Set.of("symbol", "refresh")),
             Map.entry("/market/news-feed", Set.of("refresh", "limit")),
             Map.entry("/market/companies", Set.of("q", "limit")),
             Map.entry("/market/model-status", Set.of("symbol")),

@@ -119,6 +119,7 @@ export const marketApi = {
   askDocuments: (payload) => request("/market/documents/ask", { method: "POST", body: payload, timeout: 90000 }),
   predictions: (symbol, limit = 12) => request(`/market/predictions${query({ symbol, limit })}`, { timeout: 15000 }),
   company: (symbol, refresh = false) => withCache(`company.${symbol}`, () => request(`/market/company${query({ symbol, refresh })}`, { timeout: 60000 })),
+  peerComparison: (symbol, refresh = false) => withCache(`peer-comparison.${symbol}`, () => request(`/market/peer-comparison${query({ symbol, refresh })}`, { timeout: 60000 })),
   companies: (search, limit = 8) => request(`/market/companies${query({ q: search, limit })}`, { timeout: 15000 }),
   agent: (payload) => request("/market/agent", { method: "POST", body: payload, timeout: 90000 })
 };

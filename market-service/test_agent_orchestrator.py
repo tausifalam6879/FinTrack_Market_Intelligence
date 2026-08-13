@@ -46,6 +46,18 @@ class AgentOrchestratorTests(unittest.TestCase):
         self.assertIn("technical_prediction", [step["tool"] for step in plan["steps"]])
         self.assertFalse(plan["safety"]["mutationToolsAvailable"])
 
+    def test_peer_question_uses_dynamic_read_only_comparison_tool(self):
+        plan = build_agent_plan(
+            "NVIDIA ko same sector peers se valuation comparison karo",
+            "NVDA",
+        )
+
+        tools = [step["tool"] for step in plan["steps"]]
+        self.assertIn("sector_peer_analysis", plan["intents"])
+        self.assertIn("sector_peer_comparison", tools)
+        peer_step = next(step for step in plan["steps"] if step["tool"] == "sector_peer_comparison")
+        self.assertEqual("read-only", peer_step["access"])
+
     def test_trace_preserves_plan_reason_and_honest_no_evidence_status(self):
         plan = build_agent_plan("annual report source citation", "AAPL")
         trace = tool_trace(plan, {

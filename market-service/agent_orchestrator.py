@@ -27,6 +27,11 @@ TOOL_CATALOG: Dict[str, Dict[str, str]] = {
         "evidenceType": "company_market_profile",
         "source": "Yahoo Finance via yfinance",
     },
+    "sector_peer_comparison": {
+        "label": "Dynamic sector peer comparison",
+        "evidenceType": "relative_company_market_evidence",
+        "source": "Yahoo Finance equity screener via yfinance",
+    },
     "company_document_rag": {
         "label": "Indexed company-document retrieval",
         "evidenceType": "cited_document_chunks",
@@ -118,6 +123,11 @@ def build_agent_plan(
     technical_request = _contains(lowered, (
         "technical", "rsi", "sma", "volatility", "expected range", "support", "resistance",
     ))
+    peer_request = _contains(lowered, (
+        "peer", "peers", "comparable", "competitor", "competitors", "sector comparison",
+        "compare valuation", "valuation comparison", "relative valuation", "sector median",
+        "similar company", "similar companies",
+    ))
     risk_request = _contains(lowered, (
         "risk", "benchmark", "beta", "correlation", "drawdown", "tracking error",
         "historical var", "value at risk",
@@ -140,6 +150,9 @@ def build_agent_plan(
     if not is_index and (company_request or document_request or comprehensive):
         add_intent("company_research")
         require("company_fundamentals", "Provide company identity and available market-profile fundamentals.")
+    if not is_index and (peer_request or comprehensive):
+        add_intent("sector_peer_analysis")
+        require("sector_peer_comparison", "Compare the company with dynamically discovered same-sector, same-market peers.")
     if not is_index and document_request:
         add_intent("document_research")
         require("company_document_rag", "Retrieve only indexed company evidence with page/source citations.")

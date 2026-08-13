@@ -29,6 +29,14 @@ class GatewayRequestValidatorTest {
     }
 
     @Test
+    void acceptsDynamicPeerComparisonWithoutACompanyAllowlist() {
+        MultiValueMap<String, String> query = new LinkedMultiValueMap<>();
+        query.add("symbol", "NVDA");
+        query.add("refresh", "true");
+        assertDoesNotThrow(() -> validator.validate(HttpMethod.GET, "/market/peer-comparison", query, new byte[0]));
+    }
+
+    @Test
     void blocksRoutesOutsideThePublicAllowlist() {
         GatewayRequestException exception = assertThrows(GatewayRequestException.class,
                 () -> validator.validate(HttpMethod.GET, "/market/admin", new LinkedMultiValueMap<>(), new byte[0]));
