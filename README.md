@@ -282,6 +282,14 @@ python database_maintenance.py verify backups/fintrack-2026-08-13.dump
 python database_maintenance.py restore backups/fintrack-2026-08-13.dump --confirm-empty-target
 ```
 
+For the one-time production cutover, keep the SQLite source and PostgreSQL target URLs in environment variables and generate a non-secret verification manifest:
+
+```powershell
+$env:SOURCE_DATABASE_URL = "sqlite:///C:/absolute/path/to/fintrack.db"
+$env:DATABASE_URL = "postgresql://USER:PASSWORD@HOST:5432/DATABASE?sslmode=require"
+python database_maintenance.py migrate --confirm-empty-target --manifest-path ../backups/postgres-cutover.json
+```
+
 See [Production PostgreSQL](docs/production-postgres.md) before connecting Render and GitHub Actions to a shared database. The current free demo is intentionally not changed to a paid resource automatically.
 
 The persistence schema contains public-company metadata, OHLCV bars, ingestion audits, model runs, prediction outcomes, served-feature snapshots and model-drift history. It does not store user accounts or personal financial data.

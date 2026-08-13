@@ -13,6 +13,7 @@ import subprocess
 from typing import Any, Dict, Optional
 from urllib.parse import parse_qs, unquote, urlparse
 
+from database_cutover import migrate_sqlite_to_postgresql, write_cutover_manifest
 from persistence import Database, utc_now
 
 
@@ -170,9 +171,11 @@ def restore_empty_target(
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="FinTrack database maintenance without credential output.")
-    parser.add_argument("command", choices=["status", "backup", "verify", "restore"])
+    parser.add_argument("command", choices=["status", "backup", "verify", "restore", "migrate"])
     parser.add_argument("path", nargs="?")
     parser.add_argument("--database-url")
+    parser.add_argument("--source-database-url")
+    parser.add_argument("--manifest-path")
     parser.add_argument("--confirm-empty-target", action="store_true")
     arguments = parser.parse_args()
     database = Database(arguments.database_url)
@@ -186,12 +189,23 @@ def main() -> None:
         if not arguments.path:
             raise SystemExit("verify requires a backup path")
         result = verify_backup(Path(arguments.path))
-    else:
+    elif arguments.command == "restore":
         if not arguments.path:
             raise SystemExit("restore requires a backup path")
         result = restore_empty_target(
             Path(arguments.path), database, arguments.confirm_empty_target
         )
+    else:
+        source_url = arguments.source_database_url or os.getenv("SOURCE_DATABASE_URL")
+        if not source_url:
+            raise SystemExit("migrate requires SOURCE_DATABASE_URL or --source-database-url")
+        result = migrate_sqlite_to_postgresql(
+            Database(source_url), database,
+            confirm_empty_target=arguments.confirm_empty_target,
+        )
+        if arguments.manifest_path:
+            manifest_path = write_cutover_manifest(result, Path(arguments.manifest_path))
+            result = {**result, "manifestPath": str(manifest_path)}
     print(json.dumps(result, indent=2))
 
 

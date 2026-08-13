@@ -40,6 +40,25 @@ class RuntimeHealthTests(unittest.TestCase):
         self.assertTrue(report["checks"]["database"]["required"])
         self.assertNotIn("database offline", json.dumps(report))
 
+    def test_durable_database_guard_rejects_sqlite_without_exposing_location(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            database_url = f"sqlite:///{root / 'runtime.db'}"
+            with patch.dict(os.environ, {
+                "DATABASE_URL": database_url,
+                "MODEL_ARTIFACT_DIR": str(root / "artifacts"),
+                "REQUIRE_DURABLE_DATABASE": "true",
+            }, clear=False):
+                initialize_runtime()
+                report = readiness_report()
+
+        database = report["checks"]["database"]
+        self.assertEqual("not-ready", report["status"])
+        self.assertEqual("durability-required", database["status"])
+        self.assertTrue(database["durabilityRequired"])
+        self.assertFalse(database["durableAcrossDeploys"])
+        self.assertNotIn(database_url, json.dumps(report))
+
     def test_liveness_does_not_depend_on_external_market_or_llm_providers(self):
         report = liveness_report()
         self.assertEqual("ok", report["status"])

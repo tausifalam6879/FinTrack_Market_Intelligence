@@ -11,6 +11,11 @@ services:
         value: production
       - key: APP_VERSION
         value: render
+      # Keep false until DATABASE_URL points to managed PostgreSQL; then set true.
+      - key: REQUIRE_DURABLE_DATABASE
+        value: "false"
+      - key: DATABASE_BACKUP_POLICY
+        value: not_configured
       - key: LLM_PROVIDER
         value: gemini
       - key: LLM_MODEL

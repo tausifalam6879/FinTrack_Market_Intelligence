@@ -66,10 +66,21 @@ jobs:
         working-directory: market-service
         env:
           DATABASE_URL: postgresql://fintrack:fintrack_ci_password@127.0.0.1:5432/fintrack_ci
+          REQUIRE_DURABLE_DATABASE: "true"
           MODEL_ARTIFACT_DIR: ${{ runner.temp }}/fintrack-artifacts
         run: |
-          python -c "from runtime_health import initialize_runtime, readiness_report; initialize_runtime(); report=readiness_report(); database=report['checks']['database']; assert report['status']=='ready', report; assert database['backend']=='postgresql', report; assert database['schemaVersion']==database['expectedSchemaVersion']==4, report; assert database['durableAcrossDeploys'] is True, report"
+          python -c "from runtime_health import initialize_runtime, readiness_report; initialize_runtime(); report=readiness_report(); database=report['checks']['database']; assert report['status']=='ready', report; assert database['backend']=='postgresql', report; assert database['schemaVersion']==database['expectedSchemaVersion']==4, report; assert database['durableAcrossDeploys'] is True, report; assert database['durabilityRequired'] is True, report"
           python database_maintenance.py status
+
+      - name: Verify SQLite-to-PostgreSQL cutover with real PostgreSQL
+        working-directory: market-service
+        env:
+          DATABASE_URL: postgresql://fintrack:fintrack_ci_password@127.0.0.1:5432/fintrack_ci
+          SOURCE_DATABASE_URL: sqlite:///${{ runner.temp }}/fintrack-cutover-source.db
+        run: |
+          python -c "import os; from persistence import Database; source=Database(os.environ['SOURCE_DATABASE_URL']); source.initialize_schema(); source.upsert_company({'symbol':'INFY.NS','name':'Infosys Limited','source':'ci'}); source.upsert_market_bars([{'symbol':'INFY.NS','session_date':'2026-08-12','open':1500.0,'high':1520.0,'low':1490.0,'close':1512.0,'adjusted_close':1512.0,'volume':1000000,'source':'ci','ingested_at':'2026-08-13T00:00:00+00:00'}])"
+          python database_maintenance.py migrate --confirm-empty-target --manifest-path "${{ runner.temp }}/fintrack-cutover-manifest.json"
+          python -c "import json; from pathlib import Path; report=json.loads(Path('${{ runner.temp }}/fintrack-cutover-manifest.json').read_text()); assert report['status']=='verified', report; assert report['targetBackend']=='postgresql', report; assert report['tablesVerified']==10, report; assert report['totalRows']==2, report; assert report['credentialsIncluded'] is False, report"
 
   frontend-build:
     runs-on: ubuntu-latest

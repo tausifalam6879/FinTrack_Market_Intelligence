@@ -19,6 +19,13 @@ PROCESS_STARTED_MONOTONIC = time.monotonic()
 DEFAULT_ARTIFACT_DIR = Path(__file__).resolve().parent / "artifacts"
 
 
+def _environment_flag(name: str, default: bool = False) -> bool:
+    raw_value = os.getenv(name)
+    if raw_value is None:
+        return default
+    return raw_value.strip().lower() in {"1", "true", "yes", "on"}
+
+
 def _elapsed_ms(started: float) -> float:
     return round((time.monotonic() - started) * 1000, 2)
 
@@ -52,18 +59,27 @@ def initialize_runtime() -> None:
 def readiness_report() -> Dict[str, Any]:
     checks: Dict[str, Dict[str, Any]] = {}
     database = Database()
+    durable_database_required = _environment_flag("REQUIRE_DURABLE_DATABASE")
     started = time.monotonic()
     try:
         database.ping()
         schema = database.schema_status()
+        durable_database_ready = database.backend == "postgresql"
+        if not schema["upToDate"]:
+            database_status = "migration-required"
+        elif durable_database_required and not durable_database_ready:
+            database_status = "durability-required"
+        else:
+            database_status = "ready"
         checks["database"] = {
-            "status": "ready" if schema["upToDate"] else "migration-required",
+            "status": database_status,
             "required": True,
             "backend": database.backend,
             "latencyMs": _elapsed_ms(started),
             "schemaVersion": schema["currentVersion"],
             "expectedSchemaVersion": schema["expectedVersion"],
-            "durableAcrossDeploys": database.backend == "postgresql",
+            "durableAcrossDeploys": durable_database_ready,
+            "durabilityRequired": durable_database_required,
         }
     except Exception as error:
         logger.warning("Required database readiness check failed: %s", type(error).__name__)
@@ -72,6 +88,7 @@ def readiness_report() -> Dict[str, Any]:
             "required": True,
             "backend": database.backend,
             "latencyMs": _elapsed_ms(started),
+            "durabilityRequired": durable_database_required,
             "message": "Required database connectivity check failed.",
         }
 

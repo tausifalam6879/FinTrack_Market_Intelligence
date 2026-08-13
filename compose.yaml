@@ -37,6 +37,7 @@ services:
       APP_VERSION: ${APP_VERSION:-compose-local}
       GIT_COMMIT_SHA: ${GIT_COMMIT_SHA:-local}
       DATABASE_URL: postgresql://fintrack:${POSTGRES_PASSWORD:-fintrack_local_only}@postgres:5432/fintrack
+      REQUIRE_DURABLE_DATABASE: "true"
       MODEL_ARTIFACT_DIR: /app/artifacts
       DATABASE_BACKUP_POLICY: ${DATABASE_BACKUP_POLICY:-local-development}
       MLFLOW_TRACKING_URI: http://mlflow:5000
