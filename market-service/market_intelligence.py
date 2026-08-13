@@ -882,6 +882,20 @@ def _fifty_two_week_position(price: Any, low: Any, high: Any) -> Optional[float]
     return _round(max(0.0, min(100.0, ((current - lower) / (upper - lower)) * 100)), 1)
 
 
+def _company_currency(info: Dict[str, Any], snapshot: Dict[str, Any]) -> str:
+    """Prefer provider ISO currency metadata over a generic board fallback."""
+    for value in (info.get("currency"), snapshot.get("currency")):
+        raw_value = str(value or "").strip()
+        if re.fullmatch(r"[A-Z]{3}", raw_value):
+            return raw_value
+    # Some exchanges publish a non-ISO trading unit such as GBp (pence).
+    # Preserve that label for plain-number rendering instead of relabelling it GBP.
+    provider_value = str(info.get("currency") or "").strip()
+    if provider_value and len(provider_value) <= 20:
+        return provider_value
+    return "Local currency"
+
+
 def company_research(symbol: str) -> Dict[str, Any]:
     symbol = _sanitize_symbol(symbol)
     key = f"company:{symbol}"
@@ -903,6 +917,7 @@ def company_research(symbol: str) -> Dict[str, Any]:
     range_low = _round(info.get("fiftyTwoWeekLow")) or fifty_two_week_low
     range_high = _round(info.get("fiftyTwoWeekHigh")) or fifty_two_week_high
     financials = _company_financial_sections(info)
+    company_quote = {**snapshot, "currency": _company_currency(info, snapshot)}
     result = {
         "symbol": symbol,
         "name": info.get("longName") or info.get("shortName") or snapshot["name"],
@@ -911,7 +926,7 @@ def company_research(symbol: str) -> Dict[str, Any]:
         "country": info.get("country") or snapshot.get("region") or "Not available",
         "website": info.get("website"),
         "summary": info.get("longBusinessSummary"),
-        "quote": snapshot,
+        "quote": company_quote,
         "performance": {
             "oneDay": snapshot.get("changePercent"),
             "oneMonth": _period_return(close, 22),

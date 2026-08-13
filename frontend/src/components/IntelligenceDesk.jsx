@@ -14,6 +14,22 @@ const indexAliases = {
 
 const formatNumber = (value) => value === null || value === undefined ? "—" : Number(value).toLocaleString("en-IN", { maximumFractionDigits: 2 });
 const formatPercent = (value) => value === null || value === undefined ? "—" : `${Number(value).toFixed(1)}%`;
+const formatCompactMoney = (value, currency) => {
+  const numeric = Number(value);
+  if (value === null || value === undefined || !Number.isFinite(numeric)) return "—";
+  const rawCurrency = String(currency || "").trim();
+  const currencyCode = /^[A-Z]{3}$/.test(rawCurrency) ? rawCurrency : null;
+  try {
+    return new Intl.NumberFormat("en", {
+      notation: "compact",
+      maximumFractionDigits: 2,
+      ...(currencyCode ? { style: "currency", currency: currencyCode } : {})
+    }).format(numeric);
+  } catch {
+    const number = new Intl.NumberFormat("en", { notation: "compact", maximumFractionDigits: 2 }).format(numeric);
+    return rawCurrency && rawCurrency !== "Local currency" ? `${number} ${rawCurrency}` : number;
+  }
+};
 
 export default function IntelligenceDesk({ initialSymbol = "^NSEI" }) {
   const [symbol, setSymbol] = useState(initialSymbol);
@@ -405,9 +421,7 @@ function CompanyFundamentalsPanel({ data, loading, error }) {
   const cashFlow = financials.cashFlowAndIncome || {};
   const shareholder = financials.shareholderReturns || {};
   const currency = data.quote?.currency;
-  const money = (value) => value === null || value === undefined ? "—" : new Intl.NumberFormat("en", {
-    style: currency ? "currency" : "decimal", currency: currency || undefined, notation: "compact", maximumFractionDigits: 2
-  }).format(Number(value));
+  const money = (value) => formatCompactMoney(value, currency);
   const ratio = (value) => value === null || value === undefined ? "—" : `${Number(value).toFixed(2)}x`;
   const percent = (value) => value === null || value === undefined ? "—" : `${Number(value).toFixed(1)}%`;
   const performance = data.performance || {};
@@ -530,9 +544,6 @@ function SectorPeerPanel({ data, loading, error }) {
   const medians = data.peerMedians || {};
   const comparison = data.comparison || {};
   const rows = [selected, ...(data.peers || [])];
-  const compactMoney = (value, currency) => value === null || value === undefined ? "—" : new Intl.NumberFormat("en", {
-    notation: "compact", maximumFractionDigits: 2, style: currency ? "currency" : "decimal", currency: currency || undefined
-  }).format(Number(value));
   const metricValue = (value, suffix = "") => value === null || value === undefined ? "—" : `${Number(value).toFixed(2)}${suffix}`;
   return <section className="peer-panel" aria-labelledby="sector-peer-title">
     <div className="peer-heading">
@@ -550,7 +561,7 @@ function SectorPeerPanel({ data, loading, error }) {
         <thead><tr><th>Company</th><th>Market cap</th><th>P/E</th><th>P/B</th><th>Dividend</th><th>52-week</th></tr></thead>
         <tbody>{rows.map((row) => <tr key={row.symbol} className={row.isSelected ? "selected" : ""}>
           <td><strong>{row.name}</strong><small>{row.symbol} · {row.exchange}{row.isSelected ? " · Selected" : ""}</small></td>
-          <td>{compactMoney(row.marketCap, row.currency || selected.currency)}</td>
+          <td>{formatCompactMoney(row.marketCap, row.currency || selected.currency)}</td>
           <td>{metricValue(row.trailingPE, "x")}</td>
           <td>{metricValue(row.priceToBook, "x")}</td>
           <td>{metricValue(row.dividendYield, "%")}</td>

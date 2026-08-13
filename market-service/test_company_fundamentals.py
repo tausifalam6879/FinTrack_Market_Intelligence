@@ -1,6 +1,6 @@
 import unittest
 
-from market_intelligence import _company_financial_sections, _fifty_two_week_position
+from market_intelligence import _company_currency, _company_financial_sections, _fifty_two_week_position
 
 
 class CompanyFundamentalNormalizationTests(unittest.TestCase):
@@ -31,6 +31,18 @@ class CompanyFundamentalNormalizationTests(unittest.TestCase):
         self.assertEqual(0.0, _fifty_two_week_position(50, 100, 200))
         self.assertIsNone(_fifty_two_week_position(100, 100, 100))
         self.assertIsNone(_fifty_two_week_position(None, 100, 200))
+
+    def test_dynamic_company_uses_provider_iso_currency_instead_of_board_label(self):
+        self.assertEqual("USD", _company_currency(
+            {"currency": "USD"}, {"currency": "Local currency"}
+        ))
+        self.assertEqual("JPY", _company_currency({}, {"currency": "JPY"}))
+        self.assertEqual("Local currency", _company_currency(
+            {}, {"currency": "Local currency"}
+        ))
+        self.assertEqual("GBp", _company_currency(
+            {"currency": "GBp"}, {"currency": "Local currency"}
+        ))
 
 
 if __name__ == "__main__":
