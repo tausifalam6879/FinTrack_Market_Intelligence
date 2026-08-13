@@ -167,6 +167,46 @@ class Database:
             )
             """,
             f"""
+            CREATE TABLE IF NOT EXISTS model_feature_baselines (
+                model_run_id TEXT NOT NULL,
+                symbol TEXT NOT NULL,
+                feature_name TEXT NOT NULL,
+                sample_count INTEGER NOT NULL,
+                mean_value DOUBLE PRECISION NOT NULL,
+                std_value DOUBLE PRECISION NOT NULL,
+                bin_edges_json TEXT NOT NULL,
+                bin_proportions_json TEXT NOT NULL,
+                created_at {timestamp_type} NOT NULL,
+                PRIMARY KEY (model_run_id, feature_name)
+            )
+            """,
+            f"""
+            CREATE TABLE IF NOT EXISTS prediction_features (
+                prediction_id TEXT NOT NULL,
+                symbol TEXT NOT NULL,
+                model_run_id TEXT NOT NULL,
+                feature_name TEXT NOT NULL,
+                feature_value DOUBLE PRECISION NOT NULL,
+                observed_at {timestamp_type} NOT NULL,
+                PRIMARY KEY (prediction_id, feature_name),
+                FOREIGN KEY (prediction_id) REFERENCES predictions(id) ON DELETE CASCADE
+            )
+            """,
+            f"""
+            CREATE TABLE IF NOT EXISTS drift_snapshots (
+                id TEXT PRIMARY KEY,
+                symbol TEXT NOT NULL,
+                model_run_id TEXT NOT NULL,
+                evaluated_at {timestamp_type} NOT NULL,
+                recent_observations INTEGER NOT NULL,
+                mean_psi DOUBLE PRECISION,
+                max_psi DOUBLE PRECISION,
+                status TEXT NOT NULL,
+                recommendation TEXT NOT NULL,
+                details_json TEXT NOT NULL
+            )
+            """,
+            f"""
             CREATE TABLE IF NOT EXISTS document_sources (
                 id TEXT PRIMARY KEY,
                 symbol TEXT NOT NULL,
@@ -198,6 +238,8 @@ class Database:
             "CREATE INDEX IF NOT EXISTS idx_market_bars_symbol_date ON market_bars(symbol, session_date)",
             "CREATE INDEX IF NOT EXISTS idx_model_runs_symbol_created ON model_runs(symbol, created_at)",
             "CREATE INDEX IF NOT EXISTS idx_predictions_symbol_date ON predictions(symbol, model_data_date)",
+            "CREATE INDEX IF NOT EXISTS idx_prediction_features_model ON prediction_features(symbol, model_run_id, observed_at)",
+            "CREATE INDEX IF NOT EXISTS idx_drift_snapshots_symbol ON drift_snapshots(symbol, evaluated_at)",
             "CREATE INDEX IF NOT EXISTS idx_document_sources_symbol ON document_sources(symbol, created_at)",
             "CREATE INDEX IF NOT EXISTS idx_document_chunks_symbol ON document_chunks(symbol, embedding_provider)",
         ]
@@ -401,6 +443,139 @@ class Database:
         with self.connect() as connection:
             connection.cursor().execute(statement, values)
 
+    def replace_feature_baselines(
+        self, model_run_id: str, symbol: str, baselines: Iterable[Dict[str, Any]]
+    ) -> None:
+        rows = list(baselines)
+        delete = self._sql("DELETE FROM model_feature_baselines WHERE model_run_id = ?")
+        insert = self._sql("""
+            INSERT INTO model_feature_baselines (
+                model_run_id, symbol, feature_name, sample_count, mean_value,
+                std_value, bin_edges_json, bin_proportions_json, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """)
+        with self.connect() as connection:
+            cursor = connection.cursor()
+            cursor.execute(delete, (model_run_id,))
+            if rows:
+                cursor.executemany(insert, [(
+                    model_run_id, symbol, row["featureName"], row["sampleCount"],
+                    row["mean"], row["std"], json.dumps(row["binEdges"]),
+                    json.dumps(row["binProportions"]), row.get("createdAt") or utc_now(),
+                ) for row in rows])
+
+    def feature_baselines(self, model_run_id: str) -> List[Dict[str, Any]]:
+        statement = self._sql("""
+            SELECT model_run_id, symbol, feature_name, sample_count, mean_value,
+                std_value, bin_edges_json, bin_proportions_json, created_at
+            FROM model_feature_baselines WHERE model_run_id = ? ORDER BY feature_name
+        """)
+        with self.connect() as connection:
+            cursor = connection.cursor()
+            cursor.execute(statement, (model_run_id,))
+            return self._rows(cursor)
+
+    def upsert_prediction_features(
+        self,
+        prediction_id: str,
+        symbol: str,
+        model_run_id: str,
+        features: Dict[str, Any],
+        observed_at: Optional[str] = None,
+    ) -> int:
+        rows = []
+        for feature_name, raw_value in features.items():
+            try:
+                value = float(raw_value)
+            except (TypeError, ValueError):
+                continue
+            if value != value or value in (float("inf"), float("-inf")):
+                continue
+            rows.append((
+                prediction_id, symbol, model_run_id, feature_name, value,
+                observed_at or utc_now(),
+            ))
+        if not rows:
+            return 0
+        statement = self._sql("""
+            INSERT INTO prediction_features (
+                prediction_id, symbol, model_run_id, feature_name, feature_value, observed_at
+            ) VALUES (?, ?, ?, ?, ?, ?)
+            ON CONFLICT(prediction_id, feature_name) DO UPDATE SET
+                feature_value = excluded.feature_value,
+                observed_at = excluded.observed_at
+        """)
+        with self.connect() as connection:
+            connection.cursor().executemany(statement, rows)
+        return len(rows)
+
+    def prediction_feature_observations(
+        self, symbol: str, model_run_id: str, limit_sessions: int = 60
+    ) -> List[Dict[str, Any]]:
+        safe_limit = max(1, min(int(limit_sessions), 180))
+        statement = self._sql("""
+            SELECT pf.prediction_id, pf.feature_name, pf.feature_value,
+                p.model_data_date, pf.observed_at
+            FROM prediction_features pf
+            JOIN predictions p ON p.id = pf.prediction_id
+            WHERE pf.symbol = ? AND pf.model_run_id = ?
+            ORDER BY p.model_data_date DESC, pf.feature_name ASC
+        """)
+        with self.connect() as connection:
+            cursor = connection.cursor()
+            cursor.execute(statement, (symbol, model_run_id))
+            rows = self._rows(cursor)
+        selected_ids = []
+        for row in rows:
+            prediction_id = row["prediction_id"]
+            if prediction_id not in selected_ids:
+                selected_ids.append(prediction_id)
+            if len(selected_ids) >= safe_limit:
+                break
+        allowed = set(selected_ids)
+        return [row for row in rows if row["prediction_id"] in allowed]
+
+    def save_drift_snapshot(self, snapshot: Dict[str, Any]) -> None:
+        statement = self._sql("""
+            INSERT INTO drift_snapshots (
+                id, symbol, model_run_id, evaluated_at, recent_observations,
+                mean_psi, max_psi, status, recommendation, details_json
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET
+                evaluated_at = excluded.evaluated_at,
+                recent_observations = excluded.recent_observations,
+                mean_psi = excluded.mean_psi,
+                max_psi = excluded.max_psi,
+                status = excluded.status,
+                recommendation = excluded.recommendation,
+                details_json = excluded.details_json
+        """)
+        values = (
+            snapshot["id"], snapshot["symbol"], snapshot["modelRunId"],
+            snapshot["evaluatedAt"], snapshot["recentObservations"],
+            snapshot.get("meanPsi"), snapshot.get("maxPsi"), snapshot["status"],
+            snapshot["recommendation"], json.dumps(snapshot, sort_keys=True),
+        )
+        with self.connect() as connection:
+            connection.cursor().execute(statement, values)
+
+    def latest_drift_snapshot(self, symbol: str, model_run_id: str) -> Optional[Dict[str, Any]]:
+        statement = self._sql("""
+            SELECT details_json FROM drift_snapshots
+            WHERE symbol = ? AND model_run_id = ? ORDER BY evaluated_at DESC LIMIT 1
+        """)
+        with self.connect() as connection:
+            cursor = connection.cursor()
+            cursor.execute(statement, (symbol, model_run_id))
+            rows = self._rows(cursor)
+        if not rows:
+            return None
+        try:
+            decoded = json.loads(rows[0]["details_json"])
+            return decoded if isinstance(decoded, dict) else None
+        except (TypeError, ValueError):
+            return None
+
     def evaluate_pending_predictions(
         self, symbol: str, current_data_date: str, current_close: float
     ) -> int:
@@ -441,6 +616,22 @@ class Database:
         with self.connect() as connection:
             cursor = connection.cursor()
             cursor.execute(statement, (symbol, safe_limit))
+            return self._rows(cursor)
+
+    def model_prediction_records(
+        self, symbol: str, model_run_id: str, limit: int = 30
+    ) -> List[Dict[str, Any]]:
+        safe_limit = max(1, min(int(limit), 100))
+        statement = self._sql("""
+            SELECT id, symbol, model_run_id, model_data_date, generated_at,
+                probability_up, outlook, reference_close, expected_low, expected_high,
+                actual_close, actual_direction, correct, evaluated_at
+            FROM predictions WHERE symbol = ? AND model_run_id = ?
+            ORDER BY model_data_date DESC, generated_at DESC LIMIT ?
+        """)
+        with self.connect() as connection:
+            cursor = connection.cursor()
+            cursor.execute(statement, (symbol, model_run_id, safe_limit))
             return self._rows(cursor)
 
     def replace_document(self, source: Dict[str, Any], chunks: Iterable[Dict[str, Any]]) -> None:

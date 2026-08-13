@@ -20,6 +20,23 @@ def get_model_status(symbol: str = Query(default="^NSEI", min_length=1, max_leng
         raise HTTPException(status_code=503, detail=f"Model monitoring is unavailable: {error}") from error
 
 
+@router.get("/model-drift")
+def get_model_drift(symbol: str = Query(default="^NSEI", min_length=1, max_length=20)):
+    """Expose the latest persisted drift evidence and guarded retraining decision."""
+    try:
+        snapshot = monitoring_snapshot(normalize_symbol(symbol))
+        return {
+            "symbol": snapshot["symbol"],
+            "driftMonitoring": snapshot["driftMonitoring"],
+            "retrainingPolicy": snapshot["retrainingPolicy"],
+            "generatedAt": snapshot["generatedAt"],
+        }
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+    except Exception as error:
+        raise HTTPException(status_code=503, detail=f"Model drift monitoring is unavailable: {error}") from error
+
+
 @router.get("/experiments")
 def get_experiments(
     symbol: str = Query(default="^NSEI", min_length=1, max_length=20),

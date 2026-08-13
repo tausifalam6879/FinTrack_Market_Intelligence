@@ -23,6 +23,7 @@ import sklearn
 
 from data_pipeline import dataset_version, normalize_symbol
 from deep_learning import train_pytorch_mlp_experiment
+from drift_monitoring import build_feature_baselines
 from experiment_tracking import log_training_experiment
 from market_intelligence import (
     FEATURE_LABELS,
@@ -114,6 +115,7 @@ def train_symbol(
     # prevents the last training label from observing the first holdout close.
     training = dataset.iloc[:-(holdout_rows + purge_gap_rows)].copy()
     holdout = dataset.iloc[-holdout_rows:].copy()
+    feature_baselines = build_feature_baselines(training, feature_columns)
     validation = _walk_forward_model_comparison(training, feature_columns)
     selected = validation["selected"]
 
@@ -197,6 +199,11 @@ def train_symbol(
         "qualityGate": quality_gate,
         "purgeGapRows": purge_gap_rows,
         "deepLearningExperiment": deep_learning_experiment,
+        "featureDriftBaseline": {
+            "method": "Training-only quantile bins for Population Stability Index monitoring.",
+            "sampleCount": len(training),
+            "featureCount": len(feature_baselines),
+        },
     }
     training_period = {
         "start": str(training.index[0].date()),
@@ -251,6 +258,7 @@ def train_symbol(
         "created_at": created_at,
     }
     repository.save_model_run(run)
+    repository.replace_feature_baselines(run_id, normalized, feature_baselines)
     return {
         "modelRunId": run_id,
         "symbol": normalized,
@@ -271,6 +279,7 @@ def train_symbol(
         "walkForwardSelection": selected,
         "purgeGapRows": purge_gap_rows,
         "deepLearningExperiment": deep_learning_experiment,
+        "featureDriftBaseline": metrics["featureDriftBaseline"],
         "experimentTracking": experiment_tracking,
         "createdAt": created_at,
     }

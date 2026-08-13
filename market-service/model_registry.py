@@ -14,6 +14,7 @@ from typing import Any, Dict, Optional
 import joblib
 
 from persistence import Database, utc_now
+from drift_monitoring import refresh_drift_snapshot, retraining_policy, rolling_prediction_quality
 
 
 DEFAULT_ARTIFACT_DIR = Path(__file__).resolve().parent / "artifacts"
@@ -117,7 +118,11 @@ def approved_model(
     return {"run": run, "metrics": metrics, "artifact": artifact}
 
 
-def record_prediction(payload: Dict[str, Any], database: Optional[Database] = None) -> None:
+def record_prediction(
+    payload: Dict[str, Any],
+    database: Optional[Database] = None,
+    feature_values: Optional[Dict[str, Any]] = None,
+) -> None:
     """Persist one prediction per symbol/data-date/model and score older pending rows."""
     repository = database or Database()
     repository.initialize_schema()
@@ -140,6 +145,15 @@ def record_prediction(payload: Dict[str, Any], database: Optional[Database] = No
         "expected_low": payload.get("expectedRange", {}).get("low"),
         "expected_high": payload.get("expectedRange", {}).get("high"),
     })
+    if model_run_id and feature_values:
+        repository.upsert_prediction_features(
+            prediction_id,
+            symbol,
+            str(model_run_id),
+            feature_values,
+            payload["generatedAt"],
+        )
+        refresh_drift_snapshot(symbol, str(model_run_id), repository)
 
 
 def monitoring_snapshot(symbol: str, database: Optional[Database] = None) -> Dict[str, Any]:
@@ -147,9 +161,15 @@ def monitoring_snapshot(symbol: str, database: Optional[Database] = None) -> Dic
     repository.initialize_schema()
     approved = repository.latest_model_run(symbol, "approved")
     latest = repository.latest_model_run(symbol)
-    records = repository.prediction_records(symbol, 30)
+    records = (
+        repository.model_prediction_records(symbol, approved["id"], 100)
+        if approved else repository.prediction_records(symbol, 100)
+    )
     evaluated = [row for row in records if row.get("evaluated_at") is not None]
     correct = [row for row in evaluated if bool(row.get("correct"))]
+    quality = rolling_prediction_quality(records)
+    drift = repository.latest_drift_snapshot(symbol, approved["id"]) if approved else None
+    policy = retraining_policy(approved, quality, drift)
 
     def public_run(run: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
         if not run:
@@ -197,7 +217,20 @@ def monitoring_snapshot(symbol: str, database: Optional[Database] = None) -> Dic
             "evaluated": len(evaluated),
             "observedAccuracy": round(len(correct) / len(evaluated) * 100, 1) if evaluated else None,
             "records": public_records,
+            "rollingQuality": quality,
         },
+        "driftMonitoring": drift or {
+            "status": "baseline_unavailable" if approved else "not_applicable",
+            "recentObservations": 0,
+            "meanPsi": None,
+            "maxPsi": None,
+            "features": [],
+            "recommendation": (
+                "The approved legacy artifact has no stored feature baseline yet."
+                if approved else "Drift monitoring starts after an offline artifact is approved."
+            ),
+        },
+        "retrainingPolicy": policy,
         "storage": {"backend": repository.backend, "persistent": True},
         "generatedAt": utc_now(),
     }

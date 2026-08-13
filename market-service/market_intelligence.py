@@ -1300,7 +1300,13 @@ def market_prediction(symbol: str) -> Dict[str, Any]:
     }
     payload["predictionAudit"] = _record_prediction(payload, payload["modelDataDate"])
     try:
-        record_persistent_prediction(payload)
+        record_persistent_prediction(
+            payload,
+            feature_values={
+                feature: float(latest_features.iloc[0][feature])
+                for feature in feature_columns
+            },
+        )
     except Exception as error:
         logger.warning("Persistent prediction audit failed for %s: %s", symbol, error)
     return _cache_put(cache_key, payload)

@@ -213,7 +213,12 @@ python offline_training.py --symbols "^NSEI" RELIANCE.NS
 
 # Approve only the exact candidate run that passed the quality gate.
 python model_registry.py --approve YOUR_MODEL_RUN_ID
+
+# Persist drift evidence after fresh sessions; legacy baselines are backfilled safely.
+python monitoring_job.py --symbols RELIANCE.NS HDFCBANK.NS
 ```
+
+Every approved-model prediction stores the exact served feature vector. Training-only quantile baselines and timestamped PSI snapshots stay in PostgreSQL/SQLite, while rolling 10/20/30-outcome quality is exposed through `GET /market/model-status` and `GET /market/model-drift`. The policy returns `keep_serving`, `watch` or `retrain_recommended`, but never trains or promotes a replacement automatically; offline holdout checks, checksums and explicit approval remain mandatory.
 
 For PostgreSQL:
 
@@ -222,7 +227,7 @@ DATABASE_URL=postgresql://user:password@host:5432/fintrack
 MODEL_ARTIFACT_DIR=artifacts
 ```
 
-The persistence schema contains public-company metadata, OHLCV bars, ingestion audits, model runs and prediction outcomes. It does not store user accounts or personal financial data.
+The persistence schema contains public-company metadata, OHLCV bars, ingestion audits, model runs, prediction outcomes, served-feature snapshots and model-drift history. It does not store user accounts or personal financial data.
 
 ## Deployment
 

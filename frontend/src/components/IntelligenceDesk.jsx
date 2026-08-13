@@ -141,7 +141,19 @@ export default function IntelligenceDesk({ initialSymbol = "^NSEI" }) {
         .finally(() => { if (loadSequenceRef.current === requestId) setDocumentsLoading(false); });
     try {
       const nextResult = await marketApi.analysis(normalized, refresh);
-      if (loadSequenceRef.current === requestId) setResult(nextResult);
+      if (loadSequenceRef.current === requestId) {
+        setResult(nextResult);
+        await monitoringRequest;
+        try {
+          const refreshedStatus = await marketApi.modelStatus(normalized);
+          if (loadSequenceRef.current === requestId) {
+            setModelStatus(refreshedStatus);
+            setModelStatusError("");
+          }
+        } catch {
+          // The first monitoring response remains usable if this post-prediction refresh fails.
+        }
+      }
     } catch {
       if (!silent && loadSequenceRef.current === requestId) setError(`Research for ${normalized} is temporarily unavailable.`);
     } finally {
@@ -349,6 +361,10 @@ function ModelRegistryPanel({ status, loading, error, activeModel }) {
   const approved = status?.approvedModel;
   const latest = status?.latestModelRun;
   const monitoring = status?.predictionMonitoring;
+  const drift = status?.driftMonitoring;
+  const retraining = status?.retrainingPolicy;
+  const rolling20 = monitoring?.rollingQuality?.windows?.find((item) => item.window === 20);
+  const driftFeatures = (drift?.features || []).filter((item) => item.psi !== null && item.psi !== undefined).slice(0, 4);
   const approvedServing = status?.servingMode === "approved_artifact";
   return <section className={`registry-panel ${approvedServing ? "registry-approved" : "registry-fallback"}`} aria-labelledby="registry-title">
     <div className="registry-heading">
@@ -382,6 +398,30 @@ function ModelRegistryPanel({ status, loading, error, activeModel }) {
         <strong>{item.outlook} · {Number(item.probabilityUp).toFixed(1)}% up</strong>
         <small>{item.status === "evaluated" ? `Actual ${item.actualDirection} · ${item.correct ? "correct" : "not correct"}` : "Awaiting next session"}</small>
       </article>)}
+    </div>}
+    {!loading && !error && <div className={`monitoring-decision monitoring-${retraining?.severity || "neutral"}`}>
+      <div className="monitoring-decision-heading">
+        <div>
+          <span className="monitoring-kicker">DRIFT & RETRAINING POLICY</span>
+          <strong>{String(retraining?.decision || "collecting_evidence").replaceAll("_", " ")}</strong>
+        </div>
+        <span className={`monitoring-pill ${drift?.status || "not_applicable"}`}>{String(drift?.status || "not applicable").replaceAll("_", " ")}</span>
+      </div>
+      <div className="monitoring-policy-grid">
+        <ValidationStat label="Recent feature rows" value={`${drift?.recentObservations || 0}/${drift?.minimumObservations || 20}`} />
+        <ValidationStat label="Mean PSI" value={drift?.meanPsi ?? "Collecting"} />
+        <ValidationStat label="Maximum PSI" value={drift?.maxPsi ?? "Collecting"} />
+        <ValidationStat label="Rolling 20 accuracy" value={rolling20?.accuracy === null || rolling20?.accuracy === undefined ? `${rolling20?.evaluated || 0}/20 outcomes` : `${rolling20.accuracy}%`} />
+        <ValidationStat label="Artifact data age" value={retraining?.artifactDataAgeDays === undefined ? "No approved run" : `${retraining.artifactDataAgeDays} days`} />
+        <ValidationStat label="Auto retraining" value={retraining?.automaticRetraining ? "Enabled" : "Disabled - approval gate"} />
+      </div>
+      {driftFeatures.length > 0 && <div className="drift-feature-list">{driftFeatures.map((item) => <span key={item.feature} className={`drift-feature ${item.status}`}>
+        <strong>{item.feature.replaceAll("_", " ")}</strong><small>PSI {item.psi} - {item.status}</small>
+      </span>)}</div>}
+      <div className="monitoring-explanation">
+        <strong>{retraining?.reasons?.[0] || drift?.recommendation || "Monitoring evidence is being collected."}</strong>
+        <span>{retraining?.nextStep || drift?.recommendation}</span>
+      </div>
     </div>}
   </section>;
 }
