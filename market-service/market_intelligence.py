@@ -37,7 +37,9 @@ from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 
 from agent_orchestrator import build_agent_plan, tool_trace
+from data_pipeline import bars_from_frame
 from model_registry import approved_model, record_prediction as record_persistent_prediction
+from persistence import Database
 
 
 router = APIRouter(prefix="/market", tags=["Global Market Intelligence"])
@@ -263,6 +265,29 @@ def _history(symbol: str, period: str) -> pd.DataFrame:
         raise ValueError(f"Market data is unavailable for {symbol}.")
     frame = frame.dropna(subset=["Close"]).copy()
     return _cache_put(key, frame).copy()
+
+
+def _persist_research_history(symbol: str, name: str, frame: pd.DataFrame) -> int:
+    """Add an opened symbol to the demand-driven offline operations universe."""
+    try:
+        repository = Database()
+        repository.initialize_schema()
+        bars = bars_from_frame(symbol, frame, source="Yahoo Finance research")
+        board = MARKET_BOARD.get(symbol, {})
+        repository.upsert_company({
+            "symbol": symbol,
+            "name": name or board.get("name") or symbol,
+            "exchange": "NSE" if symbol.endswith(".NS") else "BSE" if symbol.endswith(".BO") else None,
+            "sector": board.get("sector"),
+            "region": board.get("region"),
+            "currency": board.get("currency"),
+            "source": "On-demand public research",
+            "metadata": {"discoveryMode": "demand-driven", "historyRows": len(bars)},
+        })
+        return repository.upsert_market_bars(bars)
+    except Exception as error:
+        logger.warning("Persistent research history failed for %s: %s", symbol, error)
+        return 0
 
 
 MONTH_ALIASES = {
@@ -1298,6 +1323,9 @@ def market_prediction(symbol: str) -> Dict[str, Any]:
         ],
         "disclaimer": "Probabilistic next-session research experiment, not a guaranteed price forecast or investment advice.",
     }
+    payload["persistentHistoryBars"] = _persist_research_history(
+        symbol, snapshot["name"], frame
+    )
     payload["predictionAudit"] = _record_prediction(payload, payload["modelDataDate"])
     try:
         record_persistent_prediction(

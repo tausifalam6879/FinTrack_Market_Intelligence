@@ -1,0 +1,89 @@
+name: Scheduled market data operations
+
+on:
+  schedule:
+    # Weekdays at 19:00 India time. The holiday/weekend buffer is handled by the API policy.
+    - cron: "30 13 * * 1-5"
+  workflow_dispatch:
+    inputs:
+      symbols:
+        description: "Optional comma-separated symbols; blank uses the demand-driven database universe"
+        required: false
+        default: ""
+        type: string
+      period:
+        description: "Validated provider history window"
+        required: true
+        default: "2y"
+        type: choice
+        options: ["6mo", "1y", "2y", "5y"]
+      max_symbols:
+        description: "Maximum demand-driven symbols refreshed in this run"
+        required: true
+        default: "100"
+        type: choice
+        options: ["25", "50", "100", "200"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fintrack-market-data-operations
+  cancel-in-progress: false
+
+jobs:
+  refresh-and-monitor:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      DATABASE_URL: ${{ secrets.FINTRACK_DATABASE_URL }}
+      REQUESTED_SYMBOLS: ${{ inputs.symbols || '' }}
+      HISTORY_PERIOD: ${{ inputs.period || '2y' }}
+      MAX_SYMBOLS: ${{ inputs.max_symbols || '100' }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Check durable database configuration
+        id: database
+        shell: bash
+        run: |
+          if [ -z "$DATABASE_URL" ]; then
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+            echo "### Scheduled operations skipped" >> "$GITHUB_STEP_SUMMARY"
+            echo "Add the FINTRACK_DATABASE_URL repository secret to use the same durable PostgreSQL database as the API." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Set up Python
+        if: steps.database.outputs.configured == 'true'
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: market-service/requirements-runtime.txt
+
+      - name: Install runtime data dependencies
+        if: steps.database.outputs.configured == 'true'
+        working-directory: market-service
+        run: python -m pip install -r requirements-runtime.txt
+
+      - name: Refresh dynamic universe and persist monitoring evidence
+        if: steps.database.outputs.configured == 'true'
+        working-directory: market-service
+        run: >-
+          python operations_pipeline.py
+          --symbols-text "$REQUESTED_SYMBOLS"
+          --period "$HISTORY_PERIOD"
+          --max-symbols "$MAX_SYMBOLS"
+          --report-file operations-report.json
+
+      - name: Upload non-sensitive operations report
+        if: steps.database.outputs.configured == 'true' && always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: market-data-operations-${{ github.run_id }}
+          path: market-service/operations-report.json
+          if-no-files-found: ignore
+          retention-days: 14

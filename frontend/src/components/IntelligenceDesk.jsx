@@ -363,6 +363,7 @@ function ModelRegistryPanel({ status, loading, error, activeModel }) {
   const monitoring = status?.predictionMonitoring;
   const drift = status?.driftMonitoring;
   const retraining = status?.retrainingPolicy;
+  const dataOps = status?.dataOperations;
   const rolling20 = monitoring?.rollingQuality?.windows?.find((item) => item.window === 20);
   const driftFeatures = (drift?.features || []).filter((item) => item.psi !== null && item.psi !== undefined).slice(0, 4);
   const approvedServing = status?.servingMode === "approved_artifact";
@@ -421,6 +422,29 @@ function ModelRegistryPanel({ status, loading, error, activeModel }) {
       <div className="monitoring-explanation">
         <strong>{retraining?.reasons?.[0] || drift?.recommendation || "Monitoring evidence is being collected."}</strong>
         <span>{retraining?.nextStep || drift?.recommendation}</span>
+      </div>
+    </div>}
+    {!loading && !error && <div className={`data-operations-card data-${dataOps?.freshness || "provider_only"}`}>
+      <div className="monitoring-decision-heading">
+        <div>
+          <span className="monitoring-kicker">DATA FRESHNESS & SCHEDULED OPERATIONS</span>
+          <strong>{String(dataOps?.freshness || "provider_only").replaceAll("_", " ")}</strong>
+        </div>
+        <span className={`monitoring-pill ${dataOps?.freshness || "provider_only"}`}>
+          {dataOps?.storage?.durableAcrossDeploys ? "Durable PostgreSQL" : "Instance storage"}
+        </span>
+      </div>
+      <div className="monitoring-policy-grid">
+        <ValidationStat label="Stored daily bars" value={dataOps?.storedBars ?? 0} />
+        <ValidationStat label="Latest session" value={dataOps?.latestSession || "Provider only"} />
+        <ValidationStat label="Data age" value={dataOps?.calendarAgeDays === null || dataOps?.calendarAgeDays === undefined ? "Not persisted" : `${dataOps.calendarAgeDays} days`} />
+        <ValidationStat label="Offline training data" value={dataOps?.offlineTrainingReady ? "Ready" : `${dataOps?.storedBars || 0}/${dataOps?.minimumTrainingBars || 180} bars`} />
+        <ValidationStat label="Scheduled refresh" value={dataOps?.scheduledRefreshEligible ? "Eligible" : "Seeds after research"} />
+        <ValidationStat label="Last pipeline run" value={dataOps?.pipeline?.status || "Not run"} />
+      </div>
+      <div className="monitoring-explanation">
+        <strong>{dataOps?.message || "Open research will seed validated persistent history for this symbol."}</strong>
+        <span>Public search remains unrestricted. The background universe grows from companies actually researched, not from a fixed five-company list.</span>
       </div>
     </div>}
   </section>;

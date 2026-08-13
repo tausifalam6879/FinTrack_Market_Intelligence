@@ -3,6 +3,7 @@
 from fastapi import APIRouter, HTTPException, Query
 
 from data_pipeline import normalize_symbol
+from data_operations import data_operations_snapshot
 from experiment_tracking import experiment_comparison
 from model_registry import monitoring_snapshot
 
@@ -35,6 +36,17 @@ def get_model_drift(symbol: str = Query(default="^NSEI", min_length=1, max_lengt
         raise HTTPException(status_code=422, detail=str(error)) from error
     except Exception as error:
         raise HTTPException(status_code=503, detail=f"Model drift monitoring is unavailable: {error}") from error
+
+
+@router.get("/data-operations")
+def get_data_operations(symbol: str = Query(default="^NSEI", min_length=1, max_length=20)):
+    """Expose stored-history freshness without starting ingestion or training."""
+    try:
+        return data_operations_snapshot(normalize_symbol(symbol))
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+    except Exception as error:
+        raise HTTPException(status_code=503, detail=f"Data operations status is unavailable: {error}") from error
 
 
 @router.get("/experiments")

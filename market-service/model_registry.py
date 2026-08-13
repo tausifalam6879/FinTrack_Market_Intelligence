@@ -14,6 +14,7 @@ from typing import Any, Dict, Optional
 import joblib
 
 from persistence import Database, utc_now
+from data_operations import data_operations_snapshot
 from drift_monitoring import refresh_drift_snapshot, retraining_policy, rolling_prediction_quality
 
 
@@ -170,6 +171,7 @@ def monitoring_snapshot(symbol: str, database: Optional[Database] = None) -> Dic
     quality = rolling_prediction_quality(records)
     drift = repository.latest_drift_snapshot(symbol, approved["id"]) if approved else None
     policy = retraining_policy(approved, quality, drift)
+    data_operations = data_operations_snapshot(symbol, repository)
 
     def public_run(run: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
         if not run:
@@ -231,6 +233,7 @@ def monitoring_snapshot(symbol: str, database: Optional[Database] = None) -> Dic
             ),
         },
         "retrainingPolicy": policy,
+        "dataOperations": data_operations,
         "storage": {"backend": repository.backend, "persistent": True},
         "generatedAt": utc_now(),
     }

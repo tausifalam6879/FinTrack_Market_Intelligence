@@ -99,6 +99,7 @@ export const marketApi = {
   currencies: (refresh = false) => withCache("currencies", () => request(`/market/currencies${query({ refresh })}`, { timeout: 45000 })),
   analysis: (symbol, refresh = false) => withCache(`analysis.${symbol}`, () => request(`/market/analysis${query({ symbol, refresh })}`, { timeout: 60000 })),
   modelStatus: (symbol) => request(`/market/model-status${query({ symbol })}`, { timeout: 15000 }),
+  dataOperations: (symbol) => request(`/market/data-operations${query({ symbol })}`, { timeout: 15000 }),
   experiments: (symbol, limit = 8) => request(`/market/experiments${query({ symbol, limit })}`, { timeout: 15000 }),
   documents: (symbol) => request(`/market/documents${query({ symbol })}`, { timeout: 15000 }),
   discoverDocuments: (symbol) => request(`/market/documents/discover${query({ symbol })}`, { timeout: 45000 }),

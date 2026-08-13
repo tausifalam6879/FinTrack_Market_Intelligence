@@ -220,6 +220,19 @@ python monitoring_job.py --symbols RELIANCE.NS HDFCBANK.NS
 
 Every approved-model prediction stores the exact served feature vector. Training-only quantile baselines and timestamped PSI snapshots stay in PostgreSQL/SQLite, while rolling 10/20/30-outcome quality is exposed through `GET /market/model-status` and `GET /market/model-drift`. The policy returns `keep_serving`, `watch` or `retrain_recommended`, but never trains or promotes a replacement automatically; offline holdout checks, checksums and explicit approval remain mandatory.
 
+### Demand-driven scheduled data operations
+
+FinTrack does not restrict research to a fixed company list. When a visitor opens any supported company or index, its validated two-year daily history is persisted and becomes part of the demand-driven operations universe. `GET /market/data-operations?symbol=...` reports the latest stored session, calendar-age policy, offline-training readiness, last ingestion run and whether storage survives service deployments.
+
+`.github/workflows/market-data-operations.yml` refreshes this database-discovered universe on weekdays and can also be started manually with optional symbols. It activates only after the repository secret `FINTRACK_DATABASE_URL` points to the same durable PostgreSQL database used by the API; without that secret it exits successfully with a clear skipped summary. The workflow refreshes data and drift evidence only—it never trains or approves a model.
+
+```powershell
+cd market-service
+python operations_pipeline.py --period 2y
+# Optional manual selection; public search itself remains unrestricted.
+python operations_pipeline.py --symbols-text "RELIANCE.NS,AAPL,CSCO"
+```
+
 For PostgreSQL:
 
 ```env

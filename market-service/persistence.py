@@ -329,6 +329,48 @@ class Database:
         with self.connect() as connection:
             connection.cursor().execute(statement, parameters)
 
+    def latest_ingestion_run(self) -> Optional[Dict[str, Any]]:
+        statement = """
+            SELECT id, started_at, completed_at, status, period, symbols_requested,
+                bars_written, dataset_version, errors_json
+            FROM ingestion_runs ORDER BY started_at DESC LIMIT 1
+        """
+        with self.connect() as connection:
+            cursor = connection.cursor()
+            cursor.execute(statement)
+            rows = self._rows(cursor)
+            return rows[0] if rows else None
+
+    def market_data_summary(self, symbol: str) -> Dict[str, Any]:
+        statement = self._sql("""
+            SELECT COUNT(*) AS stored_bars, MIN(session_date) AS first_session,
+                MAX(session_date) AS latest_session, MAX(ingested_at) AS last_persisted_at
+            FROM market_bars WHERE symbol = ?
+        """)
+        with self.connect() as connection:
+            cursor = connection.cursor()
+            cursor.execute(statement, (symbol,))
+            rows = self._rows(cursor)
+        return rows[0] if rows else {
+            "stored_bars": 0,
+            "first_session": None,
+            "latest_session": None,
+            "last_persisted_at": None,
+        }
+
+    def operational_symbols(self, limit: int = 100) -> List[str]:
+        """Return the demand-driven universe already researched by visitors/operators."""
+        safe_limit = max(1, min(int(limit), 500))
+        statement = self._sql("""
+            SELECT symbol, MAX(ingested_at) AS last_seen
+            FROM market_bars GROUP BY symbol
+            ORDER BY last_seen DESC LIMIT ?
+        """)
+        with self.connect() as connection:
+            cursor = connection.cursor()
+            cursor.execute(statement, (safe_limit,))
+            return [str(row["symbol"]) for row in self._rows(cursor)]
+
     def load_market_bars(self, symbol: str) -> List[Dict[str, Any]]:
         statement = self._sql("""
             SELECT session_date, open, high, low, close, adjusted_close, volume
