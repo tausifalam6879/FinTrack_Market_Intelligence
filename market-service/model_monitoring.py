@@ -3,7 +3,7 @@
 from fastapi import APIRouter, HTTPException, Query
 
 from data_pipeline import normalize_symbol
-from data_operations import data_operations_snapshot
+from data_operations import database_storage_snapshot, data_operations_snapshot
 from experiment_tracking import experiment_comparison
 from model_registry import monitoring_snapshot
 
@@ -47,6 +47,15 @@ def get_data_operations(symbol: str = Query(default="^NSEI", min_length=1, max_l
         raise HTTPException(status_code=422, detail=str(error)) from error
     except Exception as error:
         raise HTTPException(status_code=503, detail=f"Data operations status is unavailable: {error}") from error
+
+
+@router.get("/database-status")
+def get_database_status():
+    """Expose sanitized schema, durability and backup policy without credentials."""
+    try:
+        return database_storage_snapshot()
+    except Exception as error:
+        raise HTTPException(status_code=503, detail=f"Database status is unavailable: {error}") from error
 
 
 @router.get("/experiments")

@@ -55,11 +55,15 @@ def readiness_report() -> Dict[str, Any]:
     started = time.monotonic()
     try:
         database.ping()
+        schema = database.schema_status()
         checks["database"] = {
-            "status": "ready",
+            "status": "ready" if schema["upToDate"] else "migration-required",
             "required": True,
             "backend": database.backend,
             "latencyMs": _elapsed_ms(started),
+            "schemaVersion": schema["currentVersion"],
+            "expectedSchemaVersion": schema["expectedVersion"],
+            "durableAcrossDeploys": database.backend == "postgresql",
         }
     except Exception as error:
         logger.warning("Required database readiness check failed: %s", type(error).__name__)

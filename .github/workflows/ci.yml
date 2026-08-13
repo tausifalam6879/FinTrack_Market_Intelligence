@@ -68,7 +68,8 @@ jobs:
           DATABASE_URL: postgresql://fintrack:fintrack_ci_password@127.0.0.1:5432/fintrack_ci
           MODEL_ARTIFACT_DIR: ${{ runner.temp }}/fintrack-artifacts
         run: |
-          python -c "from runtime_health import initialize_runtime, readiness_report; initialize_runtime(); report=readiness_report(); assert report['status']=='ready', report; assert report['checks']['database']['backend']=='postgresql', report"
+          python -c "from runtime_health import initialize_runtime, readiness_report; initialize_runtime(); report=readiness_report(); database=report['checks']['database']; assert report['status']=='ready', report; assert database['backend']=='postgresql', report; assert database['schemaVersion']==database['expectedSchemaVersion']==4, report; assert database['durableAcrossDeploys'] is True, report"
+          python database_maintenance.py status
 
   frontend-build:
     runs-on: ubuntu-latest

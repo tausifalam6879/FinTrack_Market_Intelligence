@@ -441,6 +441,8 @@ function ModelRegistryPanel({ status, loading, error, activeModel }) {
         <ValidationStat label="Offline training data" value={dataOps?.offlineTrainingReady ? "Ready" : `${dataOps?.storedBars || 0}/${dataOps?.minimumTrainingBars || 180} bars`} />
         <ValidationStat label="Scheduled refresh" value={dataOps?.scheduledRefreshEligible ? "Eligible" : "Seeds after research"} />
         <ValidationStat label="Last pipeline run" value={dataOps?.pipeline?.status || "Not run"} />
+        <ValidationStat label="Database schema" value={dataOps?.storage?.schema ? `v${dataOps.storage.schema.currentVersion}/${dataOps.storage.schema.expectedVersion}` : "Checking"} />
+        <ValidationStat label="Backup policy" value={dataOps?.storage?.backup?.configured ? dataOps.storage.backup.policy : "Not configured"} />
       </div>
       <div className="monitoring-explanation">
         <strong>{dataOps?.message || "Open research will seed validated persistent history for this symbol."}</strong>

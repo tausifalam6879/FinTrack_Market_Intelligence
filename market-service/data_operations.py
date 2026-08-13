@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import date, datetime, timezone
 import json
+import os
 from typing import Any, Dict, Optional
 
 from persistence import Database, utc_now
@@ -24,6 +25,34 @@ def _json_list(value: Any) -> list[Any]:
         return []
 
 
+def database_storage_snapshot(database: Optional[Database] = None) -> Dict[str, Any]:
+    repository = database or Database()
+    repository.initialize_schema()
+    schema = repository.schema_status()
+    configured_backup_policy = os.getenv("DATABASE_BACKUP_POLICY", "").strip()
+    return {
+        "backend": repository.backend,
+        "durableAcrossDeploys": repository.backend == "postgresql",
+        "retention": (
+            "External PostgreSQL lifecycle"
+            if repository.backend == "postgresql"
+            else "Local service-instance lifecycle"
+        ),
+        "schema": schema,
+        "backup": {
+            "configured": bool(configured_backup_policy),
+            "policy": configured_backup_policy or "not_configured",
+            "recommendedAction": (
+                "Use provider PITR plus periodic logical exports."
+                if repository.backend == "postgresql"
+                else "Move production data to PostgreSQL before relying on backups."
+            ),
+        },
+        "credentialsExposed": False,
+        "generatedAt": utc_now(),
+    }
+
+
 def data_operations_snapshot(
     symbol: str, database: Optional[Database] = None
 ) -> Dict[str, Any]:
@@ -33,6 +62,7 @@ def data_operations_snapshot(
     stored_bars = int(summary.get("stored_bars") or 0)
     latest_session = summary.get("latest_session")
     latest_run = repository.latest_ingestion_run()
+    storage = database_storage_snapshot(repository)
 
     if latest_session:
         session_date = date.fromisoformat(str(latest_session)[:10])
@@ -85,15 +115,7 @@ def data_operations_snapshot(
         "minimumTrainingBars": MINIMUM_OFFLINE_TRAINING_BARS,
         "scheduledRefreshEligible": stored_bars > 0,
         "pipeline": pipeline,
-        "storage": {
-            "backend": repository.backend,
-            "durableAcrossDeploys": repository.backend == "postgresql",
-            "retention": (
-                "External PostgreSQL lifecycle"
-                if repository.backend == "postgresql"
-                else "Local service-instance lifecycle"
-            ),
-        },
+        "storage": storage,
         "message": message,
         "thresholds": {
             "freshThroughCalendarDays": FRESH_CALENDAR_DAYS,

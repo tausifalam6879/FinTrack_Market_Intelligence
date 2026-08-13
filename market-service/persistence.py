@@ -12,6 +12,7 @@ from typing import Any, Dict, Iterable, Iterator, List, Optional, Sequence
 
 
 DEFAULT_SQLITE_PATH = Path(__file__).resolve().parent / "data" / "fintrack.db"
+LATEST_SCHEMA_VERSION = 4
 
 
 def utc_now() -> str:
@@ -243,10 +244,72 @@ class Database:
             "CREATE INDEX IF NOT EXISTS idx_document_sources_symbol ON document_sources(symbol, created_at)",
             "CREATE INDEX IF NOT EXISTS idx_document_chunks_symbol ON document_chunks(symbol, embedding_provider)",
         ]
+        migrations = [
+            (1, "core-market-and-model-registry", statements[:5]),
+            (2, "prediction-feature-and-drift-monitoring", statements[5:8]),
+            (3, "document-rag-storage", statements[8:10]),
+            (4, "query-performance-indexes", statements[10:]),
+        ]
+        migration_table = f"""
+            CREATE TABLE IF NOT EXISTS schema_migrations (
+                version INTEGER PRIMARY KEY,
+                name TEXT NOT NULL,
+                applied_at {timestamp_type} NOT NULL
+            )
+        """
+        select_versions = "SELECT version FROM schema_migrations"
+        record_migration = self._sql("""
+            INSERT INTO schema_migrations (version, name, applied_at) VALUES (?, ?, ?)
+            ON CONFLICT(version) DO NOTHING
+        """)
         with self.connect() as connection:
             cursor = connection.cursor()
-            for statement in statements:
-                cursor.execute(statement)
+            cursor.execute(migration_table)
+            cursor.execute(select_versions)
+            applied = {int(row[0]) for row in cursor.fetchall()}
+            for version, name, migration_statements in migrations:
+                if version in applied:
+                    continue
+                for statement in migration_statements:
+                    cursor.execute(statement)
+                cursor.execute(record_migration, (version, name, utc_now()))
+
+    def schema_status(self) -> Dict[str, Any]:
+        statement = """
+            SELECT version, name, applied_at FROM schema_migrations ORDER BY version ASC
+        """
+        with self.connect() as connection:
+            cursor = connection.cursor()
+            cursor.execute(statement)
+            migrations = self._rows(cursor)
+        current = max((int(row["version"]) for row in migrations), default=0)
+        return {
+            "currentVersion": current,
+            "expectedVersion": LATEST_SCHEMA_VERSION,
+            "upToDate": current == LATEST_SCHEMA_VERSION,
+            "appliedMigrations": [{
+                "version": int(row["version"]),
+                "name": row["name"],
+                "appliedAt": str(row["applied_at"]),
+            } for row in migrations],
+        }
+
+    def user_table_count(self) -> int:
+        if self.backend == "postgresql":
+            statement = """
+                SELECT COUNT(*) FROM information_schema.tables
+                WHERE table_schema = 'public' AND table_type = 'BASE TABLE'
+            """
+        else:
+            statement = """
+                SELECT COUNT(*) FROM sqlite_master
+                WHERE type = 'table' AND name NOT LIKE 'sqlite_%'
+            """
+        with self.connect() as connection:
+            cursor = connection.cursor()
+            cursor.execute(statement)
+            row = cursor.fetchone()
+            return int(row[0]) if row else 0
 
     def upsert_company(self, company: Dict[str, Any]) -> None:
         statement = self._sql("""

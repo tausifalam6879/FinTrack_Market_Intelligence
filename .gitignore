@@ -8,6 +8,7 @@ market-service/artifacts/
 market-service/mlruns/
 market-service/mlartifacts/
 market-service/mlflow.db
+market-service/backups/
 .env
 .env.local
 *.pyc

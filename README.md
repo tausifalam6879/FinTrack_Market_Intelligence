@@ -238,7 +238,23 @@ For PostgreSQL:
 ```env
 DATABASE_URL=postgresql://user:password@host:5432/fintrack
 MODEL_ARTIFACT_DIR=artifacts
+DATABASE_BACKUP_POLICY=provider-pitr-plus-logical-export
 ```
+
+Schema changes are recorded in `schema_migrations`; `/health/ready` rejects an outdated schema and `GET /market/database-status` exposes only sanitized version, durability and backup-policy metadata. Database credentials are never returned.
+
+Safe maintenance commands refuse to overwrite existing backups or restore into a non-empty target:
+
+```powershell
+cd market-service
+python database_maintenance.py status
+python database_maintenance.py backup backups/fintrack-2026-08-13.dump
+python database_maintenance.py verify backups/fintrack-2026-08-13.dump
+# Restore is intentionally gated and works only against an empty target database.
+python database_maintenance.py restore backups/fintrack-2026-08-13.dump --confirm-empty-target
+```
+
+See [Production PostgreSQL](docs/production-postgres.md) before connecting Render and GitHub Actions to a shared database. The current free demo is intentionally not changed to a paid resource automatically.
 
 The persistence schema contains public-company metadata, OHLCV bars, ingestion audits, model runs, prediction outcomes, served-feature snapshots and model-drift history. It does not store user accounts or personal financial data.
 
