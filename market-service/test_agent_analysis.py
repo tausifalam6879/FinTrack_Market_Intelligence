@@ -211,6 +211,59 @@ class AgentAnalysisTests(unittest.TestCase):
         self.assertEqual("missing requested analyst target evidence", issue)
         self.assertIsNone(accepted)
 
+    def test_news_fallback_reports_distribution_sources_and_title_only_boundary(self):
+        news = {
+            "intelligence": {
+                "status": "available", "sentimentLabel": "positive", "sentimentScore": 0.22,
+                "articleCount": 5, "sourceCount": 3, "coverage": "moderate", "freshness": "fresh",
+                "distribution": {"positive": 3, "mixed/neutral": 1, "negative": 1},
+                "themes": [{"theme": "Earnings & outlook", "articleCount": 2}],
+            },
+            "articles": [{
+                "title": "Cisco beats earnings expectations", "publisher": "Evidence Wire",
+                "publishedAt": "2026-08-14T08:00:00Z", "sentimentLabel": "positive",
+            }],
+        }
+        answer = _verified_tool_answer(
+            "Cisco recent news sentiment and themes batao",
+            self.snapshot,
+            self.prediction,
+            ["market_snapshot", "technical_prediction", "market_news"],
+            {"factors": []},
+            news_payload=news,
+        )
+
+        self.assertIn("Company headline intelligence", answer)
+        self.assertIn("3 positive, 1 mixed/neutral, 1 negative", answer)
+        self.assertIn("5 headlines from 3 publishers", answer)
+        self.assertIn("title-keyword evidence", answer)
+
+    def test_generated_news_answer_must_include_grounded_tone_and_requested_theme(self):
+        news = {
+            "intelligence": {
+                "status": "available", "sentimentLabel": "positive",
+                "themes": [{"theme": "Earnings & outlook", "articleCount": 3}],
+            }
+        }
+        base = "Weak model warning with detailed evidence and source limitations. " * 10
+        issue = _llm_grounding_issue(
+            base,
+            "Recent news sentiment and theme batao",
+            self.prediction,
+            {"factors": []},
+            news_payload=news,
+        )
+        accepted = _llm_grounding_issue(
+            base + " Headline sentiment is positive and the leading theme is Earnings & outlook.",
+            "Recent news sentiment and theme batao",
+            self.prediction,
+            {"factors": []},
+            news_payload=news,
+        )
+
+        self.assertEqual("missing requested headline sentiment evidence", issue)
+        self.assertIsNone(accepted)
+
 
 if __name__ == "__main__":
     unittest.main()

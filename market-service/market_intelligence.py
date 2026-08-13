@@ -104,6 +104,11 @@ CATALYST_QUERY_TERMS = (
     "target price", "consensus", "ex-dividend", "ex dividend", "eps surprise", "catalyst",
 )
 
+NEWS_QUERY_TERMS = (
+    "news", "headline", "announcement", "sentiment", "latest update", "publisher",
+    "news theme", "coverage", "source diversity",
+)
+
 MARKET_BOARD = {
     "^NSEI": {"name": "Nifty 50", "region": "India", "currency": "INR", "kind": "index", "sector": "Indices"},
     "^BSESN": {"name": "BSE Sensex", "region": "India", "currency": "INR", "kind": "index", "sector": "Indices"},
@@ -239,12 +244,43 @@ SYMBOL_ALIASES = {
 }
 
 POSITIVE_WORDS = {
-    "beat", "beats", "bullish", "gain", "gains", "growth", "higher", "optimism",
-    "positive", "profit", "rally", "record", "recovery", "surge", "up", "upgrade",
+    "accelerate", "accelerates", "beat", "beats", "boost", "boosts", "bullish", "gain",
+    "gains", "growth", "higher", "jump", "jumps", "optimism", "outperform", "positive",
+    "profit", "raise", "raises", "rally", "record", "recovery", "rise", "rises", "strong",
+    "surge", "up", "upgrade", "upgrades", "win", "wins",
 }
 NEGATIVE_WORDS = {
-    "bearish", "concern", "crash", "cut", "decline", "down", "drop", "fear", "fraud",
-    "inflation", "loss", "miss", "recession", "risk", "slump", "tariff", "war", "weak",
+    "bearish", "concern", "crash", "cut", "decline", "down", "downgrade", "downgrades",
+    "drop", "fall", "falling", "falls", "fear", "fraud", "inflation", "loss", "lower",
+    "miss", "plunge", "plunges", "probe", "recession", "risk", "slide", "slides", "slump",
+    "tariff", "war", "warning", "weak",
+}
+
+NEWS_THEME_KEYWORDS = {
+    "Earnings & outlook": (
+        "earnings", "revenue", "profit", "margin", "guidance", "forecast", "quarter",
+        "eps", "sales", "results",
+    ),
+    "Products & innovation": (
+        "product", "launch", "ai", "artificial intelligence", "cloud", "chip", "platform",
+        "technology", "software", "patent",
+    ),
+    "Deals & capital": (
+        "acquisition", "acquire", "merger", "deal", "partnership", "stake", "buyback",
+        "dividend", "funding", "investment",
+    ),
+    "Regulation & legal": (
+        "regulator", "regulation", "lawsuit", "court", "probe", "antitrust", "compliance",
+        "fine", "tax", "tariff",
+    ),
+    "Leadership & workforce": (
+        "ceo", "cfo", "executive", "leadership", "board", "layoff", "workforce", "jobs",
+        "appoint", "resign",
+    ),
+    "Market & demand": (
+        "demand", "market", "consumer", "economy", "inflation", "rates", "competition",
+        "supply", "export", "import",
+    ),
 }
 
 CACHE_TTL_SECONDS = int(os.getenv("MARKET_CACHE_TTL_SECONDS", "120"))
@@ -770,6 +806,124 @@ def _features(frame: pd.DataFrame) -> pd.DataFrame:
     return result.replace([np.inf, -np.inf], np.nan)
 
 
+def _sentiment_label(score: Any) -> str:
+    numeric = float(score or 0)
+    return "positive" if numeric > 0.15 else "negative" if numeric < -0.15 else "mixed/neutral"
+
+
+def _headline_themes(title: str) -> List[str]:
+    normalized = " ".join(re.findall(r"[a-z0-9]+", str(title or "").lower()))
+    themes = []
+    for theme, keywords in NEWS_THEME_KEYWORDS.items():
+        if any(re.search(rf"\b{re.escape(keyword)}\b", normalized) for keyword in keywords):
+            themes.append(theme)
+    return themes or ["General company update"]
+
+
+def _published_datetime(value: Any) -> Optional[datetime]:
+    if value is None:
+        return None
+    try:
+        if isinstance(value, (int, float)):
+            return datetime.fromtimestamp(value, tz=timezone.utc)
+        parsed = pd.to_datetime(value, utc=True, errors="coerce")
+        if pd.isna(parsed):
+            return None
+        return parsed.to_pydatetime()
+    except (TypeError, ValueError, OverflowError):
+        return None
+
+
+def _news_intelligence(
+    articles: List[Dict[str, Any]],
+    *,
+    now: Optional[datetime] = None,
+) -> Dict[str, Any]:
+    """Summarize bounded publisher-headline evidence without semantic invention."""
+    evaluated_at = now or datetime.now(timezone.utc)
+    if evaluated_at.tzinfo is None:
+        evaluated_at = evaluated_at.replace(tzinfo=timezone.utc)
+    if not articles:
+        return {
+            "status": "unavailable",
+            "articleCount": 0,
+            "sentimentScore": 0.0,
+            "sentimentLabel": "mixed/neutral",
+            "distribution": {"positive": 0, "mixed/neutral": 0, "negative": 0},
+            "sourceCount": 0,
+            "coverage": "unavailable",
+            "freshness": "unavailable",
+            "latestPublishedAt": None,
+            "topSources": [],
+            "themes": [],
+            "dailyTone": [],
+            "method": "Transparent headline keyword counts; no article body or LLM sentiment is inferred.",
+            "disclaimer": "No recent provider headlines were returned, so FinTrack does not invent a news conclusion.",
+        }
+
+    distribution = {"positive": 0, "mixed/neutral": 0, "negative": 0}
+    source_counts: Dict[str, int] = {}
+    theme_counts: Dict[str, int] = {}
+    daily: Dict[str, List[float]] = {}
+    timestamps = []
+    for article in articles:
+        score = float(article.get("sentiment") or 0)
+        label = str(article.get("sentimentLabel") or _sentiment_label(score))
+        distribution[label] = distribution.get(label, 0) + 1
+        publisher = str(article.get("publisher") or "Unknown")
+        source_counts[publisher] = source_counts.get(publisher, 0) + 1
+        for theme in article.get("themes") or ["General company update"]:
+            theme_counts[theme] = theme_counts.get(theme, 0) + 1
+        published_at = _published_datetime(article.get("publishedAt"))
+        if published_at:
+            timestamps.append(published_at)
+            daily.setdefault(published_at.date().isoformat(), []).append(score)
+
+    score = float(np.mean([float(item.get("sentiment") or 0) for item in articles]))
+    latest = max(timestamps) if timestamps else None
+    age_hours = max(0.0, (evaluated_at - latest).total_seconds() / 3600) if latest else None
+    freshness = (
+        "fresh" if age_hours is not None and age_hours <= 48 else
+        "recent" if age_hours is not None and age_hours <= 168 else
+        "stale" if age_hours is not None else "date unavailable"
+    )
+    source_count = len([name for name in source_counts if name.lower() != "unknown"])
+    coverage = (
+        "broader" if len(articles) >= 6 and source_count >= 3 else
+        "moderate" if len(articles) >= 3 and source_count >= 2 else "limited"
+    )
+    return {
+        "status": "available",
+        "articleCount": len(articles),
+        "sentimentScore": _round(score, 3),
+        "sentimentLabel": _sentiment_label(score),
+        "distribution": distribution,
+        "sourceCount": source_count,
+        "coverage": coverage,
+        "freshness": freshness,
+        "latestPublishedAt": latest.isoformat() if latest else None,
+        "topSources": [
+            {"publisher": publisher, "articleCount": count}
+            for publisher, count in sorted(source_counts.items(), key=lambda item: (-item[1], item[0]))[:4]
+        ],
+        "themes": [
+            {"theme": theme, "articleCount": count}
+            for theme, count in sorted(theme_counts.items(), key=lambda item: (-item[1], item[0]))[:5]
+        ],
+        "dailyTone": [
+            {
+                "date": day,
+                "articleCount": len(values),
+                "sentimentScore": _round(float(np.mean(values)), 3),
+                "sentimentLabel": _sentiment_label(float(np.mean(values))),
+            }
+            for day, values in sorted(daily.items())
+        ],
+        "method": "Transparent title-only keyword counts aggregated across the returned publisher headlines.",
+        "disclaimer": "Headline tone is limited evidence, can miss context or sarcasm, and remains separate from FinTrack ML and investment advice.",
+    }
+
+
 def _normalize_news_item(item: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     content = item.get("content") if isinstance(item.get("content"), dict) else item
     title = content.get("title") or item.get("title")
@@ -782,7 +936,9 @@ def _normalize_news_item(item: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     if isinstance(published, (int, float)):
         published = datetime.fromtimestamp(published, tz=timezone.utc).isoformat()
     words = re.findall(r"[a-z]+", title.lower())
-    raw_score = sum(word in POSITIVE_WORDS for word in words) - sum(word in NEGATIVE_WORDS for word in words)
+    positive_terms = sorted({word for word in words if word in POSITIVE_WORDS})
+    negative_terms = sorted({word for word in words if word in NEGATIVE_WORDS})
+    raw_score = len(positive_terms) - len(negative_terms)
     sentiment = max(-1.0, min(1.0, raw_score / 3))
     return {
         "title": title,
@@ -790,6 +946,9 @@ def _normalize_news_item(item: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         "url": item.get("link") or click_url.get("url") or canonical_url.get("url"),
         "publishedAt": published,
         "sentiment": _round(sentiment, 3),
+        "sentimentLabel": _sentiment_label(sentiment),
+        "sentimentBasis": {"positiveTerms": positive_terms, "negativeTerms": negative_terms},
+        "themes": _headline_themes(title),
     }
 
 
@@ -810,12 +969,13 @@ def market_news(symbol: str, limit: int = 8) -> Dict[str, Any]:
             articles.append(normalized)
         if len(articles) >= limit:
             break
-    sentiment = float(np.mean([item["sentiment"] for item in articles])) if articles else 0.0
+    intelligence = _news_intelligence(articles)
     result = {
         "symbol": symbol,
         "articles": articles,
-        "sentimentScore": _round(sentiment, 3),
-        "sentimentLabel": "positive" if sentiment > 0.15 else "negative" if sentiment < -0.15 else "mixed/neutral",
+        "sentimentScore": intelligence["sentimentScore"],
+        "sentimentLabel": intelligence["sentimentLabel"],
+        "intelligence": intelligence,
         "method": "Transparent headline keyword sentiment; not a trading signal.",
     }
     return _cache_put(key, result)
@@ -1070,6 +1230,7 @@ def company_research(symbol: str) -> Dict[str, Any]:
     financials = _company_financial_sections(info)
     company_quote = {**snapshot, "currency": _company_currency(info, snapshot)}
     catalysts = _company_catalysts(info, calendar, earnings_dates, snapshot.get("price"))
+    news_evidence = market_news(symbol, 8)
     result = {
         "symbol": symbol,
         "name": info.get("longName") or info.get("shortName") or snapshot["name"],
@@ -1107,7 +1268,8 @@ def company_research(symbol: str) -> Dict[str, Any]:
             {"date": index.strftime("%Y-%m-%d"), "close": _round(row["Close"])}
             for index, row in frame.tail(120).iterrows()
         ],
-        "news": market_news(symbol, 6)["articles"],
+        "news": news_evidence["articles"],
+        "newsIntelligence": news_evidence["intelligence"],
         "dataAsOf": snapshot["dataAsOf"],
         "source": "Yahoo Finance via yfinance",
         "missingDataNotice": "Some fundamentals may be unavailable for indices, commodities or unsupported listings.",
@@ -1893,6 +2055,11 @@ def _requests_catalyst_analysis(message: str) -> bool:
     return any(term in lowered for term in CATALYST_QUERY_TERMS)
 
 
+def _requests_news_analysis(message: str) -> bool:
+    lowered = str(message or "").lower()
+    return any(term in lowered for term in NEWS_QUERY_TERMS)
+
+
 def market_prediction(symbol: str) -> Dict[str, Any]:
     symbol = _sanitize_symbol(symbol)
     cache_key = f"prediction:{symbol}"
@@ -2288,6 +2455,7 @@ def _verified_tool_answer(
     document_matches: Optional[List[Dict[str, Any]]] = None,
     document_requested: bool = False,
     company_profile: Optional[Dict[str, Any]] = None,
+    news_payload: Optional[Dict[str, Any]] = None,
 ) -> str:
     news = prediction["newsFactor"]
     model = prediction["model"]
@@ -2459,6 +2627,39 @@ def _verified_tool_answer(
                 "- Is listing ke liye provider ne calendar, analyst target ya EPS-surprise evidence return nahi kiya. "
                 "Missing catalyst invent nahi kiya gaya."
             )
+    news_section = ""
+    if _requests_news_analysis(lowered):
+        intelligence = (news_payload or {}).get("intelligence") or {}
+        articles = (news_payload or {}).get("articles") or []
+        if intelligence.get("status") == "available":
+            distribution = intelligence.get("distribution") or {}
+            themes = intelligence.get("themes") or []
+            theme_text = ", ".join(
+                f"{item.get('theme')} ({item.get('articleCount')})" for item in themes[:4]
+            ) or "no repeated theme"
+            headline_lines = [
+                f"- {item.get('title')} — {item.get('publisher')} "
+                f"({item.get('sentimentLabel')}, {item.get('publishedAt') or 'date unavailable'})."
+                for item in articles[:3]
+            ]
+            news_section = (
+                "\n\nCompany headline intelligence\n"
+                f"- Aggregate title tone {intelligence.get('sentimentLabel')} at score "
+                f"{intelligence.get('sentimentScore')}; {intelligence.get('articleCount')} headlines from "
+                f"{intelligence.get('sourceCount')} publishers; coverage {intelligence.get('coverage')}, "
+                f"freshness {intelligence.get('freshness')}.\n"
+                f"- Distribution: {distribution.get('positive') or 0} positive, "
+                f"{distribution.get('mixed/neutral') or 0} mixed/neutral, "
+                f"{distribution.get('negative') or 0} negative.\n"
+                f"- Dominant title themes: {theme_text}.\n"
+                + ("\n".join(headline_lines) if headline_lines else "- No dated headline detail was returned.")
+                + "\n- This is transparent title-keyword evidence, not article-body understanding, a fact verdict or a trading signal."
+            )
+        else:
+            news_section = (
+                "\n\nCompany headline intelligence\n"
+                "- Recent provider headlines available nahi hain, isliye sentiment, theme ya publisher coverage invent nahi kiya gaya."
+            )
     return (
         "Seedha jawab\n"
         f"{prediction['name']} ke liye model ka current scenario {prediction['outlook']} hai, lekin ise guaranteed "
@@ -2471,6 +2672,7 @@ def _verified_tool_answer(
         + breadth_line
         + risk_section
         + catalyst_section
+        + news_section
         + "\n\nCalculation aur scenario\n"
         + f"- Current price se lower range tak downside: {brief['currentPrice']} - "
         + f"{prediction['expectedRange']['low']} = {brief['expectedDownsidePoints']} points "
@@ -2536,6 +2738,7 @@ def _llm_grounding_issue(
     document_matches: Optional[List[Dict[str, Any]]] = None,
     document_requested: bool = False,
     company_profile: Optional[Dict[str, Any]] = None,
+    news_payload: Optional[Dict[str, Any]] = None,
 ) -> Optional[str]:
     normalized_answer = answer.lower()
     lowered = message.lower()
@@ -2610,6 +2813,21 @@ def _llm_grounding_issue(
                 }
                 if not any(marker in normalized_answer for marker in markers):
                     return "missing requested earnings date evidence"
+    if _requests_news_analysis(lowered):
+        intelligence = (news_payload or {}).get("intelligence") or {}
+        if intelligence.get("status") == "available":
+            sentiment_label = str(intelligence.get("sentimentLabel") or "").lower()
+            accepted_tone = {
+                sentiment_label,
+                sentiment_label.replace("mixed/neutral", "mixed"),
+                sentiment_label.replace("mixed/neutral", "neutral"),
+            }
+            if sentiment_label and not any(tone and tone in normalized_answer for tone in accepted_tone):
+                return "missing requested headline sentiment evidence"
+            if "theme" in lowered and intelligence.get("themes"):
+                expected_theme = str(intelligence["themes"][0].get("theme") or "").lower()
+                if expected_theme and expected_theme not in normalized_answer:
+                    return "missing requested headline theme evidence"
     if document_requested and not document_matches:
         return "no indexed document evidence available"
     if document_matches:
@@ -2846,7 +3064,19 @@ async def market_agent(request: FastApiRequest):
     if "historicalSession" in context:
         llm_context["historicalSession"] = context["historicalSession"]
     if "news" in context:
-        llm_context["headlines"] = [item["title"][:100] for item in context["news"]["articles"][:3]]
+        llm_context["headlineEvidence"] = {
+            "summary": context["news"].get("intelligence"),
+            "articles": [
+                {
+                    "title": item["title"][:160],
+                    "publisher": item.get("publisher"),
+                    "publishedAt": item.get("publishedAt"),
+                    "sentimentLabel": item.get("sentimentLabel"),
+                    "themes": item.get("themes"),
+                }
+                for item in context["news"]["articles"][:6]
+            ],
+        }
     if "company" in context:
         llm_context["company"] = {
             "sector": context["company"]["sector"],
@@ -2906,6 +3136,7 @@ async def market_agent(request: FastApiRequest):
         "If documentEvidenceAvailable is false, say that indexed evidence is unavailable and do not infer a filing answer. "
         "When sectorPeerComparison is supplied, describe only above/below/in-line evidence and never turn a peer median into a buy/sell verdict. "
         "Company catalyst dates can change; label analyst consensus and targets as external opinions separate from FinTrack ML. "
+        "When headlineEvidence is supplied, call it title-keyword evidence, report source breadth and dates, and do not imply that headlines prove an event or understand full article context. "
         "changePct is daily price change, not trading volume. RSI above 70 is overbought, below 30 is oversold. "
         "If balancedAccuracy is below 53, explicitly state that the model has no reliable directional edge. "
         "Keep the response readable and normally within about 550 words."
@@ -2949,6 +3180,7 @@ async def market_agent(request: FastApiRequest):
             document_matches,
             document_requested,
             context.get("company"),
+            context.get("news"),
         )
 
     try:
@@ -2964,6 +3196,7 @@ async def market_agent(request: FastApiRequest):
             document_matches,
             document_requested,
             context.get("company"),
+            context.get("news"),
         )
         if grounding_issue:
             llm_answer_accepted = False

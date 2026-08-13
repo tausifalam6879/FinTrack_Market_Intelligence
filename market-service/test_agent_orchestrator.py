@@ -68,6 +68,18 @@ class AgentOrchestratorTests(unittest.TestCase):
         self.assertIn("company_catalyst_analysis", plan["intents"])
         self.assertIn("company_fundamentals", tools)
 
+    def test_company_news_question_uses_read_only_headline_evidence(self):
+        plan = build_agent_plan(
+            "Cisco recent news sentiment themes aur source diversity batao",
+            "CSCO",
+        )
+
+        tools = [step["tool"] for step in plan["steps"]]
+        self.assertIn("news_analysis", plan["intents"])
+        self.assertIn("market_news", tools)
+        news_step = next(step for step in plan["steps"] if step["tool"] == "market_news")
+        self.assertEqual("read-only", news_step["access"])
+
     def test_trace_preserves_plan_reason_and_honest_no_evidence_status(self):
         plan = build_agent_plan("annual report source citation", "AAPL")
         trace = tool_trace(plan, {

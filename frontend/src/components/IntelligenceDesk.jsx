@@ -427,7 +427,6 @@ function CompanyFundamentalsPanel({ data, loading, error }) {
   const performance = data.performance || {};
   const range = data.range || {};
   const rangePosition = Number.isFinite(Number(range.currentPositionPercent)) ? Number(range.currentPositionPercent) : null;
-  const news = (data.news || []).slice(0, 3);
   const companyWebsite = /^https?:\/\//i.test(data.website || "") ? data.website : null;
   const groups = [
     ["Valuation", [
@@ -470,12 +469,7 @@ function CompanyFundamentalsPanel({ data, loading, error }) {
     </div>
     <CompanyCatalystPanel data={data.catalysts} currency={currency} />
     <div className="fundamental-groups">{groups.map(([title, entries]) => <FundamentalGroup key={title} title={title} entries={entries} />)}</div>
-    <div className="company-headlines">
-      <div className="company-headlines-heading"><strong>Recent company headlines</strong><span>Publisher evidence, not a sentiment guarantee</span></div>
-      {news.length ? <div>{news.map((item, index) => item.url ? <a key={`${item.title}-${index}`} href={item.url} target="_blank" rel="noreferrer">
-        <strong>{item.title}</strong><span>{item.publisher} · {item.publishedAt ? new Date(item.publishedAt).toLocaleDateString("en-IN") : "Date unavailable"}</span>
-      </a> : <article key={`${item.title}-${index}`}><strong>{item.title}</strong><span>{item.publisher}</span></article>)}</div> : <p>No recent publisher headlines were returned for this company.</p>}
-    </div>
+    <CompanyNewsIntelligencePanel data={data.newsIntelligence} articles={data.news} />
     <p className="fundamentals-method"><strong>Source:</strong> {data.source}. Figures may use different reporting periods and are shown as provider evidence, not an accounting audit or investment recommendation.{data.dataAsOf ? ` Data as of ${new Date(data.dataAsOf).toLocaleString("en-IN")}.` : ""}</p>
   </section>;
 }
@@ -487,6 +481,67 @@ function PerformanceMetric({ label, value }) {
 
 function FundamentalGroup({ title, entries }) {
   return <article><h4>{title}</h4><dl>{entries.map(([label, value]) => <div key={label}><dt>{label}</dt><dd>{value}</dd></div>)}</dl></article>;
+}
+
+function CompanyNewsIntelligencePanel({ data, articles = [] }) {
+  if (!data || data.status !== "available") return <section className="company-news-intelligence news-intelligence-unavailable">
+    <div className="news-intelligence-heading"><div><p className="eyebrow">COMPANY NEWS INTELLIGENCE</p><h4>No recent headline evidence available</h4></div><span>No tone inferred</span></div>
+    <p>The provider returned no recent company headlines, so FinTrack does not invent sentiment, themes or publisher coverage.</p>
+  </section>;
+
+  const distribution = data.distribution || {};
+  const articleCount = Number(data.articleCount || articles.length || 0);
+  const percentage = (value) => articleCount ? Math.max(0, (Number(value || 0) / articleCount) * 100) : 0;
+  const toneClass = (label) => String(label || "mixed/neutral") === "mixed/neutral" ? "neutral" : String(label).toLowerCase();
+  const label = (value) => String(value || "mixed/neutral").replace("mixed/neutral", "Mixed / neutral").replace(/^./, (character) => character.toUpperCase());
+  const formatDate = (value, options = { day: "numeric", month: "short", year: "numeric" }) => {
+    if (!value) return "Date unavailable";
+    const parsed = new Date(value);
+    return Number.isNaN(parsed.getTime()) ? "Date unavailable" : parsed.toLocaleDateString("en-IN", options);
+  };
+  const visibleArticles = articles.slice(0, 6);
+  const visibleDays = (data.dailyTone || []).slice(-5);
+  const topSources = (data.topSources || []).map((item) => `${item.publisher} (${item.articleCount})`).join(" · ");
+
+  return <section className="company-news-intelligence" aria-labelledby="company-news-intelligence-title">
+    <div className="news-intelligence-heading">
+      <div><p className="eyebrow">COMPANY NEWS INTELLIGENCE</p><h4 id="company-news-intelligence-title">Headline tone, themes and source coverage</h4></div>
+      <span>Separate from FinTrack ML</span>
+    </div>
+    <div className="news-intelligence-metrics">
+      <article className={`tone-${toneClass(data.sentimentLabel)}`}><small>Aggregate headline tone</small><strong>{label(data.sentimentLabel)}</strong><span>{Number(data.sentimentScore || 0) >= 0 ? "+" : ""}{Number(data.sentimentScore || 0).toFixed(3)} score</span></article>
+      <article><small>Coverage</small><strong>{articleCount} headlines</strong><span>{label(data.coverage)} evidence breadth</span></article>
+      <article><small>Source diversity</small><strong>{data.sourceCount || 0} publishers</strong><span>{topSources || "Publisher names unavailable"}</span></article>
+      <article><small>Freshness</small><strong>{label(data.freshness)}</strong><span>{formatDate(data.latestPublishedAt)}</span></article>
+    </div>
+    <div className="news-evidence-layout">
+      <article className="news-distribution-card">
+        <div className="news-card-heading"><strong>Tone distribution</strong><span>Title-only classification</span></div>
+        <div className="news-tone-bar" aria-label={`${distribution.positive || 0} positive, ${distribution["mixed/neutral"] || 0} mixed or neutral, ${distribution.negative || 0} negative headlines`}>
+          <i className="positive" style={{ width: `${percentage(distribution.positive)}%` }} />
+          <i className="neutral" style={{ width: `${percentage(distribution["mixed/neutral"])}%` }} />
+          <i className="negative" style={{ width: `${percentage(distribution.negative)}%` }} />
+        </div>
+        <div className="news-tone-legend"><span className="positive">{distribution.positive || 0} positive</span><span>{distribution["mixed/neutral"] || 0} mixed/neutral</span><span className="negative">{distribution.negative || 0} negative</span></div>
+        <div className="news-theme-list">{(data.themes || []).map((item) => <span key={item.theme}>{item.theme}<b>{item.articleCount}</b></span>)}</div>
+      </article>
+      <article className="news-timeline-card">
+        <div className="news-card-heading"><strong>Daily headline tone</strong><span>Latest returned dates</span></div>
+        {visibleDays.length ? <div className="news-daily-tone">{visibleDays.map((day) => {
+          const score = Number(day.sentimentScore || 0);
+          return <div key={day.date}><span>{formatDate(`${day.date}T00:00:00`, { day: "numeric", month: "short" })}</span><div><i /><b className={`tone-${toneClass(day.sentimentLabel)}`} style={{ left: `${Math.max(0, Math.min(100, (score + 1) * 50))}%` }} /></div><strong>{score >= 0 ? "+" : ""}{score.toFixed(2)}</strong></div>;
+        })}</div> : <p>Publisher dates were unavailable for the returned headlines.</p>}
+      </article>
+    </div>
+    <div className="news-headline-evidence">
+      <div className="news-card-heading"><strong>Dated publisher evidence</strong><span>Open the original source to verify context</span></div>
+      {visibleArticles.length ? <div>{visibleArticles.map((item, index) => {
+        const content = <><div><span className={`headline-tone tone-${toneClass(item.sentimentLabel)}`}>{label(item.sentimentLabel)}</span><small>{(item.themes || []).slice(0, 2).join(" · ") || "General company update"}</small></div><strong>{item.title}</strong><span>{item.publisher} · {formatDate(item.publishedAt)}</span></>;
+        return item.url ? <a key={`${item.title}-${index}`} href={item.url} target="_blank" rel="noreferrer">{content}<b aria-hidden="true">↗</b></a> : <article key={`${item.title}-${index}`}>{content}</article>;
+      })}</div> : <p>No recent publisher headlines were returned.</p>}
+    </div>
+    <p className="news-intelligence-method"><strong>Method:</strong> {data.method} {data.disclaimer}</p>
+  </section>;
 }
 
 function CompanyCatalystPanel({ data, currency }) {
