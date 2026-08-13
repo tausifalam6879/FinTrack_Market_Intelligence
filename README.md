@@ -12,6 +12,7 @@ A focused public financial-information dashboard extracted as a new, independent
 - INR exchange rates and a searchable currency directory;
 - timestamped market headlines with theme filters and explicit publisher links;
 - sector filtering and company research;
+- visible dynamic company fundamentals, multi-period performance, 52-week range position and publisher headlines;
 - configurable downside alerts with optional browser notifications and a 15-minute scan interval;
 - a draggable sliding section selector for quick market, currency, news and intelligence navigation;
 - transparent, experimental market analytics;
@@ -21,6 +22,7 @@ A focused public financial-information dashboard extracted as a new, independent
 - visible validation metrics, feature importance and a session-by-session prediction audit;
 - per-prediction local counterfactual explainability showing current feature values, training references and directional probability impacts;
 - dynamic exchange-aware risk and benchmark intelligence with normalized performance, volatility, maximum drawdown, historical VaR, beta, correlation and tracking error;
+- dynamic same-sector and same-market peer comparison using comparable market-cap scale and provider medians;
 - a hybrid agentic research backend grounded in read-only market, ML, historical, company, macro and document-RAG tools;
 - a public Spring Boot API gateway with route allowlisting, validation, correlation IDs, metrics and downstream resilience;
 - company-document RAG with PDF page citations and official-source links.

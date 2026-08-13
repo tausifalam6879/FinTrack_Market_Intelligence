@@ -825,6 +825,63 @@ def _period_return(close: pd.Series, sessions: int) -> Optional[float]:
     return _round(((end / start) - 1) * 100, 2) if start else None
 
 
+def _percentage_from_fraction(value: Any) -> Optional[float]:
+    numeric = _round(value, 6)
+    return _round(numeric * 100, 2) if numeric is not None else None
+
+
+def _company_financial_sections(info: Dict[str, Any]) -> Dict[str, Dict[str, Optional[float]]]:
+    """Normalize Yahoo company fields without inventing a composite score."""
+    return {
+        "valuation": {
+            "marketCap": _round(info.get("marketCap"), 0),
+            "enterpriseValue": _round(info.get("enterpriseValue"), 0),
+            "trailingPE": _round(info.get("trailingPE")),
+            "forwardPE": _round(info.get("forwardPE")),
+            "priceToBook": _round(info.get("priceToBook")),
+            "priceToSales": _round(info.get("priceToSalesTrailing12Months")),
+        },
+        "profitability": {
+            "returnOnEquityPercent": _percentage_from_fraction(info.get("returnOnEquity")),
+            "profitMarginPercent": _percentage_from_fraction(info.get("profitMargins")),
+            "operatingMarginPercent": _percentage_from_fraction(info.get("operatingMargins")),
+        },
+        "growth": {
+            "revenueGrowthPercent": _percentage_from_fraction(info.get("revenueGrowth")),
+            "earningsGrowthPercent": _percentage_from_fraction(info.get("earningsGrowth")),
+        },
+        "balanceSheet": {
+            "debtToEquity": _round(info.get("debtToEquity")),
+            "currentRatio": _round(info.get("currentRatio")),
+            "quickRatio": _round(info.get("quickRatio")),
+            "totalCash": _round(info.get("totalCash"), 0),
+            "totalDebt": _round(info.get("totalDebt"), 0),
+        },
+        "cashFlowAndIncome": {
+            "totalRevenue": _round(info.get("totalRevenue"), 0),
+            "ebitda": _round(info.get("ebitda"), 0),
+            "netIncomeToCommon": _round(info.get("netIncomeToCommon"), 0),
+            "operatingCashflow": _round(info.get("operatingCashflow"), 0),
+            "freeCashflow": _round(info.get("freeCashflow"), 0),
+        },
+        "shareholderReturns": {
+            # Yahoo's current quote payload already exposes dividend yield as
+            # percentage points (for example 0.35 means 0.35%).
+            "dividendYieldPercent": _round(info.get("dividendYield")),
+            "payoutRatioPercent": _percentage_from_fraction(info.get("payoutRatio")),
+        },
+    }
+
+
+def _fifty_two_week_position(price: Any, low: Any, high: Any) -> Optional[float]:
+    current = _round(price, 6)
+    lower = _round(low, 6)
+    upper = _round(high, 6)
+    if current is None or lower is None or upper is None or upper <= lower:
+        return None
+    return _round(max(0.0, min(100.0, ((current - lower) / (upper - lower)) * 100)), 1)
+
+
 def company_research(symbol: str) -> Dict[str, Any]:
     symbol = _sanitize_symbol(symbol)
     key = f"company:{symbol}"
@@ -843,6 +900,9 @@ def company_research(symbol: str) -> Dict[str, Any]:
     close = frame["Close"].astype(float)
     fifty_two_week_low = _round(frame["Low"].min()) if "Low" in frame else None
     fifty_two_week_high = _round(frame["High"].max()) if "High" in frame else None
+    range_low = _round(info.get("fiftyTwoWeekLow")) or fifty_two_week_low
+    range_high = _round(info.get("fiftyTwoWeekHigh")) or fifty_two_week_high
+    financials = _company_financial_sections(info)
     result = {
         "symbol": symbol,
         "name": info.get("longName") or info.get("shortName") or snapshot["name"],
@@ -860,8 +920,9 @@ def company_research(symbol: str) -> Dict[str, Any]:
             "oneYear": _period_return(close, 252),
         },
         "range": {
-            "fiftyTwoWeekLow": _round(info.get("fiftyTwoWeekLow")) or fifty_two_week_low,
-            "fiftyTwoWeekHigh": _round(info.get("fiftyTwoWeekHigh")) or fifty_two_week_high,
+            "fiftyTwoWeekLow": range_low,
+            "fiftyTwoWeekHigh": range_high,
+            "currentPositionPercent": _fifty_two_week_position(snapshot.get("price"), range_low, range_high),
         },
         "fundamentals": {
             "marketCap": _round(info.get("marketCap"), 0),
@@ -873,6 +934,7 @@ def company_research(symbol: str) -> Dict[str, Any]:
             "debtToEquity": _round(info.get("debtToEquity")),
             "dividendYield": _round(info.get("dividendYield")),
         },
+        "financials": financials,
         "history": [
             {"date": index.strftime("%Y-%m-%d"), "close": _round(row["Close"])}
             for index, row in frame.tail(120).iterrows()

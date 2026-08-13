@@ -36,6 +36,9 @@ export default function IntelligenceDesk({ initialSymbol = "^NSEI" }) {
   const [peerComparison, setPeerComparison] = useState(null);
   const [peerComparisonLoading, setPeerComparisonLoading] = useState(false);
   const [peerComparisonError, setPeerComparisonError] = useState("");
+  const [companyResearch, setCompanyResearch] = useState(null);
+  const [companyResearchLoading, setCompanyResearchLoading] = useState(false);
+  const [companyResearchError, setCompanyResearchError] = useState("");
   const [documents, setDocuments] = useState([]);
   const [documentsLoading, setDocumentsLoading] = useState(false);
   const [documentPreparation, setDocumentPreparation] = useState(null);
@@ -96,6 +99,9 @@ export default function IntelligenceDesk({ initialSymbol = "^NSEI" }) {
     setExperimentsError("");
     setPeerComparisonLoading(!normalized.startsWith("^"));
     setPeerComparisonError("");
+    setCompanyResearch(null);
+    setCompanyResearchLoading(!normalized.startsWith("^"));
+    setCompanyResearchError("");
     setDocumentsLoading(true);
     setDocumentPreparation(null);
     setRagPrepareError("");
@@ -125,7 +131,7 @@ export default function IntelligenceDesk({ initialSymbol = "^NSEI" }) {
           }
         })
       : marketApi.peerComparison(normalized, refresh)
-        .then((response) => { if (loadSequenceRef.current === requestId) setPeerComparison(response); })
+        .then((response) => { if (loadSequenceRef.current === requestId) setPeerComparison(response.data || response); })
         .catch(() => {
           if (loadSequenceRef.current === requestId) {
             setPeerComparison(null);
@@ -133,6 +139,22 @@ export default function IntelligenceDesk({ initialSymbol = "^NSEI" }) {
           }
         })
         .finally(() => { if (loadSequenceRef.current === requestId) setPeerComparisonLoading(false); });
+    const companyRequest = normalized.startsWith("^")
+      ? Promise.resolve().then(() => {
+          if (loadSequenceRef.current === requestId) {
+            setCompanyResearch(null);
+            setCompanyResearchLoading(false);
+          }
+        })
+      : marketApi.company(normalized, refresh)
+        .then((response) => { if (loadSequenceRef.current === requestId) setCompanyResearch(response.data || response); })
+        .catch(() => {
+          if (loadSequenceRef.current === requestId) {
+            setCompanyResearch(null);
+            setCompanyResearchError("Company fundamentals are temporarily unavailable.");
+          }
+        })
+        .finally(() => { if (loadSequenceRef.current === requestId) setCompanyResearchLoading(false); });
     const documentsRequest = normalized.startsWith("^")
       ? Promise.resolve().then(() => { setDocuments([]); setDocumentPreparation(null); setDocumentsLoading(false); })
       : marketApi.documents(normalized)
@@ -180,7 +202,7 @@ export default function IntelligenceDesk({ initialSymbol = "^NSEI" }) {
     } finally {
       if (loadSequenceRef.current === requestId) setLoading(false);
     }
-    await Promise.allSettled([monitoringRequest, experimentsRequest, peersRequest, documentsRequest]);
+    await Promise.allSettled([monitoringRequest, experimentsRequest, peersRequest, companyRequest, documentsRequest]);
   };
 
   useEffect(() => { load(initialSymbol, false, true); }, [initialSymbol]);
@@ -296,8 +318,9 @@ export default function IntelligenceDesk({ initialSymbol = "^NSEI" }) {
           <Metric label="RSI (14)" value={formatNumber(analysis.technicalIndicators?.rsi14)} hint="Below 30 oversold · above 70 overbought" />
           <Metric label="Walk-forward score" value={`${analysis.model?.balancedAccuracy ?? analysis.model?.backtestAccuracy}%`} hint={`${analysis.model?.walkForwardFolds || 1} time-ordered folds · ${analysis.model?.quality} quality`} />
         </div>
-        {analysis.riskBenchmark && <RiskBenchmarkPanel data={analysis.riskBenchmark} symbol={analysis.symbol} />}
+        {!analysis.symbol.startsWith("^") && <CompanyFundamentalsPanel data={companyResearch} loading={companyResearchLoading} error={companyResearchError} />}
         {!analysis.symbol.startsWith("^") && <SectorPeerPanel data={peerComparison} loading={peerComparisonLoading} error={peerComparisonError} />}
+        {analysis.riskBenchmark && <RiskBenchmarkPanel data={analysis.riskBenchmark} symbol={analysis.symbol} />}
         {localExplanation && <PredictionExplanation explanation={localExplanation} outlook={analysis.outlook} />}
         <ModelRegistryPanel status={modelStatus} loading={modelStatusLoading} error={modelStatusError} activeModel={analysis.model} />
         <ExperimentTrackingPanel data={experiments} loading={experimentsLoading} error={experimentsError} />
@@ -363,6 +386,93 @@ export default function IntelligenceDesk({ initialSymbol = "^NSEI" }) {
 }
 
 function Metric({ label, value, hint }) { return <article className="metric-card"><small>{label}</small><strong>{value}</strong><span>{hint}</span></article>; }
+
+function CompanyFundamentalsPanel({ data, loading, error }) {
+  if (loading) return <section className="fundamentals-panel fundamentals-state" aria-live="polite">
+    <div><p className="eyebrow">COMPANY FUNDAMENTALS & PERFORMANCE</p><h3>Loading public company evidence…</h3></div>
+    <span>Provider profile</span>
+  </section>;
+  if (error || !data) return <section className="fundamentals-panel fundamentals-state fundamentals-unavailable">
+    <div><p className="eyebrow">COMPANY FUNDAMENTALS & PERFORMANCE</p><h3>Company evidence is temporarily unavailable</h3><p>{error || "Technical and model evidence above remains independent."}</p></div>
+    <span>Optional evidence</span>
+  </section>;
+
+  const financials = data.financials || {};
+  const valuation = financials.valuation || data.fundamentals || {};
+  const profitability = financials.profitability || {};
+  const growth = financials.growth || {};
+  const balance = financials.balanceSheet || {};
+  const cashFlow = financials.cashFlowAndIncome || {};
+  const shareholder = financials.shareholderReturns || {};
+  const currency = data.quote?.currency;
+  const money = (value) => value === null || value === undefined ? "—" : new Intl.NumberFormat("en", {
+    style: currency ? "currency" : "decimal", currency: currency || undefined, notation: "compact", maximumFractionDigits: 2
+  }).format(Number(value));
+  const ratio = (value) => value === null || value === undefined ? "—" : `${Number(value).toFixed(2)}x`;
+  const percent = (value) => value === null || value === undefined ? "—" : `${Number(value).toFixed(1)}%`;
+  const performance = data.performance || {};
+  const range = data.range || {};
+  const rangePosition = Number.isFinite(Number(range.currentPositionPercent)) ? Number(range.currentPositionPercent) : null;
+  const news = (data.news || []).slice(0, 3);
+  const companyWebsite = /^https?:\/\//i.test(data.website || "") ? data.website : null;
+  const groups = [
+    ["Valuation", [
+      ["Market cap", money(valuation.marketCap)], ["Enterprise value", money(valuation.enterpriseValue)],
+      ["Trailing P/E", ratio(valuation.trailingPE)], ["Forward P/E", ratio(valuation.forwardPE)],
+      ["Price / book", ratio(valuation.priceToBook)], ["Price / sales", ratio(valuation.priceToSales)],
+    ]],
+    ["Profitability & growth", [
+      ["Return on equity", percent(profitability.returnOnEquityPercent)], ["Profit margin", percent(profitability.profitMarginPercent)],
+      ["Operating margin", percent(profitability.operatingMarginPercent)], ["Revenue growth", percent(growth.revenueGrowthPercent)],
+      ["Earnings growth", percent(growth.earningsGrowthPercent)], ["Dividend yield", percent(shareholder.dividendYieldPercent ?? data.fundamentals?.dividendYield)],
+      ["Payout ratio", percent(shareholder.payoutRatioPercent)],
+    ]],
+    ["Balance sheet & cash flow", [
+      ["Total revenue", money(cashFlow.totalRevenue)], ["Net income", money(cashFlow.netIncomeToCommon)],
+      ["EBITDA", money(cashFlow.ebitda)], ["Operating cash flow", money(cashFlow.operatingCashflow)],
+      ["Free cash flow", money(cashFlow.freeCashflow)], ["Total cash", money(balance.totalCash)],
+      ["Total debt", money(balance.totalDebt)], ["Debt / equity", percent(balance.debtToEquity)],
+      ["Current ratio", ratio(balance.currentRatio)], ["Quick ratio", ratio(balance.quickRatio)],
+    ]],
+  ];
+
+  return <section className="fundamentals-panel" aria-labelledby="fundamentals-title">
+    <div className="fundamentals-heading">
+      <div><p className="eyebrow">COMPANY FUNDAMENTALS & PERFORMANCE</p><h3 id="fundamentals-title">{data.name}</h3><p>{data.sector} · {data.industry} · {data.country}</p></div>
+      {companyWebsite ? <a href={companyWebsite} target="_blank" rel="noreferrer">Company website ↗</a> : <span>Public profile</span>}
+    </div>
+    {data.summary && <p className="company-summary">{data.summary}</p>}
+    <div className="company-performance-grid">
+      <PerformanceMetric label="1 day" value={performance.oneDay} />
+      <PerformanceMetric label="1 month" value={performance.oneMonth} />
+      <PerformanceMetric label="3 months" value={performance.threeMonths} />
+      <PerformanceMetric label="6 months" value={performance.sixMonths} />
+      <PerformanceMetric label="1 year" value={performance.oneYear} />
+    </div>
+    <div className="company-range-card">
+      <div><strong>52-week price position</strong><span>{rangePosition === null ? "Position unavailable" : `${rangePosition.toFixed(1)}% of observed range`}</span></div>
+      <div className="company-range-track">{rangePosition !== null && <><i style={{ width: `${rangePosition}%` }} /><b style={{ left: `${rangePosition}%` }} /></>}</div>
+      <div><span>{formatNumber(range.fiftyTwoWeekLow)} low</span><strong>{formatNumber(data.quote?.price)} current</strong><span>{formatNumber(range.fiftyTwoWeekHigh)} high</span></div>
+    </div>
+    <div className="fundamental-groups">{groups.map(([title, entries]) => <FundamentalGroup key={title} title={title} entries={entries} />)}</div>
+    <div className="company-headlines">
+      <div className="company-headlines-heading"><strong>Recent company headlines</strong><span>Publisher evidence, not a sentiment guarantee</span></div>
+      {news.length ? <div>{news.map((item, index) => item.url ? <a key={`${item.title}-${index}`} href={item.url} target="_blank" rel="noreferrer">
+        <strong>{item.title}</strong><span>{item.publisher} · {item.publishedAt ? new Date(item.publishedAt).toLocaleDateString("en-IN") : "Date unavailable"}</span>
+      </a> : <article key={`${item.title}-${index}`}><strong>{item.title}</strong><span>{item.publisher}</span></article>)}</div> : <p>No recent publisher headlines were returned for this company.</p>}
+    </div>
+    <p className="fundamentals-method"><strong>Source:</strong> {data.source}. Figures may use different reporting periods and are shown as provider evidence, not an accounting audit or investment recommendation.{data.dataAsOf ? ` Data as of ${new Date(data.dataAsOf).toLocaleString("en-IN")}.` : ""}</p>
+  </section>;
+}
+
+function PerformanceMetric({ label, value }) {
+  const numeric = value === null || value === undefined ? null : Number(value);
+  return <article className={numeric === null ? "" : numeric >= 0 ? "positive" : "negative"}><small>{label}</small><strong>{numeric === null ? "—" : `${numeric > 0 ? "+" : ""}${numeric.toFixed(1)}%`}</strong></article>;
+}
+
+function FundamentalGroup({ title, entries }) {
+  return <article><h4>{title}</h4><dl>{entries.map(([label, value]) => <div key={label}><dt>{label}</dt><dd>{value}</dd></div>)}</dl></article>;
+}
 
 function RiskBenchmarkPanel({ data, symbol }) {
   if (!data || data.status === "unavailable") return <section className="risk-benchmark-panel risk-unavailable">
