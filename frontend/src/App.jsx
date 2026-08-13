@@ -8,7 +8,7 @@ const tabs = [
   { id: "markets", label: "Market Pulse", icon: "↗" },
   { id: "currency", label: "INR Currency Desk", icon: "₹" },
   { id: "news", label: "Market News", icon: "◫" },
-  { id: "intelligence", label: "Open Intelligence", icon: "✦" }
+  { id: "intelligence", label: "Intelligence & MLOps", icon: "✦" }
 ];
 
 export default function App() {

@@ -19,7 +19,9 @@ A focused public financial-information dashboard extracted as a new, independent
 - walk-forward comparison of Logistic Regression, Random Forest and Histogram Gradient Boosting;
 - a seeded PyTorch MLP comparator with early stopping and separate checkpoint lineage;
 - visible validation metrics, feature importance and a session-by-session prediction audit;
+- per-prediction local counterfactual explainability showing current feature values, training references and directional probability impacts;
 - a hybrid agentic research backend grounded in read-only market, ML, historical, company, macro and document-RAG tools;
+- a public Spring Boot API gateway with route allowlisting, validation, correlation IDs, metrics and downstream resilience;
 - company-document RAG with PDF page citations and official-source links.
 
 > Market quotes can be delayed by the upstream exchange/provider. Every screen displays its data timestamp and never presents cached values as live.
@@ -101,6 +103,8 @@ POST /market/documents/ask
 
 The UI exposes the selected model, candidate comparison, walk-forward folds, balanced accuracy, precision/recall/F1, ROC AUC, Brier score, diagnostic permutation importance and a runtime prediction audit. When explicitly configured, Gemini receives verified tool results and explains them in plain language; Gemini is not the component that generates the numerical prediction. With no `LLM_PROVIDER`, the agent immediately uses deterministic evidence synthesis instead of waiting for an unconfigured local service. Gemini and Ollama are therefore optional and are not required for the predictive pipeline.
 
+For each live prediction, FinTrack also produces a local sensitivity explanation. It replaces one current feature at a time with its training-reference median and measures the change in model probability while holding the other current features fixed. The dashboard separates the raw ML probability, reliability shrinkage, news overlay, macro overlay and final probability instead of presenting one opaque score. These impacts explain model sensitivity for this one row; they can overlap when features interact and are explicitly not treated as causal effects or additive SHAP values. Newly trained offline artifacts persist their training-window medians, while older approved artifacts use a clearly labelled current-dataset median fallback until retrained.
+
 ## Hybrid agentic research flow
 
 The public `/market/agent` route uses a `plan -> execute -> synthesize` workflow. `agent_orchestrator.py` deterministically classifies the question and selects only the required read-only tools: current quote, ML/technical outlook, requested historical session, company fundamentals, indexed document RAG, recent headlines, macro factors, market breadth or global indices. The LLM does not choose tools and no mutation-capable tool is exposed, so prompt text cannot approve a model, upload a document or alter project data.
@@ -109,10 +113,31 @@ For annual-report, filing, debt, revenue or citation questions, the agent retrie
 
 This remains an educational next-session probability experiment, not a guaranteed return, target price or buy/sell recommendation. Feature importance describes model dependency and does not prove market causality.
 
+## Spring Boot public API gateway
+
+`gateway-service/` is the Java/Spring Boot boundary in front of the Python data and ML service. It intentionally has no registration, login, JWT, portfolio or user database because FinTrack Market Intelligence is an open public research dashboard. It stores no personal data.
+
+The gateway keeps a fixed FastAPI upstream and proxies only an explicit allowlist of read-only research routes. It validates arbitrary market symbols without restricting users to a fixed company list, rejects unknown query/body fields, caps request bodies at 64 KB, adds a correlation ID, exposes aggregate Micrometer metrics and reports whether the Python service is ready. A timeout and small circuit breaker prevent repeated requests from overwhelming a sleeping or unavailable upstream. Public requests cannot upload an arbitrary document URL, train a model or approve an artifact.
+
+Local React traffic uses `http://localhost:8081` so the complete development path is:
+
+```text
+React :5173 -> Spring Boot gateway :8081 -> FastAPI data/ML service :8002
+```
+
+The Maven wrapper downloads a checksum-verified Maven distribution when Maven is not installed globally:
+
+```powershell
+cd gateway-service
+.\mvnw.cmd test
+.\mvnw.cmd spring-boot:run
+```
+
 ## Project structure
 
 ```text
 frontend/        React + Vite public website
+gateway-service/ Java 21 + Spring Boot public API boundary
 market-service/  FastAPI API, persistence, data ingestion and offline ML training
 scripts/         Release-snapshot maintenance utility
 ```
@@ -121,7 +146,7 @@ scripts/         Release-snapshot maintenance utility
 
 ### Production-style Docker stack
 
-`compose.yaml` starts three isolated services: the non-root FastAPI runtime, PostgreSQL 17 and an MLflow tracking server. PostgreSQL, API and MLflow ports bind to `127.0.0.1` by default instead of being exposed to the local network. Copy `compose.env.example` to `.env`, replace the development password/contact values, and then run:
+`compose.yaml` starts four isolated services: the non-root Spring Boot gateway, non-root FastAPI runtime, PostgreSQL 17 and an MLflow tracking server. PostgreSQL, gateway, API and MLflow ports bind to `127.0.0.1` by default instead of being exposed to the local network. Copy `compose.env.example` to `.env`, replace the development password/contact values, and then run:
 
 ```powershell
 docker compose up --build
@@ -130,6 +155,7 @@ docker compose up --build
 The stack exposes:
 
 - dashboard API: `http://127.0.0.1:8002`;
+- public Spring gateway: `http://127.0.0.1:8081`;
 - API readiness: `http://127.0.0.1:8002/health/ready`;
 - MLflow UI: `http://127.0.0.1:5000`;
 - PostgreSQL: `127.0.0.1:5433` for optional local inspection.
@@ -154,6 +180,7 @@ The runtime container runs as the unprivileged `fintrack` user, writes only to d
 
 - `GET /health` and `GET /health/live` confirm that the API process is alive. They do not call Yahoo Finance or an LLM.
 - `GET /health/ready` performs a minimal database query and returns HTTP `503` when the required persistence layer is unavailable.
+- The Spring gateway exposes the same health paths on port `8081`; its readiness additionally verifies that FastAPI is ready and reports the circuit-breaker state.
 - Model artifact storage, optional LLM configuration and external training-toolchain availability are reported separately and do not incorrectly restart the public API during an upstream-provider outage.
 - Responses expose environment/version/short commit metadata but never return database URLs, passwords, API keys or local artifact paths.
 
@@ -165,12 +192,13 @@ Render now uses `/health/ready` as its deployment health check.
 
 1. installs the reproducible Python 3.12 training environment and runs all backend tests;
 2. creates the complete schema against a real PostgreSQL 17 service and verifies readiness;
-3. installs frontend dependencies from `package-lock.json` and produces a Vite production build;
-4. builds the lightweight API Docker image, starts it, checks liveness/readiness and verifies that it runs as the non-root `fintrack` user.
+3. builds and tests the Java 21 Spring Boot gateway, validation and circuit-breaker policy;
+4. installs frontend dependencies from `package-lock.json` and produces a Vite production build;
+5. builds both API containers, starts FastAPI, checks liveness/readiness and verifies that it runs as the non-root `fintrack` user.
 
-The GitHub Pages deployment workflow uses the current supported major versions of the official checkout/setup actions rather than nonexistent `v7` tags. In repository branch protection, make `backend-tests`, `frontend-build` and `api-container` required checks before merging to `main`.
+The GitHub Pages deployment workflow uses the current supported major versions of the official checkout/setup actions rather than nonexistent `v7` tags. In repository branch protection, make `backend-tests`, `gateway-tests`, `frontend-build` and `api-container` required checks before merging to `main`.
 
-Open `http://localhost:5173`.
+Open `http://localhost:5173`. Local frontend requests use the Spring gateway on port `8081`; the gateway forwards validated requests to FastAPI on port `8002`.
 
 The frontend uses this project's local market service by default. For a deployed API, create `frontend/.env.local` before building:
 
@@ -262,11 +290,13 @@ The persistence schema contains public-company metadata, OHLCV bars, ingestion a
 
 For a public demo, keep this focused application in its own GitHub repository. Deploy `frontend/` to GitHub Pages and deploy `market-service/` as a separate Render web service using the included `render.yaml`. A new Render account is not required, but the Python API needs its own service because GitHub Pages can host only the static frontend.
 
-The public frontend workflow builds against:
+The zero-cost public frontend workflow currently builds directly against the existing Render FastAPI service:
 
 ```text
 https://fintrack-market-intelligence-api.onrender.com
 ```
+
+This avoids provisioning a second always-on cloud service without the user's approval. The Spring gateway is exercised locally, in Docker Compose and in CI; it can be deployed as a separate container later by pointing `FINTRACK_GATEWAY_UPSTREAM_BASE_URL` at the private FastAPI service and changing `VITE_MARKET_API_BASE_URL` to the gateway URL.
 
 GitHub Pages publishes the frontend from `.github/workflows/deploy-pages.yml`. The bundled verified snapshot renders immediately, then the page replaces it with the newest Render response in the background.
 

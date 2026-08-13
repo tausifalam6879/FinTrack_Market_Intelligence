@@ -81,6 +81,7 @@ class DataTrainingPipelineTests(unittest.TestCase):
         trusted_artifact = joblib.load(artifact_path)
         self.assertEqual("TEST.NS", trusted_artifact["symbol"])
         self.assertEqual(result["modelRunId"], trusted_artifact["modelRunId"])
+        self.assertEqual(set(trusted_artifact["featureColumns"]), set(trusted_artifact["explainabilityReference"]))
         self.assertEqual(
             len(trusted_artifact["featureColumns"]),
             len(self.database.feature_baselines(result["modelRunId"])),

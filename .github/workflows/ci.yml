@@ -95,10 +95,31 @@ jobs:
           VITE_MARKET_API_BASE_URL: https://fintrack-market-intelligence-api.onrender.com
         run: npm run build
 
+  gateway-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Set up Java
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: maven
+          cache-dependency-path: gateway-service/pom.xml
+
+      - name: Test Spring Boot public gateway
+        working-directory: gateway-service
+        run: |
+          chmod +x mvnw
+          ./mvnw --batch-mode verify
+
   api-container:
     runs-on: ubuntu-latest
     timeout-minutes: 20
-    needs: [backend-tests, frontend-build]
+    needs: [backend-tests, frontend-build, gateway-tests]
     steps:
       - name: Checkout repository
         uses: actions/checkout@v6
@@ -106,12 +127,28 @@ jobs:
       - name: Build lightweight API image
         run: docker build --file market-service/Dockerfile --tag fintrack-api:ci market-service
 
+      - name: Build Spring Boot gateway image
+        run: docker build --file gateway-service/Dockerfile --tag fintrack-gateway:ci gateway-service
+
       - name: Verify non-root container and readiness endpoint
         shell: bash
         run: |
           set -euo pipefail
-          container_id=$(docker run --detach --publish 127.0.0.1:8002:8000 fintrack-api:ci)
-          trap 'docker logs "$container_id"; docker rm --force "$container_id" >/dev/null' EXIT
+          network_name="fintrack-ci-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          api_name="fintrack-api-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          docker network create "$network_name" >/dev/null
+          api_id=$(docker run --detach --name "$api_name" --network "$network_name" --publish 127.0.0.1:8002:8000 fintrack-api:ci)
+          gateway_id=""
+          cleanup() {
+            if [ -n "$gateway_id" ]; then
+              docker logs "$gateway_id" || true
+              docker rm --force "$gateway_id" >/dev/null || true
+            fi
+            docker logs "$api_id" || true
+            docker rm --force "$api_id" >/dev/null || true
+            docker network rm "$network_name" >/dev/null || true
+          }
+          trap cleanup EXIT
           for attempt in $(seq 1 30); do
             if curl --fail --silent http://127.0.0.1:8002/health/ready > readiness.json; then
               break
@@ -120,4 +157,18 @@ jobs:
           done
           curl --fail --show-error http://127.0.0.1:8002/health/live
           python -c "import json; report=json.load(open('readiness.json')); assert report['status']=='ready'; assert report['checks']['database']['status']=='ready'"
-          test "$(docker inspect --format '{{.Config.User}}' "$container_id")" = "fintrack"
+          test "$(docker inspect --format '{{.Config.User}}' "$api_id")" = "fintrack"
+
+          gateway_id=$(docker run --detach --network "$network_name" --publish 127.0.0.1:8081:8080 --env "FINTRACK_GATEWAY_UPSTREAM_BASE_URL=http://${api_name}:8000" fintrack-gateway:ci)
+          for attempt in $(seq 1 30); do
+            if curl --fail --silent http://127.0.0.1:8081/health/ready > gateway-readiness.json; then
+              break
+            fi
+            sleep 2
+          done
+          python -c "import json; report=json.load(open('gateway-readiness.json')); assert report['status']=='ready'; assert report['upstream']=='ready'; assert report['personalDataStored'] is False"
+          curl --fail --silent --dump-header gateway-headers.txt "http://127.0.0.1:8081/market/model-status?symbol=RELIANCE.NS" > gateway-model-status.json
+          grep --ignore-case --quiet '^X-FinTrack-Gateway: spring-boot' gateway-headers.txt
+          test "$(curl --silent --output invalid-gateway-response.json --write-out '%{http_code}' 'http://127.0.0.1:8081/market/analysis?symbol=https://attacker.example/file')" = "400"
+          python -c "import json; report=json.load(open('invalid-gateway-response.json')); assert report['code']=='invalid_symbol'"
+          test "$(docker inspect --format '{{.Config.User}}' "$gateway_id")" = "fintrack"

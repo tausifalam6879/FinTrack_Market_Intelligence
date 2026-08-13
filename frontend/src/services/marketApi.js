@@ -1,6 +1,6 @@
 import bundledSnapshot from "../data/bundledMarketSnapshot.json";
 
-const DEFAULT_API = "http://localhost:8002";
+const DEFAULT_API = "http://localhost:8081";
 const API_BASE = String(import.meta.env.VITE_MARKET_API_BASE_URL || DEFAULT_API).replace(/\/$/, "");
 const CACHE_PREFIX = "fintrack.market.intelligence.v1";
 
@@ -61,7 +61,18 @@ const request = async (path, { method = "GET", body, timeout = 30000 } = {}) => 
       const detail = await response.text();
       throw new Error(detail || `Request failed with status ${response.status}`);
     }
-    return await response.json();
+    const payload = await response.json();
+    const gateway = response.headers.get("X-FinTrack-Gateway");
+    if (gateway && payload && typeof payload === "object" && !Array.isArray(payload)) {
+      return {
+        ...payload,
+        _delivery: {
+          gateway,
+          requestId: response.headers.get("X-Request-Id") || null
+        }
+      };
+    }
+    return payload;
   } finally {
     window.clearTimeout(timer);
   }

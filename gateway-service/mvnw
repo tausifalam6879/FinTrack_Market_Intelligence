@@ -1,0 +1,35 @@
+#!/bin/sh
+set -eu
+
+MAVEN_VERSION="3.9.16"
+WRAPPER_ROOT="${HOME}/.m2/wrapper/dists/fintrack-apache-maven-${MAVEN_VERSION}"
+MAVEN_COMMAND="${WRAPPER_ROOT}/apache-maven-${MAVEN_VERSION}/bin/mvn"
+ARCHIVE="${WRAPPER_ROOT}/apache-maven.zip"
+EXPECTED_SHA512="ed41650d42485cfc243fad22158caf9cbb5dc408ce7a09ddb94dd42a019de929ca43065bfa450612cf12bf78b5cafa3884b96c090de326ff590448c933454af3"
+
+if [ -x "${MAVEN_COMMAND}" ]; then
+  exec "${MAVEN_COMMAND}" "$@"
+fi
+
+if command -v mvn >/dev/null 2>&1; then
+  exec mvn "$@"
+fi
+
+mkdir -p "${WRAPPER_ROOT}"
+if command -v curl >/dev/null 2>&1; then
+  curl --fail --location --silent --show-error \
+    "https://repo.maven.apache.org/maven2/org/apache/maven/apache-maven/${MAVEN_VERSION}/apache-maven-${MAVEN_VERSION}-bin.zip" \
+    --output "${ARCHIVE}"
+elif command -v wget >/dev/null 2>&1; then
+  wget -q \
+    "https://repo.maven.apache.org/maven2/org/apache/maven/apache-maven/${MAVEN_VERSION}/apache-maven-${MAVEN_VERSION}-bin.zip" \
+    -O "${ARCHIVE}"
+else
+  echo "curl or wget is required to download Maven." >&2
+  exit 1
+fi
+
+echo "${EXPECTED_SHA512}  ${ARCHIVE}" | sha512sum --check --status
+unzip -q "${ARCHIVE}" -d "${WRAPPER_ROOT}"
+rm -f "${ARCHIVE}"
+exec "${MAVEN_COMMAND}" "$@"

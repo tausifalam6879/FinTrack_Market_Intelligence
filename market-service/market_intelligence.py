@@ -1084,6 +1084,99 @@ def _feature_importance(
     return sorted(values, key=lambda item: item["importance"] or 0, reverse=True)
 
 
+def _feature_display_value(feature: str, value: float) -> str:
+    if feature == "rsi_14":
+        return f"{value * 100:.1f}"
+    return f"{value * 100:+.2f}%"
+
+
+def _local_feature_explanation(
+    estimator: Pipeline,
+    latest_features: pd.DataFrame,
+    dataset: pd.DataFrame,
+    feature_columns: List[str],
+    reliability_weight: float,
+    artifact_reference: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """Explain one prediction through transparent one-feature counterfactual sensitivity.
+
+    Each feature is replaced by its training reference while all other current
+    values stay fixed. The resulting probability change is local and directional,
+    but deliberately not presented as causal or additively SHAP-like.
+    """
+    current = latest_features[feature_columns].iloc[0].astype(float)
+    valid_artifact_reference = artifact_reference or {}
+    if all(feature in valid_artifact_reference for feature in feature_columns):
+        reference = pd.Series(
+            {feature: float(valid_artifact_reference[feature]) for feature in feature_columns}
+        )
+        reference_source = "offline training-window median"
+    else:
+        reference = dataset[feature_columns].median().astype(float)
+        reference_source = "current two-year model-dataset median"
+
+    current_frame = pd.DataFrame([current.to_dict()], columns=feature_columns)
+    current_probability = float(estimator.predict_proba(current_frame)[0][1])
+    baseline_frame = pd.DataFrame([reference.to_dict()], columns=feature_columns)
+    baseline_probability = float(estimator.predict_proba(baseline_frame)[0][1])
+    contributions: List[Dict[str, Any]] = []
+
+    for feature in feature_columns:
+        counterfactual = current.copy()
+        counterfactual[feature] = reference[feature]
+        counterfactual_frame = pd.DataFrame([counterfactual.to_dict()], columns=feature_columns)
+        without_current_value = float(estimator.predict_proba(counterfactual_frame)[0][1])
+        raw_impact_points = (current_probability - without_current_value) * 100
+        adjusted_impact_points = raw_impact_points * reliability_weight
+        direction = (
+            "supports_up" if adjusted_impact_points > 0.05
+            else "supports_down" if adjusted_impact_points < -0.05
+            else "neutral"
+        )
+        contributions.append({
+            "feature": feature,
+            "label": FEATURE_LABELS.get(feature, feature),
+            "currentValue": _round(float(current[feature]), 6),
+            "referenceValue": _round(float(reference[feature]), 6),
+            "currentDisplay": _feature_display_value(feature, float(current[feature])),
+            "referenceDisplay": _feature_display_value(feature, float(reference[feature])),
+            "rawProbabilityImpactPoints": _round(raw_impact_points, 2),
+            "adjustedProbabilityImpactPoints": _round(adjusted_impact_points, 2),
+            "direction": direction,
+        })
+
+    contributions.sort(
+        key=lambda item: abs(float(item["adjustedProbabilityImpactPoints"] or 0)),
+        reverse=True,
+    )
+    positive = next((item for item in contributions if item["direction"] == "supports_up"), None)
+    negative = next((item for item in contributions if item["direction"] == "supports_down"), None)
+    if positive and negative:
+        summary = (
+            f"{positive['label']} gives the strongest upward support, while "
+            f"{negative['label']} creates the strongest downward pressure."
+        )
+    elif positive:
+        summary = f"{positive['label']} gives the strongest upward support in this prediction."
+    elif negative:
+        summary = f"{negative['label']} creates the strongest downward pressure in this prediction."
+    else:
+        summary = "No single feature materially changes the current probability from its reference value."
+
+    return {
+        "method": "One-feature-at-a-time counterfactual probability sensitivity.",
+        "referenceSource": reference_source,
+        "rawModelProbabilityUp": _round(current_probability * 100, 1),
+        "allReferenceProbabilityUp": _round(baseline_probability * 100, 1),
+        "summary": summary,
+        "contributions": contributions,
+        "caveat": (
+            "Impacts are local sensitivity checks, may overlap when features interact, "
+            "and do not prove that a feature caused the market move."
+        ),
+    }
+
+
 def _record_prediction(payload: Dict[str, Any], model_data_date: str) -> List[Dict[str, Any]]:
     """Keep an explainable runtime audit and score it when a later session arrives."""
     symbol = payload["symbol"]
@@ -1199,6 +1292,7 @@ def market_prediction(symbol: str) -> Dict[str, Any]:
         model_dataset_version = run["dataset_version"]
         serving_mode = "approved_artifact"
         model_training_rows = int(run["training_rows"]) + int(run["holdout_rows"])
+        explanation_reference = artifact.get("explainabilityReference")
         selection_description = "Approved offline artifact that passed the final chronological holdout quality gate."
     else:
         validation = _walk_forward_model_comparison(dataset, feature_columns)
@@ -1210,6 +1304,7 @@ def market_prediction(symbol: str) -> Dict[str, Any]:
         model_dataset_version = None
         serving_mode = "runtime_fallback"
         model_training_rows = len(dataset)
+        explanation_reference = None
         selection_description = "Runtime fallback: best of three classifiers by walk-forward validation score."
 
     raw_technical_probability = float(model.predict_proba(latest_features[feature_columns])[0][1])
@@ -1244,6 +1339,14 @@ def market_prediction(symbol: str) -> Dict[str, Any]:
     baseline_accuracy = max(float(dataset["target"].mean()), 1 - float(dataset["target"].mean()))
     quality = "useful" if balanced_accuracy >= 0.58 and auc >= 0.57 else "weak" if balanced_accuracy < 0.53 else "limited"
     importance = _feature_importance(model, dataset, feature_columns)
+    local_explanation = _local_feature_explanation(
+        model,
+        latest_features,
+        dataset,
+        feature_columns,
+        reliability_weight,
+        explanation_reference,
+    )
     comparisons = [
         {
             "id": item["id"],
@@ -1313,6 +1416,16 @@ def market_prediction(symbol: str) -> Dict[str, Any]:
             "validation": "Expanding-window TimeSeriesSplit with a one-session gap; no random shuffle.",
             "modelsCompared": comparisons,
             "featureImportance": importance,
+            "localExplanation": {
+                **local_explanation,
+                "probabilityPath": {
+                    "rawTechnicalProbabilityUp": _round(raw_technical_probability * 100, 1),
+                    "reliabilityAdjustedProbabilityUp": _round(technical_probability * 100, 1),
+                    "newsAdjustmentPoints": _round(news_adjustment * 100, 2),
+                    "macroAdjustmentPoints": _round(macro_adjustment * 100, 2),
+                    "finalProbabilityUp": _round(probability_up * 100, 1),
+                },
+            },
         },
         "dataAsOf": snapshot["dataAsOf"],
         "modelDataDate": frame.index[-1].strftime("%Y-%m-%d"),

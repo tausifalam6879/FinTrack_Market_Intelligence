@@ -168,6 +168,7 @@ export default function IntelligenceDesk({ initialSymbol = "^NSEI" }) {
   const history = useMemo(() => analysis?.history || [], [analysis]);
   const modelComparisons = analysis?.model?.modelsCompared || [];
   const featureImportance = analysis?.model?.featureImportance || [];
+  const localExplanation = analysis?.model?.localExplanation;
   const predictionAudit = analysis?.predictionAudit || [];
   const selectCompany = (company) => {
     setResolvedCompany(company);
@@ -261,6 +262,8 @@ export default function IntelligenceDesk({ initialSymbol = "^NSEI" }) {
       {result?.mode === "cache" && <div className="notice warning">Showing the last verified browser research while the live backend reconnects.</div>}
       {error && <div className="notice error">{error}</div>}
 
+      <OperationsSummary status={modelStatus} loading={modelStatusLoading} error={modelStatusError} />
+
       {analysis && <>
         <div className="analysis-hero">
           <div><span className="asset-label">{analysis.symbol}</span><h3>{resolvedCompany?.symbol === analysis.symbol ? resolvedCompany.name : analysis.name}</h3><p>Evidence as of {new Date(analysis.dataAsOf).toLocaleString("en-IN")}</p></div>
@@ -272,6 +275,7 @@ export default function IntelligenceDesk({ initialSymbol = "^NSEI" }) {
           <Metric label="RSI (14)" value={formatNumber(analysis.technicalIndicators?.rsi14)} hint="Below 30 oversold · above 70 overbought" />
           <Metric label="Walk-forward score" value={`${analysis.model?.balancedAccuracy ?? analysis.model?.backtestAccuracy}%`} hint={`${analysis.model?.walkForwardFolds || 1} time-ordered folds · ${analysis.model?.quality} quality`} />
         </div>
+        {localExplanation && <PredictionExplanation explanation={localExplanation} outlook={analysis.outlook} />}
         <ModelRegistryPanel status={modelStatus} loading={modelStatusLoading} error={modelStatusError} activeModel={analysis.model} />
         <ExperimentTrackingPanel data={experiments} loading={experimentsLoading} error={experimentsError} />
         {!symbol.startsWith("^") && <DocumentRagPanel
@@ -357,6 +361,87 @@ function AgentEvidenceTrace({ meta }) {
   </details>;
 }
 
+function OperationsSummary({ status, loading, error }) {
+  const dataOps = status?.dataOperations;
+  const drift = status?.driftMonitoring;
+  const retraining = status?.retrainingPolicy;
+  const schema = dataOps?.storage?.schema;
+  const checking = loading || (!status && !error);
+  const storageLabel = dataOps?.storage?.durableAcrossDeploys ? "Durable PostgreSQL" : "Instance storage";
+  const freshness = String(dataOps?.freshness || "provider_only").replaceAll("_", " ");
+  const driftLabel = String(drift?.status || "collecting evidence").replaceAll("_", " ");
+
+  return <aside className="operations-summary" aria-labelledby="operations-summary-title">
+    <div className="operations-summary-copy">
+      <span className="operations-summary-kicker">NEW · DATA & MLOPS STATUS</span>
+      <strong id="operations-summary-title">Operational checks are now visible here</strong>
+      <small>{checking
+        ? "Loading data freshness, database and model-monitoring evidence…"
+        : error
+          ? error
+          : `${dataOps?.storedBars || 0} validated daily bars · ${freshness} · ${storageLabel}`}</small>
+    </div>
+    <div className="operations-summary-chips" aria-label="Operational status summary">
+      <span>Data: {checking ? "checking" : freshness}</span>
+      <span>Schema: {schema ? `v${schema.currentVersion}/${schema.expectedVersion}` : "checking"}</span>
+      <span>Drift: {checking ? "checking" : driftLabel}</span>
+      <span>Auto retraining: {checking ? "checking" : retraining?.automaticRetraining ? "on" : "off"}</span>
+      <span>API: {checking ? "checking" : status?._delivery?.gateway === "spring-boot" ? "Spring Boot" : "FastAPI direct"}</span>
+    </div>
+    <a className="operations-summary-link" href="#model-operations">View full monitoring ↓</a>
+  </aside>;
+}
+
+function PredictionExplanation({ explanation, outlook }) {
+  const contributions = explanation?.contributions || [];
+  const path = explanation?.probabilityPath || {};
+  const maxImpact = Math.max(
+    ...contributions.map((item) => Math.abs(Number(item.adjustedProbabilityImpactPoints) || 0)),
+    0.1
+  );
+  const pathSteps = [
+    ["Raw ML", path.rawTechnicalProbabilityUp, "Model output"],
+    ["Reliability adjusted", path.reliabilityAdjustedProbabilityUp, "Walk-forward skill"],
+    ["News overlay", path.newsAdjustmentPoints, "probability points", true],
+    ["Macro overlay", path.macroAdjustmentPoints, "probability points", true],
+    ["Final outlook", path.finalProbabilityUp, outlook]
+  ];
+
+  return <section className="prediction-explanation" aria-labelledby="prediction-explanation-title">
+    <div className="prediction-explanation-heading">
+      <div>
+        <p className="eyebrow">LOCAL PREDICTION EXPLAINABILITY</p>
+        <h3 id="prediction-explanation-title">Why is this outlook {String(outlook).toLowerCase()}?</h3>
+        <p>{explanation.summary}</p>
+      </div>
+      <span>Current values vs training reference</span>
+    </div>
+    <div className="probability-path" aria-label="Probability calculation path">
+      {pathSteps.map(([label, value, hint, signed], index) => <article key={label}>
+        <small>{label}</small>
+        <strong>{signed && Number(value) > 0 ? "+" : ""}{value ?? "—"}{signed ? " pp" : "%"}</strong>
+        <span>{hint}</span>
+        {index < pathSteps.length - 1 && <b aria-hidden="true">→</b>}
+      </article>)}
+    </div>
+    <div className="local-impact-grid">
+      {contributions.map((item) => {
+        const impact = Number(item.adjustedProbabilityImpactPoints) || 0;
+        const width = `${Math.max(2, Math.abs(impact) / maxImpact * 50)}%`;
+        return <article className={`local-impact ${item.direction}`} key={item.feature}>
+          <div className="local-impact-title"><strong>{item.label}</strong><span>{impact > 0 ? "+" : ""}{impact.toFixed(2)} pp</span></div>
+          <small>Current {item.currentDisplay} · reference {item.referenceDisplay}</small>
+          <div className="local-impact-track" aria-label={`${item.label} ${item.direction.replaceAll("_", " ")}`}>
+            <i />
+            <b style={impact >= 0 ? { left: "50%", width } : { right: "50%", width }} />
+          </div>
+        </article>;
+      })}
+    </div>
+    <p className="explanation-method"><strong>{explanation.method}</strong> Reference: {explanation.referenceSource}. {explanation.caveat}</p>
+  </section>;
+}
+
 function ModelRegistryPanel({ status, loading, error, activeModel }) {
   const approved = status?.approvedModel;
   const latest = status?.latestModelRun;
@@ -367,7 +452,7 @@ function ModelRegistryPanel({ status, loading, error, activeModel }) {
   const rolling20 = monitoring?.rollingQuality?.windows?.find((item) => item.window === 20);
   const driftFeatures = (drift?.features || []).filter((item) => item.psi !== null && item.psi !== undefined).slice(0, 4);
   const approvedServing = status?.servingMode === "approved_artifact";
-  return <section className={`registry-panel ${approvedServing ? "registry-approved" : "registry-fallback"}`} aria-labelledby="registry-title">
+  return <section id="model-operations" className={`registry-panel ${approvedServing ? "registry-approved" : "registry-fallback"}`} aria-labelledby="registry-title">
     <div className="registry-heading">
       <div>
         <p className="eyebrow">MODEL DEPLOYMENT & MONITORING</p>

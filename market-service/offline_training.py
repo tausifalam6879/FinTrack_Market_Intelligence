@@ -181,6 +181,9 @@ def train_symbol(
         "modelRunId": run_id,
         "modelName": selected["name"],
         "featureColumns": feature_columns,
+        "explainabilityReference": {
+            feature: float(training[feature].median()) for feature in feature_columns
+        },
         "datasetVersion": version,
         "trainingDataThrough": str(dataset.index[-1].date()),
         "createdAt": created_at,

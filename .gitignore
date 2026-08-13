@@ -1,5 +1,6 @@
 frontend/node_modules/
 frontend/dist/
+gateway-service/target/
 market-service/.venv/
 market-service/__pycache__/
 market-service/.pytest_cache/
