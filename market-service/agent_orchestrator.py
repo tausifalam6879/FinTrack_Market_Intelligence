@@ -13,7 +13,7 @@ TOOL_CATALOG: Dict[str, Dict[str, str]] = {
         "source": "Yahoo Finance via yfinance",
     },
     "technical_prediction": {
-        "label": "ML outlook and technical evidence",
+        "label": "ML, technical and risk evidence",
         "evidenceType": "probabilistic_model",
         "source": "FinTrack model service",
     },
@@ -118,6 +118,11 @@ def build_agent_plan(
     technical_request = _contains(lowered, (
         "technical", "rsi", "sma", "volatility", "expected range", "support", "resistance",
     ))
+    risk_request = _contains(lowered, (
+        "risk", "benchmark", "beta", "correlation", "drawdown", "tracking error",
+        "historical var", "value at risk",
+        "relative return", "outperform", "underperform",
+    )) or " var " in f" {lowered} "
 
     # Every market-agent response is anchored to the selected symbol and model
     # context, so follow-up questions cannot silently drift to a different asset.
@@ -127,6 +132,8 @@ def build_agent_plan(
 
     if model_request or technical_request or comprehensive:
         add_intent("model_and_technical_analysis")
+    if risk_request or comprehensive:
+        add_intent("risk_and_benchmark_analysis")
     if requested_date:
         add_intent("historical_date_analysis")
         require("historical_market_session", f"Look up the requested date {requested_date.isoformat()} without using today's data.")

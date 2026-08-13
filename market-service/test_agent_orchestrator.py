@@ -36,6 +36,16 @@ class AgentOrchestratorTests(unittest.TestCase):
         self.assertIn("global_market_overview", tools)
         self.assertNotIn("company_document_rag", tools)
 
+    def test_risk_question_is_explicitly_classified_without_adding_mutation_tools(self):
+        plan = build_agent_plan(
+            "Infosys ka beta, drawdown aur Nifty benchmark risk samjhao",
+            "INFY.NS",
+        )
+
+        self.assertIn("risk_and_benchmark_analysis", plan["intents"])
+        self.assertIn("technical_prediction", [step["tool"] for step in plan["steps"]])
+        self.assertFalse(plan["safety"]["mutationToolsAvailable"])
+
     def test_trace_preserves_plan_reason_and_honest_no_evidence_status(self):
         plan = build_agent_plan("annual report source citation", "AAPL")
         trace = tool_trace(plan, {

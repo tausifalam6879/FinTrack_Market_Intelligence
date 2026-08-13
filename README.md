@@ -20,6 +20,7 @@ A focused public financial-information dashboard extracted as a new, independent
 - a seeded PyTorch MLP comparator with early stopping and separate checkpoint lineage;
 - visible validation metrics, feature importance and a session-by-session prediction audit;
 - per-prediction local counterfactual explainability showing current feature values, training references and directional probability impacts;
+- dynamic exchange-aware risk and benchmark intelligence with normalized performance, volatility, maximum drawdown, historical VaR, beta, correlation and tracking error;
 - a hybrid agentic research backend grounded in read-only market, ML, historical, company, macro and document-RAG tools;
 - a public Spring Boot API gateway with route allowlisting, validation, correlation IDs, metrics and downstream resilience;
 - company-document RAG with PDF page citations and official-source links.
@@ -102,6 +103,8 @@ POST /market/documents/ask
 ```
 
 The UI exposes the selected model, candidate comparison, walk-forward folds, balanced accuracy, precision/recall/F1, ROC AUC, Brier score, diagnostic permutation importance and a runtime prediction audit. When explicitly configured, Gemini receives verified tool results and explains them in plain language; Gemini is not the component that generates the numerical prediction. With no `LLM_PROVIDER`, the agent immediately uses deterministic evidence synthesis instead of waiting for an unconfigured local service. Gemini and Ollama are therefore optional and are not required for the predictive pipeline.
+
+The intelligence screen also calculates trailing risk independently of the directional model. It uses up to 252 recent close-to-close returns for annualized volatility, maximum peak-to-trough drawdown, fifth-percentile one-day historical VaR, positive-session frequency and a zero-risk-free-rate return/volatility ratio. Companies are compared with a broad index selected dynamically from the exchange suffix—for example NSE with Nifty 50, BSE with Sensex, London with FTSE 100 and plain US tickers with the S&P 500. The aligned comparison reports relative return, beta, correlation and tracking error; indices receive standalone risk evidence instead of a meaningless comparison with themselves.
 
 For each live prediction, FinTrack also produces a local sensitivity explanation. It replaces one current feature at a time with its training-reference median and measures the change in model probability while holding the other current features fixed. The dashboard separates the raw ML probability, reliability shrinkage, news overlay, macro overlay and final probability instead of presenting one opaque score. These impacts explain model sensitivity for this one row; they can overlap when features interact and are explicitly not treated as causal effects or additive SHAP values. Newly trained offline artifacts persist their training-window medians, while older approved artifacts use a clearly labelled current-dataset median fallback until retrained.
 

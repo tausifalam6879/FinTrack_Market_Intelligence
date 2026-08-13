@@ -8,6 +8,8 @@ from market_intelligence import (
     _build_analysis_brief,
     _extract_requested_date,
     _historical_session,
+    _infer_symbol,
+    _llm_grounding_issue,
     _verified_tool_answer,
 )
 
@@ -37,12 +39,35 @@ class AgentAnalysisTests(unittest.TestCase):
                 "walkForwardFolds": 5,
                 "quality": "weak",
             },
+            "riskBenchmark": {
+                "status": "available",
+                "asset": {
+                    "periodReturnPercent": 12.4,
+                    "annualizedVolatilityPercent": 18.25,
+                    "maxDrawdownPercent": -11.6,
+                    "historicalVar95Percent": 1.72,
+                },
+                "benchmark": {"symbol": "^NSEI", "name": "Nifty 50"},
+                "comparison": {
+                    "relativeReturnPoints": 3.4,
+                    "beta": 0.91,
+                    "correlation": 0.76,
+                    "trackingErrorPercent": 9.8,
+                },
+            },
         }
 
     def test_extracts_common_historical_date_formats(self):
         self.assertEqual(date(2026, 7, 15), _extract_requested_date("15 July 2026 ko Nifty kaisa tha?"))
         self.assertEqual(date(2026, 7, 15), _extract_requested_date("Nifty on 2026-07-15"))
         self.assertEqual(date(2026, 7, 15), _extract_requested_date("15/07/2026 market behaviour"))
+
+    def test_explicitly_selected_company_is_not_replaced_by_benchmark_words(self):
+        self.assertEqual(
+            "RELIANCE.NS",
+            _infer_symbol("Reliance ka beta Nifty benchmark ke against batao", "RELIANCE.NS"),
+        )
+        self.assertEqual("^NSEI", _infer_symbol("Nifty ka outlook", None))
 
     def test_historical_session_returns_transparent_arithmetic(self):
         frame = pd.DataFrame(
@@ -95,6 +120,42 @@ class AgentAnalysisTests(unittest.TestCase):
         self.assertIn("reliable directional edge nahi", answer)
         self.assertIn("53.3%", answer)
         self.assertIn("personalized buy/sell advice", answer)
+
+    def test_verified_fallback_answers_risk_question_from_calculated_evidence(self):
+        answer = _verified_tool_answer(
+            "Nifty ka beta, drawdown aur historical VaR risk samjhao",
+            self.snapshot,
+            self.prediction,
+            ["market_snapshot", "technical_prediction"],
+            {"factors": []},
+        )
+
+        self.assertIn("Historical risk and benchmark evidence", answer)
+        self.assertIn("annualized volatility 18.25%", answer)
+        self.assertIn("Maximum drawdown -11.6%", answer)
+        self.assertIn("beta 0.91", answer)
+        self.assertIn("future loss limit", answer)
+
+    def test_generated_risk_answer_must_include_the_specifically_requested_beta(self):
+        base_answer = (
+            "Weak model warning. Annualized volatility is 18.25 percent and the Nifty 50 is the benchmark. "
+            + ("Evidence-based explanation. " * 12)
+        )
+        issue = _llm_grounding_issue(
+            base_answer,
+            "Nifty benchmark risk aur beta samjhao",
+            self.prediction,
+            {"factors": []},
+        )
+        accepted = _llm_grounding_issue(
+            base_answer + " Calculated beta is 0.91.",
+            "Nifty benchmark risk aur beta samjhao",
+            self.prediction,
+            {"factors": []},
+        )
+
+        self.assertEqual("missing requested beta evidence", issue)
+        self.assertIsNone(accepted)
 
 
 if __name__ == "__main__":

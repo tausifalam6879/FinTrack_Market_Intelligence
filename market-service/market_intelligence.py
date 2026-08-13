@@ -57,6 +57,38 @@ GLOBAL_INDICES = {
     "^BSESN": {"name": "BSE Sensex", "region": "India", "currency": "INR"},
 }
 
+BENCHMARKS = {
+    "^GSPC": "S&P 500",
+    "^NSEI": "Nifty 50",
+    "^BSESN": "BSE Sensex",
+    "^FTSE": "FTSE 100",
+    "^GDAXI": "DAX",
+    "^N225": "Nikkei 225",
+    "^HSI": "Hang Seng",
+    "^AXJO": "S&P/ASX 200",
+    "^GSPTSE": "S&P/TSX Composite",
+    "^FCHI": "CAC 40",
+    "^AEX": "AEX",
+    "^SSMI": "Swiss Market Index",
+    "^KS11": "KOSPI Composite",
+    "000001.SS": "SSE Composite",
+}
+
+# Exchange suffixes keep benchmark selection dynamic; no company allowlist is used.
+BENCHMARK_SUFFIXES = (
+    (".NS", "^NSEI"), (".BO", "^BSESN"), (".L", "^FTSE"),
+    (".DE", "^GDAXI"), (".T", "^N225"), (".HK", "^HSI"),
+    (".AX", "^AXJO"), (".TO", "^GSPTSE"), (".PA", "^FCHI"),
+    (".AS", "^AEX"), (".SW", "^SSMI"), (".KS", "^KS11"),
+    (".KQ", "^KS11"), (".SS", "000001.SS"), (".SZ", "000001.SS"),
+)
+
+RISK_QUERY_TERMS = (
+    "risk", "benchmark", "beta", "correlation", "drawdown", "tracking error",
+    "historical var", "value at risk", "relative return", "outperform", "underperform",
+    "volatility",
+)
+
 MARKET_BOARD = {
     "^NSEI": {"name": "Nifty 50", "region": "India", "currency": "INR", "kind": "index", "sector": "Indices"},
     "^BSESN": {"name": "BSE Sensex", "region": "India", "currency": "INR", "kind": "index", "sector": "Indices"},
@@ -245,12 +277,14 @@ def _sanitize_symbol(symbol: str) -> str:
 
 
 def _infer_symbol(message: str, supplied_symbol: Optional[str]) -> str:
+    # The dashboard's explicit selection is the research anchor. A benchmark or
+    # company name mentioned inside the question must not silently replace it.
+    if supplied_symbol:
+        return _sanitize_symbol(supplied_symbol)
     lowered = message.lower()
     for alias, symbol in SYMBOL_ALIASES.items():
         if alias in lowered:
             return symbol
-    if supplied_symbol:
-        return _sanitize_symbol(supplied_symbol)
     ticker_match = re.search(r"(?:ticker|symbol)\s+([A-Za-z0-9.^=\-]{1,20})", message, re.IGNORECASE)
     return _sanitize_symbol(ticker_match.group(1)) if ticker_match else "^NSEI"
 
@@ -1234,6 +1268,169 @@ def prediction_audit(symbol: str, limit: int = 12) -> Dict[str, Any]:
     }
 
 
+def _benchmark_for_symbol(symbol: str) -> Optional[str]:
+    """Resolve a broad-market benchmark from the listing suffix, not company identity."""
+    normalized = _sanitize_symbol(symbol)
+    if normalized.startswith("^") or normalized in BENCHMARKS:
+        return None
+    for suffix, benchmark in BENCHMARK_SUFFIXES:
+        if normalized.endswith(suffix):
+            return benchmark
+    return "^GSPC"
+
+
+def _close_series(frame: pd.DataFrame) -> pd.Series:
+    if frame is None or frame.empty or "Close" not in frame:
+        raise ValueError("Closing-price history is unavailable.")
+    series = pd.to_numeric(frame["Close"], errors="coerce").replace([np.inf, -np.inf], np.nan).dropna()
+    series = series[series > 0]
+    if len(series) < 40:
+        raise ValueError("At least 40 clean sessions are required for risk analytics.")
+    return series.tail(253)
+
+
+def _standalone_risk_metrics(close: pd.Series) -> Dict[str, Any]:
+    returns = close.div(close.shift(1)).sub(1).dropna()
+    period_return = (float(close.iloc[-1]) / float(close.iloc[0])) - 1
+    annualized_return = ((1 + period_return) ** (252 / max(len(returns), 1))) - 1
+    annualized_volatility = float(returns.std(ddof=1)) * math.sqrt(252)
+    wealth = close.div(float(close.iloc[0]))
+    drawdown = wealth.div(wealth.cummax()).sub(1)
+    historical_var = max(0.0, -float(returns.quantile(0.05)))
+    return_to_volatility = (
+        annualized_return / annualized_volatility if annualized_volatility > 0 else None
+    )
+    maximum_drawdown = float(drawdown.min())
+    if annualized_volatility >= 0.35 or maximum_drawdown <= -0.30:
+        risk_band = "elevated"
+    elif annualized_volatility >= 0.20 or maximum_drawdown <= -0.15:
+        risk_band = "moderate"
+    else:
+        risk_band = "contained"
+    return {
+        "periodReturnPercent": _round(period_return * 100, 2),
+        "annualizedReturnPercent": _round(annualized_return * 100, 2),
+        "annualizedVolatilityPercent": _round(annualized_volatility * 100, 2),
+        "maxDrawdownPercent": _round(maximum_drawdown * 100, 2),
+        "historicalVar95Percent": _round(historical_var * 100, 2),
+        "positiveSessionsPercent": _round(float((returns > 0).mean()) * 100, 1),
+        "returnToVolatility": _round(return_to_volatility, 2),
+        "observations": len(returns),
+        "riskBand": risk_band,
+    }
+
+
+def calculate_market_risk_context(
+    symbol: str,
+    asset_frame: pd.DataFrame,
+    benchmark_frame: Optional[pd.DataFrame] = None,
+    benchmark_symbol: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Calculate transparent trailing risk and optional benchmark-relative evidence."""
+    normalized_symbol = _sanitize_symbol(symbol)
+    asset_close = _close_series(asset_frame)
+    asset_metrics = _standalone_risk_metrics(asset_close)
+    payload: Dict[str, Any] = {
+        "status": "standalone",
+        "symbol": normalized_symbol,
+        "period": "Up to 252 latest trading sessions",
+        "asset": asset_metrics,
+        "benchmark": None,
+        "comparison": None,
+        "normalizedHistory": [],
+        "method": (
+            "Close-to-close returns; annualized volatility uses sqrt(252), maximum drawdown uses "
+            "the trailing wealth peak, and 95% historical VaR is the observed fifth-percentile daily loss."
+        ),
+        "caveat": "Historical risk and benchmark relationships can change and are not investment advice.",
+    }
+
+    if benchmark_frame is None or not benchmark_symbol:
+        chart_close = asset_close.tail(90)
+        first = float(chart_close.iloc[0])
+        payload["normalizedHistory"] = [
+            {"date": index.strftime("%Y-%m-%d"), "asset": _round(float(value) / first * 100, 2), "benchmark": None}
+            for index, value in chart_close.items()
+        ]
+        return payload
+
+    benchmark_close = _close_series(benchmark_frame)
+    aligned = pd.concat(
+        [asset_close.rename("asset"), benchmark_close.rename("benchmark")], axis=1, join="inner"
+    ).dropna().tail(253)
+    if len(aligned) < 40:
+        raise ValueError("Not enough aligned sessions for benchmark comparison.")
+    aligned_returns = aligned.div(aligned.shift(1)).sub(1).dropna()
+    benchmark_variance = float(aligned_returns["benchmark"].var(ddof=1))
+    covariance = float(aligned_returns[["asset", "benchmark"]].cov().iloc[0, 1])
+    beta = covariance / benchmark_variance if benchmark_variance > 0 else None
+    correlation = float(aligned_returns["asset"].corr(aligned_returns["benchmark"]))
+    tracking_error = float((aligned_returns["asset"] - aligned_returns["benchmark"]).std(ddof=1)) * math.sqrt(252)
+    asset_return = (float(aligned["asset"].iloc[-1]) / float(aligned["asset"].iloc[0])) - 1
+    benchmark_return = (float(aligned["benchmark"].iloc[-1]) / float(aligned["benchmark"].iloc[0])) - 1
+    relative_return = asset_return - benchmark_return
+    benchmark_normalizer = float(aligned["benchmark"].iloc[0])
+    asset_normalizer = float(aligned["asset"].iloc[0])
+    chart = aligned.tail(90)
+
+    payload.update({
+        "status": "available",
+        "benchmark": {
+            "symbol": benchmark_symbol,
+            "name": BENCHMARKS.get(benchmark_symbol, benchmark_symbol),
+            "observations": len(aligned_returns),
+        },
+        "comparison": {
+            "assetReturnPercent": _round(asset_return * 100, 2),
+            "benchmarkReturnPercent": _round(benchmark_return * 100, 2),
+            "relativeReturnPoints": _round(relative_return * 100, 2),
+            "beta": _round(beta, 2),
+            "correlation": _round(correlation, 2),
+            "trackingErrorPercent": _round(tracking_error * 100, 2),
+            "relativePerformance": "outperformed" if relative_return > 0.005 else "underperformed" if relative_return < -0.005 else "in-line",
+        },
+        "normalizedHistory": [
+            {
+                "date": index.strftime("%Y-%m-%d"),
+                "asset": _round(float(row["asset"]) / asset_normalizer * 100, 2),
+                "benchmark": _round(float(row["benchmark"]) / benchmark_normalizer * 100, 2),
+            }
+            for index, row in chart.iterrows()
+        ],
+    })
+    return payload
+
+
+def market_risk_context(symbol: str, asset_frame: pd.DataFrame) -> Dict[str, Any]:
+    benchmark_symbol = _benchmark_for_symbol(symbol)
+    try:
+        benchmark_frame = _history(benchmark_symbol, "1y") if benchmark_symbol else None
+        return calculate_market_risk_context(
+            symbol, asset_frame, benchmark_frame=benchmark_frame, benchmark_symbol=benchmark_symbol
+        )
+    except Exception as error:
+        logger.warning("Risk benchmark calculation failed for %s: %s", symbol, type(error).__name__)
+        try:
+            fallback = calculate_market_risk_context(symbol, asset_frame)
+            fallback["status"] = "benchmark-unavailable" if benchmark_symbol else "standalone"
+            fallback["benchmark"] = (
+                {"symbol": benchmark_symbol, "name": BENCHMARKS.get(benchmark_symbol, benchmark_symbol)}
+                if benchmark_symbol else None
+            )
+            return fallback
+        except Exception:
+            return {
+                "status": "unavailable",
+                "symbol": symbol,
+                "message": "Historical risk evidence is temporarily unavailable.",
+            }
+
+
+def _requests_risk_analysis(message: str) -> bool:
+    lowered = " ".join(str(message or "").lower().split())
+    return any(term in lowered for term in RISK_QUERY_TERMS) or " var " in f" {lowered} "
+
+
 def market_prediction(symbol: str) -> Dict[str, Any]:
     symbol = _sanitize_symbol(symbol)
     cache_key = f"prediction:{symbol}"
@@ -1391,6 +1588,7 @@ def market_prediction(symbol: str) -> Dict[str, Any]:
             "probabilityAdjustmentPoints": _round(news_adjustment * 100, 2),
         },
         "macroFactor": macro,
+        "riskBenchmark": market_risk_context(symbol, frame),
         "model": {
             "type": selected["name"],
             "selection": selection_description,
@@ -1740,6 +1938,33 @@ def _verified_tool_answer(
                 "- Is symbol ke liye is question ka retrievable indexed evidence available nahi hai. "
                 "Main annual report ya filing ka answer invent nahi kar raha hoon."
             )
+    risk_section = ""
+    risk_requested = _requests_risk_analysis(lowered)
+    risk = prediction.get("riskBenchmark") or {}
+    asset_risk = risk.get("asset") or {}
+    comparison = risk.get("comparison") or {}
+    benchmark = risk.get("benchmark") or {}
+    if risk_requested and asset_risk:
+        risk_lines = [
+            f"- Period return {asset_risk.get('periodReturnPercent')}%; annualized volatility "
+            f"{asset_risk.get('annualizedVolatilityPercent')}%.",
+            f"- Maximum drawdown {asset_risk.get('maxDrawdownPercent')}%; 95% historical one-day VaR "
+            f"{asset_risk.get('historicalVar95Percent')}%.",
+        ]
+        if comparison:
+            risk_lines.append(
+                f"- {benchmark.get('name')} comparison: relative return "
+                f"{float(comparison.get('relativeReturnPoints') or 0):+.2f} percentage points, beta "
+                f"{comparison.get('beta')}, correlation {comparison.get('correlation')}, tracking error "
+                f"{comparison.get('trackingErrorPercent')}%."
+            )
+        else:
+            risk_lines.append("- Selected index ke liye self-benchmark comparison intentionally nahi banaya gaya.")
+        risk_section = (
+            "\n\nHistorical risk and benchmark evidence\n"
+            + "\n".join(risk_lines)
+            + "\n- Ye trailing historical statistics hain; future loss limit ya recommendation nahi."
+        )
     return (
         "Seedha jawab\n"
         f"{prediction['name']} ke liye model ka current scenario {prediction['outlook']} hai, lekin ise guaranteed "
@@ -1750,6 +1975,7 @@ def _verified_tool_answer(
         + "\n\nRelevant market factors\n"
         + ("\n".join(factor_lines) if factor_lines else "- Requested live factor data abhi available nahi hai.")
         + breadth_line
+        + risk_section
         + "\n\nCalculation aur scenario\n"
         + f"- Current price se lower range tak downside: {brief['currentPrice']} - "
         + f"{prediction['expectedRange']['low']} = {brief['expectedDownsidePoints']} points "
@@ -1837,6 +2063,31 @@ def _llm_grounding_issue(
         weak_markers = ["weak", "no reliable", "reliable nahi", "kamzor", "below 53", "less than 53", "53 se kam"]
         if not any(marker in normalized_answer for marker in weak_markers):
             return "missing weak-model warning"
+    risk_requested = _requests_risk_analysis(lowered)
+    asset_risk = (prediction.get("riskBenchmark") or {}).get("asset") or {}
+    if risk_requested and asset_risk.get("annualizedVolatilityPercent") is not None:
+        expected_volatility = f"{abs(float(asset_risk['annualizedVolatilityPercent'])):.2f}".rstrip("0").rstrip(".")
+        if expected_volatility not in normalized_answer:
+            return "missing historical risk evidence"
+        risk_payload = prediction.get("riskBenchmark") or {}
+        comparison = risk_payload.get("comparison") or {}
+        benchmark = risk_payload.get("benchmark") or {}
+        required_metrics = []
+        if "beta" in lowered and comparison.get("beta") is not None:
+            required_metrics.append(("beta", comparison["beta"]))
+        if "drawdown" in lowered and asset_risk.get("maxDrawdownPercent") is not None:
+            required_metrics.append(("drawdown", asset_risk["maxDrawdownPercent"]))
+        if ("value at risk" in lowered or "historical var" in lowered or re.search(r"\bvar\b", lowered)) and asset_risk.get("historicalVar95Percent") is not None:
+            required_metrics.append(("historical VaR", asset_risk["historicalVar95Percent"]))
+        if "tracking error" in lowered and comparison.get("trackingErrorPercent") is not None:
+            required_metrics.append(("tracking error", comparison["trackingErrorPercent"]))
+        for label, value in required_metrics:
+            expected_value = f"{abs(float(value)):.2f}".rstrip("0").rstrip(".")
+            if expected_value not in normalized_answer:
+                return f"missing requested {label} evidence"
+        benchmark_name = str(benchmark.get("name") or "").lower()
+        if "benchmark" in lowered and benchmark_name and benchmark_name not in normalized_answer:
+            return "missing requested benchmark identity"
     if historical:
         session_date = date.fromisoformat(historical["sessionDate"])
         readable_date = f"{session_date.day} {session_date.strftime('%B %Y')}"
@@ -2055,6 +2306,8 @@ async def market_agent(request: FastApiRequest):
         ],
         "derivedCalculations": analysis_brief,
     }
+    if _requests_risk_analysis(lowered):
+        llm_context["historicalRiskAndBenchmark"] = prediction.get("riskBenchmark")
     if "historicalSession" in context:
         llm_context["historicalSession"] = context["historicalSession"]
     if "news" in context:

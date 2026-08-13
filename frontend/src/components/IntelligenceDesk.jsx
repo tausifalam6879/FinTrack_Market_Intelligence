@@ -275,6 +275,7 @@ export default function IntelligenceDesk({ initialSymbol = "^NSEI" }) {
           <Metric label="RSI (14)" value={formatNumber(analysis.technicalIndicators?.rsi14)} hint="Below 30 oversold · above 70 overbought" />
           <Metric label="Walk-forward score" value={`${analysis.model?.balancedAccuracy ?? analysis.model?.backtestAccuracy}%`} hint={`${analysis.model?.walkForwardFolds || 1} time-ordered folds · ${analysis.model?.quality} quality`} />
         </div>
+        {analysis.riskBenchmark && <RiskBenchmarkPanel data={analysis.riskBenchmark} symbol={analysis.symbol} />}
         {localExplanation && <PredictionExplanation explanation={localExplanation} outlook={analysis.outlook} />}
         <ModelRegistryPanel status={modelStatus} loading={modelStatusLoading} error={modelStatusError} activeModel={analysis.model} />
         <ExperimentTrackingPanel data={experiments} loading={experimentsLoading} error={experimentsError} />
@@ -340,6 +341,72 @@ export default function IntelligenceDesk({ initialSymbol = "^NSEI" }) {
 }
 
 function Metric({ label, value, hint }) { return <article className="metric-card"><small>{label}</small><strong>{value}</strong><span>{hint}</span></article>; }
+
+function RiskBenchmarkPanel({ data, symbol }) {
+  if (!data || data.status === "unavailable") return <section className="risk-benchmark-panel risk-unavailable">
+    <div className="risk-heading"><div><p className="eyebrow">RISK & BENCHMARK INTELLIGENCE</p><h3>Historical risk evidence unavailable</h3></div><span>Provider unavailable</span></div>
+    <p className="risk-caveat">{data?.message || "The prediction above remains separate from this optional historical comparison."}</p>
+  </section>;
+  const asset = data.asset || {};
+  const comparison = data.comparison;
+  const benchmark = data.benchmark;
+  const signed = (value) => value === null || value === undefined ? "—" : `${Number(value) > 0 ? "+" : ""}${Number(value).toFixed(2)} pp`;
+  return <section className="risk-benchmark-panel" aria-labelledby="risk-benchmark-title">
+    <div className="risk-heading">
+      <div><p className="eyebrow">RISK & BENCHMARK INTELLIGENCE</p><h3 id="risk-benchmark-title">How has {symbol} behaved versus the broad market?</h3><p>{data.period} · close-to-close evidence</p></div>
+      <span className={`risk-band risk-${asset.riskBand || "contained"}`}>{asset.riskBand || "historical"} risk</span>
+    </div>
+    <div className="risk-layout">
+      <div className="risk-chart-card">
+        <div className="risk-chart-title"><strong>Normalized performance</strong><small>Period start = 100</small></div>
+        <BenchmarkChart history={data.normalizedHistory || []} symbol={symbol} benchmark={benchmark} />
+      </div>
+      <div className="risk-metric-grid">
+        <RiskMetric label="Period return" value={formatPercent(asset.periodReturnPercent)} hint={`${asset.observations || 0} daily returns`} />
+        <RiskMetric label="Annualized volatility" value={formatPercent(asset.annualizedVolatilityPercent)} hint="Dispersion, not direction" />
+        <RiskMetric label="Maximum drawdown" value={formatPercent(asset.maxDrawdownPercent)} hint="Largest peak-to-trough fall" />
+        <RiskMetric label="95% historical VaR" value={formatPercent(asset.historicalVar95Percent)} hint="Observed one-day loss threshold" />
+        <RiskMetric label={benchmark ? `Beta vs ${benchmark.symbol}` : "Beta"} value={comparison?.beta ?? "—"} hint={benchmark ? `Correlation ${comparison?.correlation ?? "—"}` : "No self-comparison for an index"} />
+        <RiskMetric label="Relative return" value={signed(comparison?.relativeReturnPoints)} hint={comparison ? `${comparison.relativePerformance} vs ${benchmark?.name}` : "Broad benchmark not applicable"} />
+      </div>
+    </div>
+    <div className="risk-evidence-strip">
+      <span><strong>{formatPercent(asset.positiveSessionsPercent)}</strong> positive sessions</span>
+      <span><strong>{asset.returnToVolatility ?? "—"}</strong> return/volatility</span>
+      <span><strong>{comparison ? formatPercent(comparison.trackingErrorPercent) : "—"}</strong> tracking error</span>
+      <span><strong>{benchmark?.name || "Standalone index"}</strong> benchmark</span>
+    </div>
+    <p className="risk-caveat"><strong>Method:</strong> {data.method} {data.caveat}</p>
+  </section>;
+}
+
+function RiskMetric({ label, value, hint }) {
+  return <article><small>{label}</small><strong>{value}</strong><span>{hint}</span></article>;
+}
+
+function BenchmarkChart({ history, symbol, benchmark }) {
+  const rows = history.filter((item) => Number.isFinite(Number(item.asset)));
+  if (rows.length < 2) return <div className="risk-chart-empty">Comparison history unavailable</div>;
+  const numericValue = (value) => value === null || value === undefined ? null : Number(value);
+  const values = rows.flatMap((item) => [numericValue(item.asset), numericValue(item.benchmark)]).filter(Number.isFinite);
+  const min = Math.min(...values); const max = Math.max(...values); const range = max - min || 1;
+  const pathFor = (key) => rows
+    .filter((item) => Number.isFinite(numericValue(item[key])))
+    .map((item, index, points) => `${(index / Math.max(points.length - 1, 1)) * 100},${88 - ((Number(item[key]) - min) / range) * 72}`)
+    .join(" ");
+  const assetPath = pathFor("asset");
+  const benchmarkPath = pathFor("benchmark");
+  return <div className="benchmark-chart">
+    <svg viewBox="0 0 100 100" preserveAspectRatio="none" role="img" aria-label={`${symbol} normalized performance${benchmark ? ` versus ${benchmark.name}` : ""}`}>
+      <line x1="0" x2="100" y1="88" y2="88" className="risk-gridline" />
+      <line x1="0" x2="100" y1="52" y2="52" className="risk-gridline" />
+      <line x1="0" x2="100" y1="16" y2="16" className="risk-gridline" />
+      {benchmarkPath && <polyline points={benchmarkPath} className="benchmark-line" />}
+      <polyline points={assetPath} className="asset-line" />
+    </svg>
+    <div className="risk-chart-legend"><span className="asset-legend">{symbol}</span>{benchmark && <span className="benchmark-legend">{benchmark.name}</span>}<small>{formatNumber(min)} – {formatNumber(max)}</small></div>
+  </div>;
+}
 
 function AgentEvidenceTrace({ meta }) {
   const trace = meta.toolTrace || [];
