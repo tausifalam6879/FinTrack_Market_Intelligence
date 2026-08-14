@@ -311,8 +311,15 @@ class AgentAnalysisTests(unittest.TestCase):
             {"factors": []},
             company_profile=company,
         )
-        accepted = _llm_grounding_issue(
+        missing_boundary = _llm_grounding_issue(
             base + " Latest annual period 2025-03-31 shows a growing revenue trend.",
+            "Revenue CAGR aur trend samjhao",
+            self.prediction,
+            {"factors": []},
+            company_profile=company,
+        )
+        accepted = _llm_grounding_issue(
+            base + " Latest annual period 2025-03-31 shows a growing revenue trend. Provider statements may be restated and this is not an accounting audit.",
             "Revenue CAGR aur trend samjhao",
             self.prediction,
             {"factors": []},
@@ -320,6 +327,7 @@ class AgentAnalysisTests(unittest.TestCase):
         )
 
         self.assertEqual("missing latest financial statement period", issue)
+        self.assertEqual("missing financial statement evidence boundary", missing_boundary)
         self.assertIsNone(accepted)
 
 

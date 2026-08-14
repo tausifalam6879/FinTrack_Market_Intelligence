@@ -3111,6 +3111,13 @@ def _llm_grounding_issue(
                 expected_trend = str(summary["revenueTrend"]).lower()
                 if expected_trend not in normalized_answer:
                     return "missing requested revenue trend evidence"
+            financial_boundary_markers = (
+                "not an accounting audit", "not a financial audit", "not estimated", "not estimates",
+                "provider statement", "provider-reported", "can be restated", "may be restated",
+                "fiscal periods differ",
+            )
+            if not any(marker in normalized_answer for marker in financial_boundary_markers):
+                return "missing financial statement evidence boundary"
     if document_requested and not document_matches:
         return "no indexed document evidence available"
     if document_matches:
