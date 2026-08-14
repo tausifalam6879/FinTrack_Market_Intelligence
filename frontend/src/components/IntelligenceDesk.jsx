@@ -469,6 +469,7 @@ function CompanyFundamentalsPanel({ data, loading, error }) {
     </div>
     <CompanyCatalystPanel data={data.catalysts} currency={currency} />
     <div className="fundamental-groups">{groups.map(([title, entries]) => <FundamentalGroup key={title} title={title} entries={entries} />)}</div>
+    <CompanyFinancialTrendPanel data={data.financialTrends} currency={currency} />
     <CompanyNewsIntelligencePanel data={data.newsIntelligence} articles={data.news} />
     <p className="fundamentals-method"><strong>Source:</strong> {data.source}. Figures may use different reporting periods and are shown as provider evidence, not an accounting audit or investment recommendation.{data.dataAsOf ? ` Data as of ${new Date(data.dataAsOf).toLocaleString("en-IN")}.` : ""}</p>
   </section>;
@@ -481,6 +482,72 @@ function PerformanceMetric({ label, value }) {
 
 function FundamentalGroup({ title, entries }) {
   return <article><h4>{title}</h4><dl>{entries.map(([label, value]) => <div key={label}><dt>{label}</dt><dd>{value}</dd></div>)}</dl></article>;
+}
+
+function CompanyFinancialTrendPanel({ data, currency }) {
+  if (!data || data.status !== "available") return <section className="financial-trend-panel financial-trend-unavailable">
+    <div className="financial-trend-heading"><div><p className="eyebrow">FINANCIAL STATEMENT TRENDS</p><h4>No comparable statement periods available</h4></div><span>Not estimated</span></div>
+    <p>The provider returned no comparable annual or quarterly statement rows, so FinTrack does not create synthetic trends.</p>
+  </section>;
+
+  const summary = data.summary || {};
+  const annual = data.annual || [];
+  const quarterly = data.quarterly || [];
+  const latestAnnual = annual[annual.length - 1] || {};
+  const formatDate = (value, short = false) => {
+    if (!value) return "Period unavailable";
+    const parsed = new Date(`${value}T00:00:00`);
+    if (Number.isNaN(parsed.getTime())) return value;
+    return parsed.toLocaleDateString("en-IN", short ? { month: "short", year: "2-digit" } : { day: "numeric", month: "short", year: "numeric" });
+  };
+  const percent = (value, signed = false) => {
+    const numeric = Number(value);
+    if (value === null || value === undefined || !Number.isFinite(numeric)) return "—";
+    return `${signed && numeric > 0 ? "+" : ""}${numeric.toFixed(1)}%`;
+  };
+  const directionClass = (value) => value === null || value === undefined ? "" : Number(value) >= 0 ? "positive" : "negative";
+  const points = (value) => {
+    const numeric = Number(value);
+    if (value === null || value === undefined || !Number.isFinite(numeric)) return "Change unavailable";
+    return `${numeric > 0 ? "+" : ""}${numeric.toFixed(1)} pts vs prior year`;
+  };
+  const trendLabel = (value) => String(value || "unavailable").replace(/^./, (character) => character.toUpperCase());
+  const trendClass = (value) => ["growing", "declining", "stable", "mixed"].includes(value) ? value : "unavailable";
+  const maxQuarterRevenue = Math.max(...quarterly.map((item) => Math.abs(Number(item.revenue) || 0)), 1);
+
+  return <section className="financial-trend-panel" aria-labelledby="financial-trend-title">
+    <div className="financial-trend-heading">
+      <div><p className="eyebrow">FINANCIAL STATEMENT TRENDS</p><h4 id="financial-trend-title">Annual growth, profitability, cash flow and leverage</h4></div>
+      <span>{summary.annualPeriodCount || annual.length} reported years</span>
+    </div>
+    <div className="financial-trend-summary">
+      <article><small>Revenue CAGR</small><strong>{percent(summary.revenueCagrPercent, true)}</strong><span className={`trend-${trendClass(summary.revenueTrend)}`}>{trendLabel(summary.revenueTrend)} revenue trend</span></article>
+      <article><small>Latest operating margin</small><strong>{percent(summary.latestOperatingMarginPercent)}</strong><span>{points(summary.operatingMarginChangePoints)}</span></article>
+      <article><small>Latest free cash flow</small><strong>{formatCompactMoney(summary.latestFreeCashFlow, currency)}</strong><span className={`trend-${trendClass(summary.freeCashFlowTrend)}`}>{trendLabel(summary.freeCashFlowTrend)} FCF trend</span></article>
+      <article><small>Debt / equity</small><strong>{summary.latestDebtToEquityRatio === null || summary.latestDebtToEquityRatio === undefined ? "—" : `${Number(summary.latestDebtToEquityRatio).toFixed(2)}x`}</strong><span>{percent(summary.latestDebtYoYPercent, true)} debt YoY</span></article>
+    </div>
+    <div className="financial-annual-table-wrap">
+      <div className="financial-card-heading"><strong>Annual reported evidence</strong><span>Latest fiscal period: {formatDate(summary.latestAnnualPeriod)}</span></div>
+      <table className="financial-annual-table">
+        <thead><tr><th>Fiscal period</th><th>Revenue</th><th>YoY</th><th>Net income</th><th>YoY</th><th>Op. margin</th><th>Free cash flow</th><th>Debt / equity</th></tr></thead>
+        <tbody>{[...annual].reverse().map((item) => <tr key={item.period} className={item.period === latestAnnual.period ? "latest" : ""}>
+          <td><strong>{formatDate(item.period)}</strong>{item.period === latestAnnual.period && <small>Latest annual</small>}</td>
+          <td>{formatCompactMoney(item.revenue, currency)}</td><td className={directionClass(item.revenueYoYPercent)}>{percent(item.revenueYoYPercent, true)}</td>
+          <td>{formatCompactMoney(item.netIncome, currency)}</td><td className={directionClass(item.netIncomeYoYPercent)}>{percent(item.netIncomeYoYPercent, true)}</td>
+          <td>{percent(item.operatingMarginPercent)}</td><td>{formatCompactMoney(item.freeCashFlow, currency)}</td><td>{item.debtToEquityRatio === null || item.debtToEquityRatio === undefined ? "—" : `${Number(item.debtToEquityRatio).toFixed(2)}x`}</td>
+        </tr>)}</tbody>
+      </table>
+    </div>
+    <div className="quarterly-financial-card">
+      <div className="financial-card-heading"><strong>Recent quarterly revenue evidence</strong><span>Quarter-over-quarter changes are not seasonally adjusted</span></div>
+      {quarterly.length ? <div className="quarterly-revenue-bars">{quarterly.map((item, index) => {
+        const revenue = Math.abs(Number(item.revenue) || 0);
+        const comparison = index === 0 ? "First returned period" : item.previousQuarterComparable ? `${percent(item.revenueQoQPercent, true)} QoQ` : "Period gap · not QoQ";
+        return <article key={item.period}><div><b style={{ height: `${Math.max(5, (revenue / maxQuarterRevenue) * 100)}%` }} /></div><strong>{formatCompactMoney(item.revenue, currency)}</strong><span>{formatDate(item.period, true)}</span><small>{comparison} · {percent(item.operatingMarginPercent)} margin</small></article>;
+      })}</div> : <p>No comparable quarterly revenue periods were returned.</p>}
+    </div>
+    <p className="financial-trend-method"><strong>Method:</strong> {data.method} {data.disclaimer}</p>
+  </section>;
 }
 
 function CompanyNewsIntelligencePanel({ data, articles = [] }) {

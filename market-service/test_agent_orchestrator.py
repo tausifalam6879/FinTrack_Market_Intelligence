@@ -80,6 +80,19 @@ class AgentOrchestratorTests(unittest.TestCase):
         news_step = next(step for step in plan["steps"] if step["tool"] == "market_news")
         self.assertEqual("read-only", news_step["access"])
 
+    def test_financial_trend_question_uses_company_statement_evidence(self):
+        plan = build_agent_plan(
+            "Reliance ka revenue CAGR, margin aur free cash flow trend samjhao",
+            "RELIANCE.NS",
+        )
+
+        tools = [step["tool"] for step in plan["steps"]]
+        self.assertIn("financial_statement_trend_analysis", plan["intents"])
+        self.assertIn("company_fundamentals", tools)
+        self.assertNotIn("company_document_rag", tools)
+        company_step = next(step for step in plan["steps"] if step["tool"] == "company_fundamentals")
+        self.assertEqual("read-only", company_step["access"])
+
     def test_trace_preserves_plan_reason_and_honest_no_evidence_status(self):
         plan = build_agent_plan("annual report source citation", "AAPL")
         trace = tool_trace(plan, {

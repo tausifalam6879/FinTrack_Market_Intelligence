@@ -109,6 +109,12 @@ NEWS_QUERY_TERMS = (
     "news theme", "coverage", "source diversity",
 )
 
+FINANCIAL_TREND_QUERY_TERMS = (
+    "financial statement", "financial statements", "revenue trend", "profit trend",
+    "cash flow trend", "free cash flow", "margin trend", "year over year", "yoy", "cagr",
+    "annual revenue", "quarterly revenue", "debt trend",
+)
+
 MARKET_BOARD = {
     "^NSEI": {"name": "Nifty 50", "region": "India", "currency": "INR", "kind": "index", "sector": "Indices"},
     "^BSESN": {"name": "BSE Sensex", "region": "India", "currency": "INR", "kind": "index", "sector": "Indices"},
@@ -1038,6 +1044,215 @@ def _company_financial_sections(info: Dict[str, Any]) -> Dict[str, Dict[str, Opt
     }
 
 
+def _statement_value(
+    frame: Optional[pd.DataFrame],
+    row_names: tuple[str, ...],
+    period: Any,
+) -> Optional[float]:
+    if frame is None or frame.empty or period not in frame.columns:
+        return None
+    for row_name in row_names:
+        if row_name not in frame.index:
+            continue
+        value = frame.loc[row_name, period]
+        if isinstance(value, pd.Series):
+            value = value.iloc[0] if not value.empty else None
+        return _round(value, 0)
+    return None
+
+
+def _safe_percent_change(current: Any, previous: Any) -> Optional[float]:
+    current_value = _round(current, 6)
+    previous_value = _round(previous, 6)
+    if current_value is None or previous_value in (None, 0):
+        return None
+    return _round(((current_value / previous_value) - 1) * 100, 2)
+
+
+def _safe_margin(numerator: Any, denominator: Any) -> Optional[float]:
+    numerator_value = _round(numerator, 6)
+    denominator_value = _round(denominator, 6)
+    if numerator_value is None or denominator_value in (None, 0):
+        return None
+    return _round((numerator_value / denominator_value) * 100, 2)
+
+
+def _compact_amount(value: Any, currency: Optional[str] = None) -> str:
+    numeric = _round(value, 6)
+    if numeric is None:
+        return "unavailable"
+    magnitude = abs(numeric)
+    scale, suffix = (
+        (1_000_000_000_000, "T") if magnitude >= 1_000_000_000_000 else
+        (1_000_000_000, "B") if magnitude >= 1_000_000_000 else
+        (1_000_000, "M") if magnitude >= 1_000_000 else
+        (1_000, "K") if magnitude >= 1_000 else (1, "")
+    )
+    formatted = f"{numeric / scale:.2f}".rstrip("0").rstrip(".")
+    return f"{formatted}{suffix}{f' {currency}' if currency else ''}"
+
+
+def _series_trend(values: List[Any]) -> str:
+    numeric = [float(value) for value in values if _round(value, 6) is not None]
+    if len(numeric) < 2:
+        return "unavailable"
+    changes = [((current / previous) - 1) * 100 for previous, current in zip(numeric, numeric[1:]) if previous]
+    material = [change for change in changes if abs(change) >= 2]
+    if material and all(change > 0 for change in material):
+        return "growing"
+    if material and all(change < 0 for change in material):
+        return "declining"
+    if not material:
+        return "stable"
+    return "mixed"
+
+
+def _financial_statement_trends(
+    income_statement: Optional[pd.DataFrame],
+    balance_sheet: Optional[pd.DataFrame],
+    cash_flow: Optional[pd.DataFrame],
+    quarterly_income: Optional[pd.DataFrame],
+) -> Dict[str, Any]:
+    """Build comparable annual/quarterly evidence from provider statements."""
+    frames = [frame for frame in (income_statement, balance_sheet, cash_flow) if frame is not None and not frame.empty]
+    annual_periods = sorted({period for frame in frames for period in frame.columns}, key=pd.Timestamp)[-5:]
+    annual = []
+    for period in annual_periods:
+        revenue = _statement_value(income_statement, ("Total Revenue", "Operating Revenue"), period)
+        net_income = _statement_value(
+            income_statement,
+            ("Net Income", "Net Income Common Stockholders", "Net Income Including Noncontrolling Interests"),
+            period,
+        )
+        operating_income = _statement_value(income_statement, ("Operating Income",), period)
+        gross_profit = _statement_value(income_statement, ("Gross Profit",), period)
+        total_debt = _statement_value(balance_sheet, ("Total Debt",), period)
+        equity = _statement_value(
+            balance_sheet,
+            ("Stockholders Equity", "Total Stockholder Equity", "Total Equity Gross Minority Interest"),
+            period,
+        )
+        operating_cash_flow = _statement_value(
+            cash_flow,
+            ("Operating Cash Flow", "Total Cash From Operating Activities"),
+            period,
+        )
+        free_cash_flow = _statement_value(cash_flow, ("Free Cash Flow",), period)
+        capital_expenditure = _statement_value(
+            cash_flow,
+            ("Capital Expenditure", "Capital Expenditures"),
+            period,
+        )
+        if not any(value is not None for value in (
+            revenue, net_income, operating_income, total_debt, operating_cash_flow, free_cash_flow,
+        )):
+            continue
+        annual.append({
+            "period": _provider_date(period),
+            "revenue": revenue,
+            "netIncome": net_income,
+            "operatingIncome": operating_income,
+            "grossProfit": gross_profit,
+            "operatingCashFlow": operating_cash_flow,
+            "freeCashFlow": free_cash_flow,
+            "capitalExpenditure": capital_expenditure,
+            "totalDebt": total_debt,
+            "stockholdersEquity": equity,
+            "operatingMarginPercent": _safe_margin(operating_income, revenue),
+            "netMarginPercent": _safe_margin(net_income, revenue),
+            "freeCashFlowMarginPercent": _safe_margin(free_cash_flow, revenue),
+            "debtToEquityRatio": _round(total_debt / equity, 3) if total_debt is not None and equity not in (None, 0) else None,
+        })
+    for index, record in enumerate(annual):
+        previous = annual[index - 1] if index else {}
+        record["revenueYoYPercent"] = _safe_percent_change(record.get("revenue"), previous.get("revenue"))
+        record["netIncomeYoYPercent"] = _safe_percent_change(record.get("netIncome"), previous.get("netIncome"))
+        record["freeCashFlowYoYPercent"] = _safe_percent_change(record.get("freeCashFlow"), previous.get("freeCashFlow"))
+        record["debtYoYPercent"] = _safe_percent_change(record.get("totalDebt"), previous.get("totalDebt"))
+
+    quarterly_periods = [] if quarterly_income is None or quarterly_income.empty else sorted(
+        quarterly_income.columns, key=pd.Timestamp,
+    )[-5:]
+    quarterly = []
+    for period in quarterly_periods:
+        revenue = _statement_value(quarterly_income, ("Total Revenue", "Operating Revenue"), period)
+        net_income = _statement_value(
+            quarterly_income,
+            ("Net Income", "Net Income Common Stockholders", "Net Income Including Noncontrolling Interests"),
+            period,
+        )
+        operating_income = _statement_value(quarterly_income, ("Operating Income",), period)
+        if revenue is None and net_income is None:
+            continue
+        quarterly.append({
+            "period": _provider_date(period),
+            "revenue": revenue,
+            "netIncome": net_income,
+            "operatingIncome": operating_income,
+            "operatingMarginPercent": _safe_margin(operating_income, revenue),
+        })
+    for index, record in enumerate(quarterly):
+        previous = quarterly[index - 1] if index else {}
+        comparable_quarter = False
+        if record.get("period") and previous.get("period"):
+            gap_days = (date.fromisoformat(record["period"]) - date.fromisoformat(previous["period"])).days
+            comparable_quarter = 45 <= gap_days <= 135
+        record["revenueQoQPercent"] = (
+            _safe_percent_change(record.get("revenue"), previous.get("revenue")) if comparable_quarter else None
+        )
+        record["netIncomeQoQPercent"] = (
+            _safe_percent_change(record.get("netIncome"), previous.get("netIncome")) if comparable_quarter else None
+        )
+        record["previousQuarterComparable"] = comparable_quarter
+
+    if not annual and not quarterly:
+        return {
+            "status": "unavailable",
+            "annual": [],
+            "quarterly": [],
+            "summary": {},
+            "source": "Yahoo Finance company statements via yfinance",
+            "method": "No comparable financial-statement periods were returned.",
+            "disclaimer": "FinTrack does not estimate missing statement values.",
+        }
+
+    first = annual[0] if annual else {}
+    latest = annual[-1] if annual else {}
+    year_span = None
+    if first.get("period") and latest.get("period"):
+        year_span = max(1.0, (date.fromisoformat(latest["period"]) - date.fromisoformat(first["period"])).days / 365.25)
+    revenue_cagr = None
+    if year_span and first.get("revenue") and latest.get("revenue") and first["revenue"] > 0 and latest["revenue"] > 0:
+        revenue_cagr = _round(((latest["revenue"] / first["revenue"]) ** (1 / year_span) - 1) * 100, 2)
+    prior = annual[-2] if len(annual) > 1 else {}
+    margin_change = (
+        _round(latest["operatingMarginPercent"] - prior["operatingMarginPercent"], 2)
+        if latest.get("operatingMarginPercent") is not None and prior.get("operatingMarginPercent") is not None else None
+    )
+    return {
+        "status": "available",
+        "annual": annual,
+        "quarterly": quarterly,
+        "summary": {
+            "latestAnnualPeriod": latest.get("period"),
+            "annualPeriodCount": len(annual),
+            "quarterlyPeriodCount": len(quarterly),
+            "revenueCagrPercent": revenue_cagr,
+            "revenueTrend": _series_trend([item.get("revenue") for item in annual]),
+            "netIncomeTrend": _series_trend([item.get("netIncome") for item in annual]),
+            "freeCashFlowTrend": _series_trend([item.get("freeCashFlow") for item in annual]),
+            "latestOperatingMarginPercent": latest.get("operatingMarginPercent"),
+            "operatingMarginChangePoints": margin_change,
+            "latestFreeCashFlow": latest.get("freeCashFlow"),
+            "latestDebtToEquityRatio": latest.get("debtToEquityRatio"),
+            "latestDebtYoYPercent": latest.get("debtYoYPercent"),
+        },
+        "source": "Yahoo Finance annual and quarterly company statements via yfinance",
+        "method": "Provider statement rows aligned by reported fiscal period; growth, margins, CAGR and debt/equity are calculated by FinTrack.",
+        "disclaimer": "Statements can be restated and fiscal periods differ by company. Missing values are shown as unavailable, not estimated; this is not an accounting audit or investment advice.",
+    }
+
+
 def _fifty_two_week_position(price: Any, low: Any, high: Any) -> Optional[float]:
     current = _round(price, 6)
     lower = _round(low, 6)
@@ -1221,6 +1436,22 @@ def company_research(symbol: str) -> Dict[str, Any]:
         earnings_dates = ticker.get_earnings_dates(limit=6)
     except Exception:
         earnings_dates = None
+    try:
+        income_statement = ticker.income_stmt
+    except Exception:
+        income_statement = None
+    try:
+        balance_sheet = ticker.balance_sheet
+    except Exception:
+        balance_sheet = None
+    try:
+        cash_flow = ticker.cashflow
+    except Exception:
+        cash_flow = None
+    try:
+        quarterly_income = ticker.quarterly_income_stmt
+    except Exception:
+        quarterly_income = None
 
     close = frame["Close"].astype(float)
     fifty_two_week_low = _round(frame["Low"].min()) if "Low" in frame else None
@@ -1230,6 +1461,12 @@ def company_research(symbol: str) -> Dict[str, Any]:
     financials = _company_financial_sections(info)
     company_quote = {**snapshot, "currency": _company_currency(info, snapshot)}
     catalysts = _company_catalysts(info, calendar, earnings_dates, snapshot.get("price"))
+    financial_trends = _financial_statement_trends(
+        income_statement,
+        balance_sheet,
+        cash_flow,
+        quarterly_income,
+    )
     news_evidence = market_news(symbol, 8)
     result = {
         "symbol": symbol,
@@ -1263,6 +1500,7 @@ def company_research(symbol: str) -> Dict[str, Any]:
             "dividendYield": _round(info.get("dividendYield")),
         },
         "financials": financials,
+        "financialTrends": financial_trends,
         "catalysts": catalysts,
         "history": [
             {"date": index.strftime("%Y-%m-%d"), "close": _round(row["Close"])}
@@ -2060,6 +2298,11 @@ def _requests_news_analysis(message: str) -> bool:
     return any(term in lowered for term in NEWS_QUERY_TERMS)
 
 
+def _requests_financial_trend_analysis(message: str) -> bool:
+    lowered = str(message or "").lower()
+    return any(term in lowered for term in FINANCIAL_TREND_QUERY_TERMS)
+
+
 def market_prediction(symbol: str) -> Dict[str, Any]:
     symbol = _sanitize_symbol(symbol)
     cache_key = f"prediction:{symbol}"
@@ -2660,6 +2903,34 @@ def _verified_tool_answer(
                 "\n\nCompany headline intelligence\n"
                 "- Recent provider headlines available nahi hain, isliye sentiment, theme ya publisher coverage invent nahi kiya gaya."
             )
+    financial_trend_section = ""
+    if _requests_financial_trend_analysis(lowered):
+        trends = (company_profile or {}).get("financialTrends") or {}
+        if trends.get("status") == "available":
+            summary = trends.get("summary") or {}
+            latest = (trends.get("annual") or [{}])[-1]
+            financial_currency = prediction.get("expectedRange", {}).get("currency")
+            financial_trend_section = (
+                "\n\nFinancial statement trend evidence\n"
+                f"- Latest annual period {summary.get('latestAnnualPeriod')}; revenue "
+                f"{_compact_amount(latest.get('revenue'), financial_currency)}, "
+                f"YoY {latest.get('revenueYoYPercent')}%, multi-year CAGR {summary.get('revenueCagrPercent')}%, "
+                f"trend {summary.get('revenueTrend')}.\n"
+                f"- Net income {_compact_amount(latest.get('netIncome'), financial_currency)}, "
+                f"YoY {latest.get('netIncomeYoYPercent')}%, "
+                f"trend {summary.get('netIncomeTrend')}; operating margin "
+                f"{summary.get('latestOperatingMarginPercent')}% ({summary.get('operatingMarginChangePoints')} points vs prior year).\n"
+                f"- Free cash flow {_compact_amount(summary.get('latestFreeCashFlow'), financial_currency)}, "
+                f"trend {summary.get('freeCashFlowTrend')}; "
+                f"debt/equity {summary.get('latestDebtToEquityRatio')}x and debt YoY "
+                f"{summary.get('latestDebtYoYPercent')}%.\n"
+                "- These are provider statement periods and FinTrack arithmetic, not estimates or an accounting audit."
+            )
+        else:
+            financial_trend_section = (
+                "\n\nFinancial statement trend evidence\n"
+                "- Comparable provider statement periods available nahi hain; missing growth, margin ya cash-flow trend invent nahi kiya gaya."
+            )
     return (
         "Seedha jawab\n"
         f"{prediction['name']} ke liye model ka current scenario {prediction['outlook']} hai, lekin ise guaranteed "
@@ -2673,6 +2944,7 @@ def _verified_tool_answer(
         + risk_section
         + catalyst_section
         + news_section
+        + financial_trend_section
         + "\n\nCalculation aur scenario\n"
         + f"- Current price se lower range tak downside: {brief['currentPrice']} - "
         + f"{prediction['expectedRange']['low']} = {brief['expectedDownsidePoints']} points "
@@ -2828,6 +3100,17 @@ def _llm_grounding_issue(
                 expected_theme = str(intelligence["themes"][0].get("theme") or "").lower()
                 if expected_theme and expected_theme not in normalized_answer:
                     return "missing requested headline theme evidence"
+    if _requests_financial_trend_analysis(lowered):
+        trends = (company_profile or {}).get("financialTrends") or {}
+        summary = trends.get("summary") or {}
+        if trends.get("status") == "available":
+            latest_period = str(summary.get("latestAnnualPeriod") or "").lower()
+            if latest_period and latest_period not in normalized_answer:
+                return "missing latest financial statement period"
+            if ("revenue" in lowered or "cagr" in lowered) and summary.get("revenueTrend"):
+                expected_trend = str(summary["revenueTrend"]).lower()
+                if expected_trend not in normalized_answer:
+                    return "missing requested revenue trend evidence"
     if document_requested and not document_matches:
         return "no indexed document evidence available"
     if document_matches:
@@ -3078,12 +3361,33 @@ async def market_agent(request: FastApiRequest):
             ],
         }
     if "company" in context:
+        financial_trends = context["company"].get("financialTrends") or {}
         llm_context["company"] = {
             "sector": context["company"]["sector"],
             "industry": context["company"]["industry"],
             "performance": context["company"]["performance"],
             "fundamentals": context["company"]["fundamentals"],
             "catalysts": context["company"].get("catalysts"),
+            "financialStatementTrends": {
+                "status": financial_trends.get("status"),
+                "summary": financial_trends.get("summary"),
+                "annual": [
+                    {key: item.get(key) for key in (
+                        "period", "revenue", "revenueYoYPercent", "netIncome", "netIncomeYoYPercent",
+                        "operatingMarginPercent", "freeCashFlow", "freeCashFlowYoYPercent",
+                        "totalDebt", "debtYoYPercent", "debtToEquityRatio",
+                    )}
+                    for item in financial_trends.get("annual") or []
+                ],
+                "quarterly": [
+                    {key: item.get(key) for key in (
+                        "period", "revenue", "revenueQoQPercent", "netIncome",
+                        "netIncomeQoQPercent", "operatingMarginPercent", "previousQuarterComparable",
+                    )}
+                    for item in financial_trends.get("quarterly") or []
+                ],
+                "method": financial_trends.get("method"),
+            },
         }
     if context.get("sectorPeers", {}).get("status") == "available":
         peer_context = context["sectorPeers"]
@@ -3137,6 +3441,7 @@ async def market_agent(request: FastApiRequest):
         "When sectorPeerComparison is supplied, describe only above/below/in-line evidence and never turn a peer median into a buy/sell verdict. "
         "Company catalyst dates can change; label analyst consensus and targets as external opinions separate from FinTrack ML. "
         "When headlineEvidence is supplied, call it title-keyword evidence, report source breadth and dates, and do not imply that headlines prove an event or understand full article context. "
+        "When financialStatementTrends is supplied, distinguish annual from quarterly periods, use the supplied growth and margin calculations, and do not estimate missing statement rows. "
         "changePct is daily price change, not trading volume. RSI above 70 is overbought, below 30 is oversold. "
         "If balancedAccuracy is below 53, explicitly state that the model has no reliable directional edge. "
         "Keep the response readable and normally within about 550 words."
@@ -3164,6 +3469,7 @@ async def market_agent(request: FastApiRequest):
     document_only = document_requested and not any(intent in plan["intents"] for intent in (
         "model_and_technical_analysis", "historical_date_analysis", "news_analysis",
         "macro_analysis", "market_breadth_analysis", "global_market_comparison",
+        "financial_statement_trend_analysis", "company_catalyst_analysis", "sector_peer_analysis",
     ))
 
     def verified_fallback() -> str:

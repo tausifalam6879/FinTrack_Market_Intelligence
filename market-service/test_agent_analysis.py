@@ -264,6 +264,64 @@ class AgentAnalysisTests(unittest.TestCase):
         self.assertEqual("missing requested headline sentiment evidence", issue)
         self.assertIsNone(accepted)
 
+    def test_financial_trend_fallback_reports_period_growth_cash_flow_and_leverage(self):
+        company = {
+            "financialTrends": {
+                "status": "available",
+                "annual": [{
+                    "period": "2025-03-31", "revenue": 150.0, "revenueYoYPercent": 25.0,
+                    "netIncome": 18.0, "netIncomeYoYPercent": 50.0,
+                }],
+                "summary": {
+                    "latestAnnualPeriod": "2025-03-31", "revenueCagrPercent": 22.47,
+                    "revenueTrend": "growing", "netIncomeTrend": "growing",
+                    "latestOperatingMarginPercent": 16.67, "operatingMarginChangePoints": 1.67,
+                    "latestFreeCashFlow": 16.0, "freeCashFlowTrend": "growing",
+                    "latestDebtToEquityRatio": 0.6, "latestDebtYoYPercent": -6.25,
+                },
+            }
+        }
+        answer = _verified_tool_answer(
+            "Revenue CAGR, margin aur free cash flow trend samjhao",
+            self.snapshot,
+            self.prediction,
+            ["market_snapshot", "technical_prediction", "company_fundamentals"],
+            {"factors": []},
+            company_profile=company,
+        )
+
+        self.assertIn("Financial statement trend evidence", answer)
+        self.assertIn("Latest annual period 2025-03-31", answer)
+        self.assertIn("multi-year CAGR 22.47%", answer)
+        self.assertIn("debt/equity 0.6x", answer)
+        self.assertIn("not estimates", answer)
+
+    def test_generated_financial_trend_answer_requires_latest_period_and_direction(self):
+        company = {
+            "financialTrends": {
+                "status": "available",
+                "summary": {"latestAnnualPeriod": "2025-03-31", "revenueTrend": "growing"},
+            }
+        }
+        base = "Weak model warning with statement source and calculation limitations. " * 10
+        issue = _llm_grounding_issue(
+            base,
+            "Revenue CAGR aur trend samjhao",
+            self.prediction,
+            {"factors": []},
+            company_profile=company,
+        )
+        accepted = _llm_grounding_issue(
+            base + " Latest annual period 2025-03-31 shows a growing revenue trend.",
+            "Revenue CAGR aur trend samjhao",
+            self.prediction,
+            {"factors": []},
+            company_profile=company,
+        )
+
+        self.assertEqual("missing latest financial statement period", issue)
+        self.assertIsNone(accepted)
+
 
 if __name__ == "__main__":
     unittest.main()

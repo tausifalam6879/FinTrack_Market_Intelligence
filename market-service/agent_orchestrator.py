@@ -94,9 +94,9 @@ def build_agent_plan(
     ))
     document_request = _contains(lowered, (
         "annual report", "annual reports", "10-k", "10k", "filing", "document",
-        "balance sheet", "cash flow", "management discussion", "investor presentation",
+        "management discussion", "investor presentation",
         "page citation", "source citation", "report me", "report mein", "debt ke",
-        "revenue ke", "rag",
+        "rag",
     ))
     news_request = _contains(lowered, (
         "news", "headline", "announcement", "sentiment", "latest update", "war",
@@ -117,10 +117,17 @@ def build_agent_plan(
         "business", "company profile", "performance", "revenue", "profit", "debt",
         "earnings date", "earnings calendar", "next earnings", "analyst", "price target",
         "target price", "consensus", "ex-dividend", "ex dividend", "eps surprise", "catalyst",
+        "financial statement", "cash flow", "free cash flow", "margin", "year over year",
+        "yoy", "cagr", "annual", "quarterly",
     ))
     catalyst_request = _contains(lowered, (
         "earnings date", "earnings calendar", "next earnings", "analyst", "price target",
         "target price", "consensus", "ex-dividend", "ex dividend", "eps surprise", "catalyst",
+    ))
+    financial_trend_request = _contains(lowered, (
+        "financial statement", "revenue trend", "profit trend", "cash flow trend", "free cash flow",
+        "margin trend", "year over year", "yoy", "cagr", "annual revenue", "quarterly revenue",
+        "debt trend",
     ))
     model_request = _contains(lowered, (
         "prediction", "forecast", "outlook", "bullish", "bearish", "next session", "model",
@@ -158,6 +165,8 @@ def build_agent_plan(
         require("company_fundamentals", "Provide company identity and available market-profile fundamentals.")
     if not is_index and (catalyst_request or comprehensive):
         add_intent("company_catalyst_analysis")
+    if not is_index and (financial_trend_request or comprehensive):
+        add_intent("financial_statement_trend_analysis")
     if not is_index and (peer_request or comprehensive):
         add_intent("sector_peer_analysis")
         require("sector_peer_comparison", "Compare the company with dynamically discovered same-sector, same-market peers.")
