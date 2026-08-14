@@ -422,6 +422,83 @@ class AgentAnalysisTests(unittest.TestCase):
         self.assertEqual("missing ownership evidence boundary", missing_boundary)
         self.assertIsNone(accepted)
 
+    def test_estimate_revision_fallback_reports_ranges_breadth_and_basis_warning(self):
+        company = {
+            "analystEstimateIntelligence": {
+                "status": "available",
+                "summary": {
+                    "currentQuarterEpsAverage": 1.25,
+                    "currentQuarterEpsGrowthPercent": 25.0,
+                    "currentQuarterRevenueAverage": 12_000_000_000,
+                    "currentQuarterRevenueGrowthPercent": 20.0,
+                    "currentQuarterAnalystCount": 12,
+                    "currentQuarterRevisionSignal": "net upward",
+                    "currentQuarterNetRevisions30Days": 6,
+                    "periodsWithBasisMismatch": ["+1y"],
+                },
+                "periods": [{
+                    "period": "0q", "label": "Current quarter",
+                    "eps": {"average": 1.25, "low": 1.1, "high": 1.4, "analystCount": 12, "growthPercent": 25.0},
+                    "revenue": {"average": 12_000_000_000, "low": 11_500_000_000, "high": 12_500_000_000, "growthPercent": 20.0},
+                    "revisionCounts": {"signal": "net upward", "upLast7Days": 3, "downLast7Days": 1, "upLast30Days": 8, "downLast30Days": 2, "netLast30Days": 6},
+                    "epsTrend": {"change30Days": 0.05},
+                }],
+            }
+        }
+        answer = _verified_tool_answer(
+            "Current-quarter EPS estimate, revenue estimate aur revision trend samjhao",
+            self.snapshot,
+            self.prediction,
+            ["market_snapshot", "technical_prediction", "company_fundamentals"],
+            {"factors": []},
+            company_profile=company,
+        )
+
+        self.assertIn("Analyst estimates and revision evidence", answer)
+        self.assertIn("EPS average 1.25", answer)
+        self.assertIn("Revision breadth: net upward", answer)
+        self.assertIn("basis published estimate range", answer)
+        self.assertIn("not company guidance", answer)
+
+    def test_generated_estimate_answer_requires_eps_revision_basis_and_boundary(self):
+        company = {
+            "analystEstimateIntelligence": {
+                "status": "available",
+                "summary": {
+                    "currentQuarterEpsAverage": 1.25,
+                    "currentQuarterRevisionSignal": "net upward",
+                    "periodsWithBasisMismatch": ["+1y"],
+                },
+            }
+        }
+        base = "Weak model warning with detailed estimate evidence and analytical explanation. " * 9
+        missing_eps = _llm_grounding_issue(
+            base + "Revisions are net upward; a basis mismatch is present; external analyst estimates can change.",
+            "EPS estimate revision trend batao", self.prediction, {"factors": []}, company_profile=company,
+        )
+        missing_revision = _llm_grounding_issue(
+            base + "Current-quarter EPS is 1.25; a basis mismatch is present; external analyst estimates can change.",
+            "EPS estimate revision trend batao", self.prediction, {"factors": []}, company_profile=company,
+        )
+        missing_basis = _llm_grounding_issue(
+            base + "Current-quarter EPS is 1.25 and revisions are net upward; external analyst estimates can change.",
+            "EPS estimate revision trend batao", self.prediction, {"factors": []}, company_profile=company,
+        )
+        missing_boundary = _llm_grounding_issue(
+            base + "Current-quarter EPS is 1.25, revisions are net upward and the trend basis is incompatible.",
+            "EPS estimate revision trend batao", self.prediction, {"factors": []}, company_profile=company,
+        )
+        accepted = _llm_grounding_issue(
+            base + "Current-quarter EPS is 1.25, revisions are net upward and the trend basis is incompatible. External analyst estimates can change and are not company guidance.",
+            "EPS estimate revision trend batao", self.prediction, {"factors": []}, company_profile=company,
+        )
+
+        self.assertEqual("missing requested current-quarter EPS estimate", missing_eps)
+        self.assertEqual("missing requested estimate revision direction", missing_revision)
+        self.assertEqual("missing EPS trend basis mismatch warning", missing_basis)
+        self.assertEqual("missing analyst-estimate evidence boundary", missing_boundary)
+        self.assertIsNone(accepted)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -122,9 +122,13 @@ def build_agent_plan(
         "ownership", "shareholding", "shareholders", "institutional holder", "institutional holding",
         "mutual fund holder", "fund holding", "insider transaction", "insider buying", "insider selling",
         "insider activity", "promoter holding", "top holder", "ownership concentration",
+        "analyst estimate", "earnings estimate", "eps estimate", "revenue estimate",
+        "estimate revision", "estimate revisions", "eps revision", "eps revisions",
+        "estimate trend", "earnings outlook", "consensus eps", "consensus revenue",
+        "upward revision", "downward revision", "revision breadth",
     ))
     catalyst_request = _contains(lowered, (
-        "earnings date", "earnings calendar", "next earnings", "analyst", "price target",
+        "earnings date", "earnings calendar", "next earnings", "analyst rating", "analyst recommendation", "price target",
         "target price", "consensus", "ex-dividend", "ex dividend", "eps surprise", "catalyst",
     ))
     financial_trend_request = _contains(lowered, (
@@ -136,6 +140,12 @@ def build_agent_plan(
         "ownership", "shareholding", "shareholders", "institutional holder", "institutional holding",
         "mutual fund holder", "fund holding", "insider transaction", "insider buying", "insider selling",
         "insider activity", "promoter holding", "top holder", "ownership concentration",
+    ))
+    estimate_revision_request = _contains(lowered, (
+        "analyst estimate", "earnings estimate", "eps estimate", "revenue estimate",
+        "estimate revision", "estimate revisions", "eps revision", "eps revisions",
+        "estimate trend", "earnings outlook", "consensus eps", "consensus revenue",
+        "upward revision", "downward revision", "revision breadth",
     ))
     model_request = _contains(lowered, (
         "prediction", "forecast", "outlook", "bullish", "bearish", "next session", "model",
@@ -177,6 +187,8 @@ def build_agent_plan(
         add_intent("financial_statement_trend_analysis")
     if not is_index and (ownership_request or comprehensive):
         add_intent("ownership_and_insider_analysis")
+    if not is_index and (estimate_revision_request or comprehensive):
+        add_intent("analyst_estimate_revision_analysis")
     if not is_index and (peer_request or comprehensive):
         add_intent("sector_peer_analysis")
         require("sector_peer_comparison", "Compare the company with dynamically discovered same-sector, same-market peers.")

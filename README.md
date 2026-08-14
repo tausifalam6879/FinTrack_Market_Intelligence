@@ -17,6 +17,7 @@ A focused public financial-information dashboard extracted as a new, independent
 - dynamic company headline intelligence with title-level tone distribution, source diversity, freshness, themes and dated publisher evidence;
 - multi-period company financial-statement intelligence with annual/quarterly revenue, profit, margins, cash-flow, CAGR and leverage calculations;
 - dynamic ownership and insider-activity intelligence with provider-reported major ownership, returned-holder concentration, institutional/mutual-fund tables, six-month net activity and dated transactions;
+- dynamic third-party analyst-estimate intelligence with period-specific EPS/revenue ranges, growth expectations, analyst coverage, up/down revision breadth, EPS trend snapshots and explicit basis-mismatch warnings;
 - configurable downside alerts with optional browser notifications and a 15-minute scan interval;
 - a draggable sliding section selector for quick market, currency, news and intelligence navigation;
 - transparent, experimental market analytics;

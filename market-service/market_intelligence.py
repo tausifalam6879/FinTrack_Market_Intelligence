@@ -100,7 +100,7 @@ RISK_QUERY_TERMS = (
 )
 
 CATALYST_QUERY_TERMS = (
-    "earnings date", "earnings calendar", "next earnings", "analyst", "price target",
+    "earnings date", "earnings calendar", "next earnings", "analyst rating", "analyst recommendation", "price target",
     "target price", "consensus", "ex-dividend", "ex dividend", "eps surprise", "catalyst",
 )
 
@@ -119,6 +119,13 @@ OWNERSHIP_QUERY_TERMS = (
     "ownership", "shareholding", "shareholders", "institutional holder", "institutional holding",
     "mutual fund holder", "fund holding", "insider transaction", "insider buying", "insider selling",
     "insider activity", "promoter holding", "top holder", "ownership concentration",
+)
+
+ESTIMATE_REVISION_QUERY_TERMS = (
+    "analyst estimate", "earnings estimate", "eps estimate", "revenue estimate",
+    "estimate revision", "estimate revisions", "eps revision", "eps revisions",
+    "estimate trend", "earnings outlook", "consensus eps", "consensus revenue",
+    "upward revision", "downward revision", "revision breadth",
 )
 
 MARKET_BOARD = {
@@ -1578,6 +1585,164 @@ def _company_catalysts(
     }
 
 
+ESTIMATE_PERIOD_LABELS = {
+    "0q": "Current quarter",
+    "+1q": "Next quarter",
+    "0y": "Current year",
+    "+1y": "Next year",
+}
+
+
+def _analysis_frame_row(frame: Optional[pd.DataFrame], period: str) -> Dict[str, Any]:
+    if frame is None or frame.empty or period not in frame.index:
+        return {}
+    row = frame.loc[period]
+    if isinstance(row, pd.DataFrame):
+        row = row.iloc[0]
+    return row.to_dict() if isinstance(row, pd.Series) else {}
+
+
+def _revision_direction(net_revisions: Optional[int]) -> str:
+    if net_revisions is None:
+        return "unavailable"
+    if net_revisions > 0:
+        return "net upward"
+    if net_revisions < 0:
+        return "net downward"
+    return "balanced/no net revisions"
+
+
+def _analyst_estimate_intelligence(
+    earnings_estimate: Optional[pd.DataFrame],
+    revenue_estimate: Optional[pd.DataFrame],
+    eps_revisions: Optional[pd.DataFrame],
+    eps_trend: Optional[pd.DataFrame],
+    growth_estimates: Optional[pd.DataFrame],
+) -> Dict[str, Any]:
+    periods = []
+    for period, label in ESTIMATE_PERIOD_LABELS.items():
+        earnings = _analysis_frame_row(earnings_estimate, period)
+        revenue = _analysis_frame_row(revenue_estimate, period)
+        revisions = _analysis_frame_row(eps_revisions, period)
+        trend = _analysis_frame_row(eps_trend, period)
+        growth = _analysis_frame_row(growth_estimates, period)
+        if not any((earnings, revenue, revisions, trend, growth)):
+            continue
+
+        eps_average = _round(earnings.get("avg"), 4)
+        trend_current = _round(trend.get("current"), 4)
+        basis_comparable = None
+        if eps_average is not None and trend_current is not None:
+            tolerance = max(0.03, abs(eps_average) * 0.05)
+            basis_comparable = abs(eps_average - trend_current) <= tolerance
+        has_revision_counts = bool(revisions)
+        up_7 = int(_round(revisions.get("upLast7days"), 0) or 0) if has_revision_counts else None
+        down_7 = int(_round(revisions.get("downLast7Days"), 0) or 0) if has_revision_counts else None
+        up_30 = int(_round(revisions.get("upLast30days"), 0) or 0) if has_revision_counts else None
+        down_30 = int(_round(revisions.get("downLast30days"), 0) or 0) if has_revision_counts else None
+        trend_7 = _round(trend.get("7daysAgo"), 4)
+        trend_30 = _round(trend.get("30daysAgo"), 4)
+        trend_60 = _round(trend.get("60daysAgo"), 4)
+        trend_90 = _round(trend.get("90daysAgo"), 4)
+        net_7 = up_7 - down_7 if up_7 is not None and down_7 is not None else None
+        net_30 = up_30 - down_30 if up_30 is not None and down_30 is not None else None
+        periods.append({
+            "period": period,
+            "label": label,
+            "eps": {
+                "average": eps_average,
+                "low": _round(earnings.get("low"), 4),
+                "high": _round(earnings.get("high"), 4),
+                "yearAgo": _round(earnings.get("yearAgoEps"), 4),
+                "analystCount": int(_round(earnings.get("numberOfAnalysts"), 0) or 0),
+                "growthPercent": _percentage_from_fraction(earnings.get("growth")),
+            },
+            "revenue": {
+                "average": _round(revenue.get("avg"), 0),
+                "low": _round(revenue.get("low"), 0),
+                "high": _round(revenue.get("high"), 0),
+                "yearAgo": _round(revenue.get("yearAgoRevenue"), 0),
+                "analystCount": int(_round(revenue.get("numberOfAnalysts"), 0) or 0),
+                "growthPercent": _percentage_from_fraction(revenue.get("growth")),
+            },
+            "revisionCounts": {
+                "upLast7Days": up_7,
+                "downLast7Days": down_7,
+                "netLast7Days": net_7,
+                "upLast30Days": up_30,
+                "downLast30Days": down_30,
+                "netLast30Days": net_30,
+                "signal": _revision_direction(net_30),
+            },
+            "epsTrend": {
+                "current": trend_current,
+                "sevenDaysAgo": trend_7,
+                "thirtyDaysAgo": trend_30,
+                "sixtyDaysAgo": trend_60,
+                "ninetyDaysAgo": trend_90,
+                "change7Days": _round(trend_current - trend_7, 4) if trend_current is not None and trend_7 is not None else None,
+                "change30Days": _round(trend_current - trend_30, 4) if trend_current is not None and trend_30 is not None else None,
+                "change90Days": _round(trend_current - trend_90, 4) if trend_current is not None and trend_90 is not None else None,
+                "matchesPublishedAverageBasis": basis_comparable,
+            },
+            "growthComparison": {
+                "companyPercent": _percentage_from_fraction(growth.get("stockTrend")),
+                "providerIndexPercent": _percentage_from_fraction(growth.get("indexTrend")),
+            },
+        })
+
+    coverage = {
+        "earningsEstimates": earnings_estimate is not None and not earnings_estimate.empty,
+        "revenueEstimates": revenue_estimate is not None and not revenue_estimate.empty,
+        "epsRevisionCounts": eps_revisions is not None and not eps_revisions.empty,
+        "epsTrendHistory": eps_trend is not None and not eps_trend.empty,
+        "growthComparison": growth_estimates is not None and not growth_estimates.empty,
+    }
+    evidence_count = sum(coverage.values())
+    if not periods:
+        return {
+            "status": "unavailable",
+            "coverageLevel": "unavailable",
+            "coverage": coverage,
+            "periods": [],
+            "summary": {},
+            "source": "Yahoo Finance third-party analyst estimates via yfinance",
+            "method": "No analyst-estimate dataset was returned for this listing.",
+            "disclaimer": "FinTrack does not create estimates or revisions when provider evidence is missing.",
+        }
+
+    current_quarter = next((item for item in periods if item["period"] == "0q"), periods[0])
+    next_year = next((item for item in periods if item["period"] == "+1y"), {})
+    mismatches = [item["period"] for item in periods if item["epsTrend"].get("matchesPublishedAverageBasis") is False]
+    current_revisions = current_quarter.get("revisionCounts") or {}
+    return {
+        "status": "available",
+        "coverageLevel": "broad" if evidence_count >= 4 else "partial",
+        "coverage": coverage,
+        "periods": periods,
+        "summary": {
+            "periodCount": len(periods),
+            "currentQuarterEpsAverage": current_quarter.get("eps", {}).get("average"),
+            "currentQuarterEpsGrowthPercent": current_quarter.get("eps", {}).get("growthPercent"),
+            "currentQuarterRevenueAverage": current_quarter.get("revenue", {}).get("average"),
+            "currentQuarterRevenueGrowthPercent": current_quarter.get("revenue", {}).get("growthPercent"),
+            "currentQuarterAnalystCount": max(
+                current_quarter.get("eps", {}).get("analystCount") or 0,
+                current_quarter.get("revenue", {}).get("analystCount") or 0,
+            ),
+            "currentQuarterRevisionSignal": current_revisions.get("signal"),
+            "currentQuarterNetRevisions30Days": current_revisions.get("netLast30Days"),
+            "currentQuarterEpsChange30Days": current_quarter.get("epsTrend", {}).get("change30Days"),
+            "nextYearEpsGrowthPercent": next_year.get("eps", {}).get("growthPercent"),
+            "nextYearRevenueGrowthPercent": next_year.get("revenue", {}).get("growthPercent"),
+            "periodsWithBasisMismatch": mismatches,
+        },
+        "source": "Yahoo Finance third-party analyst estimates via yfinance",
+        "method": "Provider EPS/revenue ranges, analyst counts, revision counts and EPS trend snapshots are normalized by forecast period. Net revision breadth is upward minus downward revisions; no missing estimate is inferred.",
+        "disclaimer": "These are changing third-party analyst estimates, not company guidance, FinTrack ML output or guaranteed results. EPS trend series can use a different basis from the published estimate range; FinTrack flags those periods instead of merging incompatible values.",
+    }
+
+
 def company_research(symbol: str) -> Dict[str, Any]:
     symbol = _sanitize_symbol(symbol)
     key = f"company:{symbol}"
@@ -1640,6 +1805,26 @@ def company_research(symbol: str) -> Dict[str, Any]:
         insider_roster = ticker.insider_roster_holders
     except Exception:
         insider_roster = None
+    try:
+        earnings_estimate = ticker.earnings_estimate
+    except Exception:
+        earnings_estimate = None
+    try:
+        revenue_estimate = ticker.revenue_estimate
+    except Exception:
+        revenue_estimate = None
+    try:
+        eps_revisions = ticker.eps_revisions
+    except Exception:
+        eps_revisions = None
+    try:
+        eps_trend = ticker.eps_trend
+    except Exception:
+        eps_trend = None
+    try:
+        growth_estimates = ticker.growth_estimates
+    except Exception:
+        growth_estimates = None
 
     close = frame["Close"].astype(float)
     fifty_two_week_low = _round(frame["Low"].min()) if "Low" in frame else None
@@ -1662,6 +1847,13 @@ def company_research(symbol: str) -> Dict[str, Any]:
         insider_transactions,
         insider_purchases,
         insider_roster,
+    )
+    analyst_estimates = _analyst_estimate_intelligence(
+        earnings_estimate,
+        revenue_estimate,
+        eps_revisions,
+        eps_trend,
+        growth_estimates,
     )
     news_evidence = market_news(symbol, 8)
     result = {
@@ -1698,6 +1890,7 @@ def company_research(symbol: str) -> Dict[str, Any]:
         "financials": financials,
         "financialTrends": financial_trends,
         "ownershipIntelligence": ownership,
+        "analystEstimateIntelligence": analyst_estimates,
         "catalysts": catalysts,
         "history": [
             {"date": index.strftime("%Y-%m-%d"), "close": _round(row["Close"])}
@@ -2505,6 +2698,11 @@ def _requests_ownership_analysis(message: str) -> bool:
     return any(term in lowered for term in OWNERSHIP_QUERY_TERMS)
 
 
+def _requests_estimate_revision_analysis(message: str) -> bool:
+    lowered = str(message or "").lower()
+    return any(term in lowered for term in ESTIMATE_REVISION_QUERY_TERMS)
+
+
 def market_prediction(symbol: str) -> Dict[str, Any]:
     symbol = _sanitize_symbol(symbol)
     cache_key = f"prediction:{symbol}"
@@ -3178,6 +3376,62 @@ def _verified_tool_answer(
                 "\n\nOwnership and insider activity evidence\n"
                 "- Is listing ke liye provider ne ownership ya insider dataset return nahi kiya; missing holdings or activity invent nahi ki gayi."
             )
+    estimate_revision_section = ""
+    if _requests_estimate_revision_analysis(lowered):
+        estimates = (company_profile or {}).get("analystEstimateIntelligence") or {}
+        if estimates.get("status") == "available":
+            summary = estimates.get("summary") or {}
+            periods = estimates.get("periods") or []
+            current = next((item for item in periods if item.get("period") == "0q"), periods[0] if periods else {})
+            eps = current.get("eps") or {}
+            revenue = current.get("revenue") or {}
+            revisions = current.get("revisionCounts") or {}
+            trend = current.get("epsTrend") or {}
+            estimate_currency = prediction.get("expectedRange", {}).get("currency")
+            shown = lambda value: "unavailable" if value is None else str(value)
+            shown_percent = lambda value: "unavailable" if value is None else f"{value}%"
+            period_lines = []
+            for item in periods:
+                item_eps = item.get("eps") or {}
+                item_revenue = item.get("revenue") or {}
+                item_revisions = item.get("revisionCounts") or {}
+                period_lines.append(
+                    f"- {item.get('label')}: EPS average {shown(item_eps.get('average'))}, range "
+                    f"{shown(item_eps.get('low'))} to {shown(item_eps.get('high'))}, growth {shown_percent(item_eps.get('growthPercent'))}; "
+                    f"revenue {_compact_amount(item_revenue.get('average'), estimate_currency)}, growth "
+                    f"{shown_percent(item_revenue.get('growthPercent'))}; 30-day revisions "
+                    f"{item_revisions.get('signal') or 'unavailable'} (net {shown(item_revisions.get('netLast30Days'))})."
+                )
+            mismatches = summary.get("periodsWithBasisMismatch") or []
+            mismatch_line = (
+                f"- EPS trend basis published estimate range se {', '.join(mismatches)} period(s) me mismatch hai; "
+                "FinTrack incompatible series ko merge nahi karta."
+                if mismatches else
+                "- Returned EPS trend snapshots published estimate-range basis ke saath comparable hain."
+            )
+            estimate_revision_section = (
+                "\n\nAnalyst estimates and revision evidence\n"
+                f"- Current-quarter external consensus: EPS average {shown(eps.get('average'))} across "
+                f"{eps.get('analystCount') or summary.get('currentQuarterAnalystCount') or 0} analysts, "
+                f"range {shown(eps.get('low'))} to {shown(eps.get('high'))}, expected growth "
+                f"{shown_percent(eps.get('growthPercent'))}.\n"
+                f"- Current-quarter revenue average {_compact_amount(revenue.get('average'), estimate_currency)}, "
+                f"range {_compact_amount(revenue.get('low'), estimate_currency)} to "
+                f"{_compact_amount(revenue.get('high'), estimate_currency)}, expected growth "
+                f"{shown_percent(revenue.get('growthPercent'))}.\n"
+                f"- Revision breadth: {revisions.get('signal') or 'unavailable'}; 7-day up/down "
+                f"{shown(revisions.get('upLast7Days'))}/{shown(revisions.get('downLast7Days'))}, 30-day up/down "
+                f"{shown(revisions.get('upLast30Days'))}/{shown(revisions.get('downLast30Days'))}. EPS trend-series "
+                f"30-day change {shown(trend.get('change30Days'))}.\n"
+                + "\n".join(period_lines)
+                + "\n" + mismatch_line
+                + "\n- These are changing third-party analyst estimates, not company guidance, FinTrack ML output or guaranteed results."
+            )
+        else:
+            estimate_revision_section = (
+                "\n\nAnalyst estimates and revision evidence\n"
+                "- Is listing ke liye provider ne analyst estimate/revision dataset return nahi kiya; missing consensus invent nahi kiya gaya."
+            )
     return (
         "Seedha jawab\n"
         f"{prediction['name']} ke liye model ka current scenario {prediction['outlook']} hai, lekin ise guaranteed "
@@ -3193,6 +3447,7 @@ def _verified_tool_answer(
         + news_section
         + financial_trend_section
         + ownership_section
+        + estimate_revision_section
         + "\n\nCalculation aur scenario\n"
         + f"- Current price se lower range tak downside: {brief['currentPrice']} - "
         + f"{prediction['expectedRange']['low']} = {brief['expectedDownsidePoints']} points "
@@ -3385,6 +3640,31 @@ def _llm_grounding_issue(
             )
             if not any(marker in normalized_answer for marker in ownership_boundary_markers):
                 return "missing ownership evidence boundary"
+    if _requests_estimate_revision_analysis(lowered):
+        estimates = (company_profile or {}).get("analystEstimateIntelligence") or {}
+        summary = estimates.get("summary") or {}
+        if estimates.get("status") == "available":
+            if any(term in lowered for term in ("eps", "earnings estimate", "analyst estimate", "earnings outlook")) and summary.get("currentQuarterEpsAverage") is not None:
+                expected_eps = f"{abs(float(summary['currentQuarterEpsAverage'])):.4f}".rstrip("0").rstrip(".")
+                if expected_eps not in normalized_answer:
+                    return "missing requested current-quarter EPS estimate"
+            if "revenue" in lowered and summary.get("currentQuarterRevenueGrowthPercent") is not None:
+                expected_growth = f"{abs(float(summary['currentQuarterRevenueGrowthPercent'])):.2f}".rstrip("0").rstrip(".")
+                if expected_growth not in normalized_answer:
+                    return "missing requested revenue estimate growth"
+            if "revision" in lowered and summary.get("currentQuarterRevisionSignal") not in (None, "unavailable"):
+                expected_signal = str(summary["currentQuarterRevisionSignal"]).lower()
+                if expected_signal not in normalized_answer:
+                    return "missing requested estimate revision direction"
+            if "trend" in lowered and summary.get("periodsWithBasisMismatch"):
+                if not any(marker in normalized_answer for marker in ("basis", "not comparable", "incompatible")):
+                    return "missing EPS trend basis mismatch warning"
+            estimate_boundary_markers = (
+                "third-party analyst", "external analyst", "not company guidance",
+                "not fintrack ml", "can change", "changing estimate", "changing third-party",
+            )
+            if not any(marker in normalized_answer for marker in estimate_boundary_markers):
+                return "missing analyst-estimate evidence boundary"
     if document_requested and not document_matches:
         return "no indexed document evidence available"
     if document_matches:
@@ -3637,6 +3917,7 @@ async def market_agent(request: FastApiRequest):
     if "company" in context:
         financial_trends = context["company"].get("financialTrends") or {}
         ownership = context["company"].get("ownershipIntelligence") or {}
+        analyst_estimates = context["company"].get("analystEstimateIntelligence") or {}
         llm_context["company"] = {
             "sector": context["company"]["sector"],
             "industry": context["company"]["industry"],
@@ -3677,6 +3958,17 @@ async def market_agent(request: FastApiRequest):
                 "method": ownership.get("method"),
                 "disclaimer": ownership.get("disclaimer"),
             },
+            **({
+                "analystEstimateRevisions": {
+                    "status": analyst_estimates.get("status"),
+                    "coverageLevel": analyst_estimates.get("coverageLevel"),
+                    "coverage": analyst_estimates.get("coverage"),
+                    "summary": analyst_estimates.get("summary"),
+                    "periods": analyst_estimates.get("periods"),
+                    "method": analyst_estimates.get("method"),
+                    "disclaimer": analyst_estimates.get("disclaimer"),
+                },
+            } if "analyst_estimate_revision_analysis" in plan["intents"] else {}),
         }
     if context.get("sectorPeers", {}).get("status") == "available":
         peer_context = context["sectorPeers"]
@@ -3732,6 +4024,7 @@ async def market_agent(request: FastApiRequest):
         "When headlineEvidence is supplied, call it title-keyword evidence, report source breadth and dates, and do not imply that headlines prove an event or understand full article context. "
         "When financialStatementTrends is supplied, distinguish annual from quarterly periods, use the supplied growth and margin calculations, and do not estimate missing statement rows. "
         "When ownershipAndInsiderActivity is supplied, distinguish provider-reported total ownership from the sum of only returned top-holder rows. State missing holder-table coverage, reporting delays, and that insider activity needs context and is not a standalone trading signal. "
+        "When analystEstimateRevisions is supplied, separate changing third-party analyst estimates from company guidance and FinTrack ML. Report the forecast period, ranges, analyst counts and up/down revision breadth; flag any supplied EPS trend basis mismatch instead of merging incompatible series. "
         "changePct is daily price change, not trading volume. RSI above 70 is overbought, below 30 is oversold. "
         "If balancedAccuracy is below 53, explicitly state that the model has no reliable directional edge. "
         "Keep the response readable and normally within about 550 words."
@@ -3761,6 +4054,7 @@ async def market_agent(request: FastApiRequest):
         "macro_analysis", "market_breadth_analysis", "global_market_comparison",
         "financial_statement_trend_analysis", "company_catalyst_analysis", "sector_peer_analysis",
         "ownership_and_insider_analysis",
+        "analyst_estimate_revision_analysis",
     ))
 
     def verified_fallback() -> str:

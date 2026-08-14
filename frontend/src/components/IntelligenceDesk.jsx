@@ -468,6 +468,7 @@ function CompanyFundamentalsPanel({ data, loading, error }) {
       <div><span>{formatNumber(range.fiftyTwoWeekLow)} low</span><strong>{formatNumber(data.quote?.price)} current</strong><span>{formatNumber(range.fiftyTwoWeekHigh)} high</span></div>
     </div>
     <CompanyCatalystPanel data={data.catalysts} currency={currency} />
+    <CompanyAnalystEstimatePanel data={data.analystEstimateIntelligence} currency={currency} />
     <div className="fundamental-groups">{groups.map(([title, entries]) => <FundamentalGroup key={title} title={title} entries={entries} />)}</div>
     <CompanyFinancialTrendPanel data={data.financialTrends} currency={currency} />
     <CompanyOwnershipPanel data={data.ownershipIntelligence} currency={currency} />
@@ -759,6 +760,86 @@ function CompanyCatalystPanel({ data, currency }) {
       </article>
     </div>
     <p className="catalyst-method"><strong>Method:</strong> {data.method} {data.disclaimer}</p>
+  </section>;
+}
+
+function CompanyAnalystEstimatePanel({ data, currency }) {
+  if (!data || data.status !== "available") return <section className="estimate-panel estimate-unavailable">
+    <div className="estimate-heading"><div><p className="eyebrow">ANALYST ESTIMATES & REVISIONS</p><h4>No analyst-estimate dataset available</h4></div><span>Not estimated</span></div>
+    <p>The provider returned no EPS, revenue or revision evidence, so FinTrack does not create a consensus outlook.</p>
+  </section>;
+
+  const summary = data.summary || {};
+  const periods = data.periods || [];
+  const coverage = data.coverage || {};
+  const current = periods.find((item) => item.period === "0q") || periods[0] || {};
+  const currentEps = current.eps || {};
+  const currentRevenue = current.revenue || {};
+  const currentRevisions = current.revisionCounts || {};
+  const mismatchPeriods = new Set(summary.periodsWithBasisMismatch || []);
+  const eps = (value) => {
+    const numeric = Number(value);
+    return value === null || value === undefined || !Number.isFinite(numeric) ? "—" : numeric.toLocaleString("en-IN", { maximumFractionDigits: 4 });
+  };
+  const percent = (value, signed = false) => {
+    const numeric = Number(value);
+    if (value === null || value === undefined || !Number.isFinite(numeric)) return "—";
+    return `${signed && numeric > 0 ? "+" : ""}${numeric.toFixed(1)}%`;
+  };
+  const signedNumber = (value) => {
+    const numeric = Number(value);
+    return value === null || value === undefined || !Number.isFinite(numeric) ? "—" : `${numeric > 0 ? "+" : ""}${numeric.toFixed(4)}`;
+  };
+  const revisionClass = (signal) => signal === "net upward" ? "positive" : signal === "net downward" ? "negative" : "neutral";
+  const directionClass = (value) => value === null || value === undefined || !Number.isFinite(Number(value)) ? "" : Number(value) >= 0 ? "positive" : "negative";
+  const nextYear = periods.find((item) => item.period === "+1y") || {};
+
+  return <section className="estimate-panel" aria-labelledby="analyst-estimate-title">
+    <div className="estimate-heading">
+      <div><p className="eyebrow">ANALYST ESTIMATES & REVISIONS</p><h4 id="analyst-estimate-title">Forecast ranges, growth expectations and revision breadth</h4></div>
+      <span>{data.coverageLevel || "partial"} provider coverage</span>
+    </div>
+    <div className="estimate-summary-grid">
+      <article><small>Current-quarter EPS</small><strong>{eps(currentEps.average)}</strong><span>{eps(currentEps.low)}–{eps(currentEps.high)} range · {currentEps.analystCount || 0} analysts</span></article>
+      <article><small>Current-quarter revenue</small><strong>{formatCompactMoney(currentRevenue.average, currency)}</strong><span>{percent(currentRevenue.growthPercent, true)} expected growth</span></article>
+      <article className={revisionClass(currentRevisions.signal)}><small>30-day revision breadth</small><strong>{String(currentRevisions.signal || "unavailable").replace(/^./, (letter) => letter.toUpperCase())}</strong><span>{currentRevisions.netLast30Days === null || currentRevisions.netLast30Days === undefined ? "No revision counts" : `${Number(currentRevisions.netLast30Days) > 0 ? "+" : ""}${currentRevisions.netLast30Days} net revisions`}</span></article>
+      <article><small>Next-year expected growth</small><strong>{percent(nextYear.eps?.growthPercent, true)} EPS</strong><span>{percent(nextYear.revenue?.growthPercent, true)} revenue</span></article>
+    </div>
+    <div className="estimate-table-wrap">
+      <div className="estimate-card-heading"><strong>Forecast-period consensus evidence</strong><span>Ranges and analyst counts are third-party provider fields</span></div>
+      <table className="estimate-table">
+        <thead><tr><th>Forecast period</th><th>EPS consensus</th><th>EPS growth</th><th>Revenue consensus</th><th>Revenue growth</th><th>Analyst coverage</th><th>Growth comparison</th></tr></thead>
+        <tbody>{periods.map((item) => <tr key={item.period}>
+          <td><strong>{item.label}</strong><small>{item.period}</small>{mismatchPeriods.has(item.period) && <em>Trend basis differs</em>}</td>
+          <td><strong>{eps(item.eps?.average)}</strong><small>{eps(item.eps?.low)}–{eps(item.eps?.high)}</small></td>
+          <td className={directionClass(item.eps?.growthPercent)}>{percent(item.eps?.growthPercent, true)}</td>
+          <td><strong>{formatCompactMoney(item.revenue?.average, currency)}</strong><small>{formatCompactMoney(item.revenue?.low, currency)}–{formatCompactMoney(item.revenue?.high, currency)}</small></td>
+          <td className={directionClass(item.revenue?.growthPercent)}>{percent(item.revenue?.growthPercent, true)}</td>
+          <td><strong>{Math.max(item.eps?.analystCount || 0, item.revenue?.analystCount || 0)}</strong><small>max returned count</small></td>
+          <td><strong>{percent(item.growthComparison?.companyPercent, true)}</strong><small>provider index {percent(item.growthComparison?.providerIndexPercent, true)}</small></td>
+        </tr>)}</tbody>
+      </table>
+    </div>
+    <div className="estimate-revision-grid">
+      {periods.map((item) => {
+        const revisions = item.revisionCounts || {};
+        const trend = item.epsTrend || {};
+        const up = Number(revisions.upLast30Days || 0);
+        const down = Number(revisions.downLast30Days || 0);
+        const total = up + down;
+        const hasCounts = coverage.epsRevisionCounts && revisions.upLast30Days !== null && revisions.upLast30Days !== undefined;
+        return <article key={`revision-${item.period}`} className={revisionClass(revisions.signal)}>
+          <div className="estimate-revision-heading"><div><small>{item.period}</small><strong>{item.label}</strong></div><span>{revisions.signal || "unavailable"}</span></div>
+          {hasCounts ? <>
+            <div className="revision-counts"><span><b>{revisions.upLast7Days}</b> up · 7d</span><span><b>{revisions.downLast7Days}</b> down · 7d</span><span><b>{revisions.upLast30Days}</b> up · 30d</span><span><b>{revisions.downLast30Days}</b> down · 30d</span></div>
+            <div className="revision-breadth-bar"><i className="up" style={{ width: `${total ? (up / total) * 100 : 50}%` }} /><i className="down" style={{ width: `${total ? (down / total) * 100 : 50}%` }} /></div>
+          </> : <p>No up/down revision-count dataset was returned.</p>}
+          <div className="eps-trend-strip"><span>EPS trend now <strong>{eps(trend.current)}</strong></span><span>30d ago <strong>{eps(trend.thirtyDaysAgo)}</strong></span><span>Change <strong className={directionClass(trend.change30Days)}>{signedNumber(trend.change30Days)}</strong></span></div>
+          {trend.matchesPublishedAverageBasis === false && <p className="estimate-basis-warning">Trend series basis differs from the published EPS estimate range; values are not merged.</p>}
+        </article>;
+      })}
+    </div>
+    <p className="estimate-method"><strong>Method:</strong> {data.method} {data.disclaimer}</p>
   </section>;
 }
 

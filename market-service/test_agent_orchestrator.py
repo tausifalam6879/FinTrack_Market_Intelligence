@@ -106,6 +106,20 @@ class AgentOrchestratorTests(unittest.TestCase):
         company_step = next(step for step in plan["steps"] if step["tool"] == "company_fundamentals")
         self.assertEqual("read-only", company_step["access"])
 
+    def test_estimate_revision_question_uses_company_analysis_without_forcing_rag(self):
+        plan = build_agent_plan(
+            "Cisco ka current-quarter EPS estimate, revenue estimate aur 30-day revisions batao",
+            "CSCO",
+        )
+
+        tools = [step["tool"] for step in plan["steps"]]
+        self.assertIn("analyst_estimate_revision_analysis", plan["intents"])
+        self.assertIn("company_fundamentals", tools)
+        self.assertNotIn("company_document_rag", tools)
+        self.assertNotIn("company_catalyst_analysis", plan["intents"])
+        company_step = next(step for step in plan["steps"] if step["tool"] == "company_fundamentals")
+        self.assertEqual("read-only", company_step["access"])
+
     def test_trace_preserves_plan_reason_and_honest_no_evidence_status(self):
         plan = build_agent_plan("annual report source citation", "AAPL")
         trace = tool_trace(plan, {
