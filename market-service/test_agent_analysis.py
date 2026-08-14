@@ -330,6 +330,98 @@ class AgentAnalysisTests(unittest.TestCase):
         self.assertEqual("missing financial statement evidence boundary", missing_boundary)
         self.assertIsNone(accepted)
 
+    def test_ownership_fallback_reports_concentration_partial_coverage_and_insider_activity(self):
+        company = {
+            "ownershipIntelligence": {
+                "status": "available",
+                "majorOwnership": {
+                    "insidersPercentHeld": 0.05,
+                    "institutionsPercentHeld": 84.2,
+                    "institutionsFloatPercentHeld": 84.24,
+                    "institutionsCount": 5086,
+                },
+                "concentration": {
+                    "returnedInstitutionCount": 2,
+                    "topInstitutionsPercentHeld": 18.5,
+                    "returnedFundCount": 0,
+                    "topFundsPercentHeld": 0.0,
+                },
+                "institutionalHolders": [{
+                    "holder": "Evidence Asset Management", "percentHeld": 11.5,
+                    "shares": 500000000, "dateReported": "2026-06-30",
+                }],
+                "mutualFundHolders": [],
+                "insiderSummary": {
+                    "netActivity": "net selling", "purchaseShares": 8836,
+                    "purchaseTransactions": 8, "saleShares": 122115,
+                    "saleTransactions": 18, "netSharesPurchased": -113279,
+                    "netSharesPercent": -5.4,
+                },
+                "recentInsiderTransactions": [{
+                    "date": "2026-05-20", "insider": "Example Officer", "position": "CFO",
+                    "type": "sale", "shares": 5000,
+                }],
+            }
+        }
+        answer = _verified_tool_answer(
+            "Cisco ke institutional holders, ownership concentration aur insider buying selling samjhao",
+            self.snapshot,
+            self.prediction,
+            ["market_snapshot", "technical_prediction", "company_fundamentals"],
+            {"factors": []},
+            company_profile=company,
+        )
+
+        self.assertIn("Ownership and insider activity evidence", answer)
+        self.assertIn("institutions 84.2%", answer)
+        self.assertIn("top 2 institution rows total 18.5%", answer)
+        self.assertIn("Mutual-fund holder rows provider ne return nahi kiye", answer)
+        self.assertIn("net selling", answer)
+        self.assertIn("not a standalone bullish/bearish signal", answer)
+
+    def test_generated_ownership_answer_requires_percentage_activity_and_boundary(self):
+        company = {
+            "ownershipIntelligence": {
+                "status": "available",
+                "majorOwnership": {"institutionsPercentHeld": 84.2},
+                "insiderSummary": {"netActivity": "net selling"},
+            }
+        }
+        base = "Weak model warning with detailed provider evidence and calculation context. " * 9
+        missing_percent = _llm_grounding_issue(
+            base + "Insider activity shows net selling and reporting may be delayed.",
+            "Institutional ownership aur insider activity samjhao",
+            self.prediction,
+            {"factors": []},
+            company_profile=company,
+        )
+        missing_activity = _llm_grounding_issue(
+            base + "Institutional ownership is 84.2 percent and reports may be delayed.",
+            "Institutional ownership aur insider activity samjhao",
+            self.prediction,
+            {"factors": []},
+            company_profile=company,
+        )
+        missing_boundary = _llm_grounding_issue(
+            base + "Institutional ownership is 84.2 percent and insider activity is net selling.",
+            "Institutional ownership aur insider activity samjhao",
+            self.prediction,
+            {"factors": []},
+            company_profile=company,
+        )
+        accepted = _llm_grounding_issue(
+            base + "Institutional ownership is 84.2 percent and insider activity is net selling. Holder reports may be delayed and this is not a standalone trading signal.",
+            "Institutional ownership aur insider activity samjhao",
+            self.prediction,
+            {"factors": []},
+            company_profile=company,
+        )
+
+        self.assertEqual("missing requested institutional ownership evidence", missing_percent)
+        self.assertEqual("missing requested insider net activity evidence", missing_activity)
+        self.assertEqual("missing ownership evidence boundary", missing_boundary)
+        self.assertIsNone(accepted)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -93,6 +93,19 @@ class AgentOrchestratorTests(unittest.TestCase):
         company_step = next(step for step in plan["steps"] if step["tool"] == "company_fundamentals")
         self.assertEqual("read-only", company_step["access"])
 
+    def test_ownership_question_uses_read_only_company_evidence_without_forcing_rag(self):
+        plan = build_agent_plan(
+            "Cisco ke institutional holders, ownership concentration aur insider buying selling samjhao",
+            "CSCO",
+        )
+
+        tools = [step["tool"] for step in plan["steps"]]
+        self.assertIn("ownership_and_insider_analysis", plan["intents"])
+        self.assertIn("company_fundamentals", tools)
+        self.assertNotIn("company_document_rag", tools)
+        company_step = next(step for step in plan["steps"] if step["tool"] == "company_fundamentals")
+        self.assertEqual("read-only", company_step["access"])
+
     def test_trace_preserves_plan_reason_and_honest_no_evidence_status(self):
         plan = build_agent_plan("annual report source citation", "AAPL")
         trace = tool_trace(plan, {

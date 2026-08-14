@@ -16,6 +16,7 @@ A focused public financial-information dashboard extracted as a new, independent
 - upcoming company events, external analyst target ranges and reported EPS-surprise history kept separate from the ML outlook;
 - dynamic company headline intelligence with title-level tone distribution, source diversity, freshness, themes and dated publisher evidence;
 - multi-period company financial-statement intelligence with annual/quarterly revenue, profit, margins, cash-flow, CAGR and leverage calculations;
+- dynamic ownership and insider-activity intelligence with provider-reported major ownership, returned-holder concentration, institutional/mutual-fund tables, six-month net activity and dated transactions;
 - configurable downside alerts with optional browser notifications and a 15-minute scan interval;
 - a draggable sliding section selector for quick market, currency, news and intelligence navigation;
 - transparent, experimental market analytics;
@@ -115,7 +116,7 @@ For each live prediction, FinTrack also produces a local sensitivity explanation
 
 ## Hybrid agentic research flow
 
-The public `/market/agent` route uses a `plan -> execute -> synthesize` workflow. `agent_orchestrator.py` deterministically classifies the question and selects only the required read-only tools: current quote, ML/technical outlook, requested historical session, company fundamentals, indexed document RAG, recent headlines, macro factors, market breadth or global indices. The LLM does not choose tools and no mutation-capable tool is exposed, so prompt text cannot approve a model, upload a document or alter project data.
+The public `/market/agent` route uses a `plan -> execute -> synthesize` workflow. `agent_orchestrator.py` deterministically classifies the question and selects only the required read-only tools: current quote, ML/technical outlook, requested historical session, company fundamentals, financial-statement and ownership evidence, indexed document RAG, recent headlines, macro factors, market breadth or global indices. The LLM does not choose tools and no mutation-capable tool is exposed, so prompt text cannot approve a model, upload a document or alter project data.
 
 For annual-report, filing, debt, revenue or citation questions, the agent retrieves existing indexed chunks and requires exact `[S# p.#]` citations in any accepted generated answer. When there is no indexed evidence, the trace reports `no_evidence` and the deterministic fallback refuses to invent a filing claim. The API returns `agentPlan`, `toolTrace`, `evidenceSources` and `citations`; the chat UI exposes these behind an expandable evidence trace so an interviewer or user can audit why each tool ran and what it returned.
 

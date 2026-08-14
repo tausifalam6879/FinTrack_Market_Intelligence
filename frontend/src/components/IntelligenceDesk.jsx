@@ -470,6 +470,7 @@ function CompanyFundamentalsPanel({ data, loading, error }) {
     <CompanyCatalystPanel data={data.catalysts} currency={currency} />
     <div className="fundamental-groups">{groups.map(([title, entries]) => <FundamentalGroup key={title} title={title} entries={entries} />)}</div>
     <CompanyFinancialTrendPanel data={data.financialTrends} currency={currency} />
+    <CompanyOwnershipPanel data={data.ownershipIntelligence} currency={currency} />
     <CompanyNewsIntelligencePanel data={data.newsIntelligence} articles={data.news} />
     <p className="fundamentals-method"><strong>Source:</strong> {data.source}. Figures may use different reporting periods and are shown as provider evidence, not an accounting audit or investment recommendation.{data.dataAsOf ? ` Data as of ${new Date(data.dataAsOf).toLocaleString("en-IN")}.` : ""}</p>
   </section>;
@@ -547,6 +548,87 @@ function CompanyFinancialTrendPanel({ data, currency }) {
       })}</div> : <p>No comparable quarterly revenue periods were returned.</p>}
     </div>
     <p className="financial-trend-method"><strong>Method:</strong> {data.method} {data.disclaimer}</p>
+  </section>;
+}
+
+function CompanyOwnershipPanel({ data, currency }) {
+  if (!data || data.status !== "available") return <section className="ownership-panel ownership-unavailable">
+    <div className="ownership-heading"><div><p className="eyebrow">OWNERSHIP & INSIDER ACTIVITY</p><h4>No ownership dataset available for this listing</h4></div><span>Not estimated</span></div>
+    <p>The provider returned no holder or insider dataset, so FinTrack does not infer missing ownership activity.</p>
+  </section>;
+
+  const major = data.majorOwnership || {};
+  const concentration = data.concentration || {};
+  const insider = data.insiderSummary || {};
+  const institutions = data.institutionalHolders || [];
+  const funds = data.mutualFundHolders || [];
+  const transactions = data.recentInsiderTransactions || [];
+  const coverage = data.coverage || {};
+  const insidersHeld = Number(major.insidersPercentHeld || 0);
+  const institutionsHeld = Number(major.institutionsPercentHeld || 0);
+  const otherHeld = Math.max(0, 100 - insidersHeld - institutionsHeld);
+  const compositionTotal = Math.max(100, insidersHeld + institutionsHeld);
+  const width = (value) => `${Math.max(0, Math.min(100, (Number(value || 0) / compositionTotal) * 100))}%`;
+  const percent = (value, signed = false) => {
+    const numeric = Number(value);
+    if (value === null || value === undefined || !Number.isFinite(numeric)) return "—";
+    return `${signed && numeric > 0 ? "+" : ""}${numeric.toFixed(2)}%`;
+  };
+  const compact = (value) => formatCompactMoney(value, null);
+  const formatDate = (value) => {
+    if (!value) return "Date unavailable";
+    const parsed = new Date(`${value}T00:00:00`);
+    return Number.isNaN(parsed.getTime()) ? value : parsed.toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" });
+  };
+  const activityClass = insider.netActivity === "net buying" ? "positive" : insider.netActivity === "net selling" ? "negative" : "neutral";
+  const holderTable = (rows, missingMessage) => rows.length ? <div className="ownership-table-wrap"><table className="ownership-table">
+    <thead><tr><th>Holder</th><th>Reported</th><th>Held</th><th>Shares</th><th>Position change</th></tr></thead>
+    <tbody>{rows.slice(0, 6).map((item, index) => <tr key={`${item.holder}-${index}`}>
+      <td><strong>{item.holder}</strong></td><td>{formatDate(item.dateReported)}</td><td>{percent(item.percentHeld)}</td><td>{compact(item.shares)}</td><td className={Number(item.positionChangePercent) >= 0 ? "positive" : "negative"}>{percent(item.positionChangePercent, true)}</td>
+    </tr>)}</tbody>
+  </table></div> : <p className="ownership-missing">{missingMessage}</p>;
+
+  return <section className="ownership-panel" aria-labelledby="ownership-title">
+    <div className="ownership-heading">
+      <div><p className="eyebrow">OWNERSHIP & INSIDER ACTIVITY</p><h4 id="ownership-title">Holder concentration and reported insider transactions</h4></div>
+      <span>{data.coverageLevel || "partial"} provider coverage</span>
+    </div>
+    <div className="ownership-summary-grid">
+      <article><small>Insiders held</small><strong>{percent(major.insidersPercentHeld)}</strong><span>Provider-reported ownership</span></article>
+      <article><small>Institutions held</small><strong>{percent(major.institutionsPercentHeld)}</strong><span>{percent(major.institutionsFloatPercentHeld)} of float</span></article>
+      <article><small>Institutional holders</small><strong>{major.institutionsCount ? Number(major.institutionsCount).toLocaleString("en-IN") : "—"}</strong><span>Provider-reported count</span></article>
+      <article className={activityClass}><small>Six-month insider activity</small><strong>{String(insider.netActivity || "unavailable").replace(/^./, (letter) => letter.toUpperCase())}</strong><span>{percent(insider.netSharesPercent, true)} of reported insider shares</span></article>
+    </div>
+    {coverage.majorOwnership && <article className="ownership-composition-card">
+      <div className="ownership-card-heading"><strong>Reported ownership composition</strong><span>Categories are provider-reported</span></div>
+      <div className="ownership-composition-bar" aria-label={`${percent(insidersHeld)} insiders, ${percent(institutionsHeld)} institutions, ${percent(otherHeld)} other or unclassified`}>
+        <i className="insiders" style={{ width: width(insidersHeld) }} /><i className="institutions" style={{ width: width(institutionsHeld) }} /><i className="other" style={{ width: width(otherHeld) }} />
+      </div>
+      <div className="ownership-composition-legend"><span className="insiders">Insiders {percent(insidersHeld)}</span><span className="institutions">Institutions {percent(institutionsHeld)}</span><span>Other / unclassified {percent(otherHeld)}</span></div>
+    </article>}
+    <div className="ownership-holder-grid">
+      <article><div className="ownership-card-heading"><strong>Top returned institutions</strong><span>{concentration.returnedInstitutionCount || 0} rows · {percent(concentration.topInstitutionsPercentHeld)} combined</span></div>{holderTable(institutions, "Institutional holder rows were not returned for this exchange/listing.")}</article>
+      <article><div className="ownership-card-heading"><strong>Top returned mutual funds</strong><span>{concentration.returnedFundCount || 0} rows · {percent(concentration.topFundsPercentHeld)} combined</span></div>{holderTable(funds, "Mutual-fund holder rows were not returned for this exchange/listing.")}</article>
+    </div>
+    <div className="insider-activity-layout">
+      <article className="insider-summary-card">
+        <div className="ownership-card-heading"><strong>Insider activity · last 6 months</strong><span>Reported shares and transactions</span></div>
+        <div className="insider-summary-grid">
+          <div><small>Purchases</small><strong>{compact(insider.purchaseShares)}</strong><span>{insider.purchaseTransactions || 0} transactions</span></div>
+          <div><small>Sales</small><strong>{compact(insider.saleShares)}</strong><span>{insider.saleTransactions || 0} transactions</span></div>
+          <div className={activityClass}><small>Net shares</small><strong>{compact(insider.netSharesPurchased)}</strong><span>{percent(insider.netSharesPercent, true)}</span></div>
+        </div>
+      </article>
+      <article className="insider-transaction-card">
+        <div className="ownership-card-heading"><strong>Recent insider evidence</strong><span>Latest {transactions.length ? formatDate(data.latestInsiderTransactionDate) : "date unavailable"}</span></div>
+        {transactions.length ? <div className="insider-transaction-list">{transactions.slice(0, 6).map((item, index) => <div key={`${item.insider}-${item.date}-${index}`}>
+          <span className={`transaction-type type-${item.type.replace(/[^a-z]+/g, "-")}`}>{item.type}</span>
+          <p><strong>{item.insider}</strong><small>{item.position} · {formatDate(item.date)}</small></p>
+          <p><strong>{compact(item.shares)} shares</strong><small>{item.description}{item.reportedValue !== null && item.reportedValue !== undefined ? ` · ${formatCompactMoney(item.reportedValue, currency)}` : ""}</small></p>
+        </div>)}</div> : <p className="ownership-missing">Recent insider transaction rows were not returned for this listing.</p>}
+      </article>
+    </div>
+    <p className="ownership-method"><strong>Method:</strong> {data.method} {data.disclaimer}</p>
   </section>;
 }
 

@@ -115,6 +115,12 @@ FINANCIAL_TREND_QUERY_TERMS = (
     "annual revenue", "quarterly revenue", "debt trend",
 )
 
+OWNERSHIP_QUERY_TERMS = (
+    "ownership", "shareholding", "shareholders", "institutional holder", "institutional holding",
+    "mutual fund holder", "fund holding", "insider transaction", "insider buying", "insider selling",
+    "insider activity", "promoter holding", "top holder", "ownership concentration",
+)
+
 MARKET_BOARD = {
     "^NSEI": {"name": "Nifty 50", "region": "India", "currency": "INR", "kind": "index", "sector": "Indices"},
     "^BSESN": {"name": "BSE Sensex", "region": "India", "currency": "INR", "kind": "index", "sector": "Indices"},
@@ -1253,6 +1259,164 @@ def _financial_statement_trends(
     }
 
 
+def _normalize_holder_rows(frame: Optional[pd.DataFrame], limit: int = 8) -> List[Dict[str, Any]]:
+    if frame is None or frame.empty:
+        return []
+    records = []
+    for _, row in frame.head(limit).iterrows():
+        holder = str(row.get("Holder") or "").strip()
+        if not holder:
+            continue
+        records.append({
+            "holder": holder,
+            "dateReported": _provider_date(row.get("Date Reported")),
+            "percentHeld": _percentage_from_fraction(row.get("pctHeld")),
+            "shares": _round(row.get("Shares"), 0),
+            "reportedValue": _round(row.get("Value"), 0),
+            "positionChangePercent": _percentage_from_fraction(row.get("pctChange")),
+        })
+    return records
+
+
+def _insider_transaction_type(text: Any, transaction: Any = None) -> str:
+    normalized = f"{transaction or ''} {text or ''}".lower()
+    if "sale" in normalized or "sell" in normalized:
+        return "sale"
+    if "purchase" in normalized or "buy" in normalized:
+        return "purchase"
+    if "award" in normalized or "grant" in normalized:
+        return "award/grant"
+    if "gift" in normalized:
+        return "gift"
+    return "other"
+
+
+def _ownership_intelligence(
+    major_holders: Optional[pd.DataFrame],
+    institutional_holders: Optional[pd.DataFrame],
+    mutual_fund_holders: Optional[pd.DataFrame],
+    insider_transactions: Optional[pd.DataFrame],
+    insider_purchases: Optional[pd.DataFrame],
+    insider_roster: Optional[pd.DataFrame],
+) -> Dict[str, Any]:
+    major_values: Dict[str, Any] = {}
+    if major_holders is not None and not major_holders.empty and "Value" in major_holders.columns:
+        for index, value in major_holders["Value"].items():
+            major_values[str(index)] = value
+    major = {
+        "insidersPercentHeld": _percentage_from_fraction(major_values.get("insidersPercentHeld")),
+        "institutionsPercentHeld": _percentage_from_fraction(major_values.get("institutionsPercentHeld")),
+        "institutionsFloatPercentHeld": _percentage_from_fraction(major_values.get("institutionsFloatPercentHeld")),
+        "institutionsCount": int(_round(major_values.get("institutionsCount"), 0) or 0),
+    }
+    institutions = _normalize_holder_rows(institutional_holders, 10)
+    funds = _normalize_holder_rows(mutual_fund_holders, 10)
+
+    purchase_summary: Dict[str, Dict[str, Any]] = {}
+    if insider_purchases is not None and not insider_purchases.empty:
+        label_column = "Insider Purchases Last 6m"
+        if label_column in insider_purchases.columns:
+            for _, row in insider_purchases.iterrows():
+                label = str(row.get(label_column) or "").strip().lower()
+                if label:
+                    purchase_summary[label] = {
+                        "shares": _round(row.get("Shares"), 6 if label.startswith("%") else 0),
+                        "transactions": int(_round(row.get("Trans"), 0) or 0),
+                    }
+    purchases = purchase_summary.get("purchases", {})
+    sales = purchase_summary.get("sales", {})
+    net = purchase_summary.get("net shares purchased (sold)", {})
+    total_held = purchase_summary.get("total insider shares held", {})
+    percent_net = purchase_summary.get("% net shares purchased (sold)", {})
+    insider_summary = {
+        "period": "last 6 months",
+        "purchaseShares": purchases.get("shares"),
+        "purchaseTransactions": purchases.get("transactions", 0),
+        "saleShares": sales.get("shares"),
+        "saleTransactions": sales.get("transactions", 0),
+        "netSharesPurchased": net.get("shares"),
+        "totalInsiderSharesHeld": total_held.get("shares"),
+        "netSharesPercent": _percentage_from_fraction(percent_net.get("shares")),
+        "netActivity": (
+            "net buying" if (net.get("shares") or 0) > 0 else
+            "net selling" if (net.get("shares") or 0) < 0 else "balanced/no reported net change"
+        ),
+    }
+
+    transactions = []
+    if insider_transactions is not None and not insider_transactions.empty:
+        sorted_transactions = insider_transactions.copy()
+        if "Start Date" in sorted_transactions.columns:
+            sorted_transactions = sorted_transactions.sort_values("Start Date", ascending=False)
+        for _, row in sorted_transactions.head(10).iterrows():
+            transactions.append({
+                "date": _provider_date(row.get("Start Date")),
+                "insider": str(row.get("Insider") or "Unknown").strip(),
+                "position": str(row.get("Position") or "Not reported").strip(),
+                "type": _insider_transaction_type(row.get("Text"), row.get("Transaction")),
+                "shares": _round(row.get("Shares"), 0),
+                "reportedValue": _round(row.get("Value"), 0),
+                "description": str(row.get("Text") or "Transaction detail unavailable").strip(),
+                "ownership": str(row.get("Ownership") or "Not reported").strip(),
+            })
+
+    roster = []
+    if insider_roster is not None and not insider_roster.empty:
+        for _, row in insider_roster.head(8).iterrows():
+            roster.append({
+                "name": str(row.get("Name") or "Unknown").strip(),
+                "position": str(row.get("Position") or "Not reported").strip(),
+                "latestTransaction": str(row.get("Most Recent Transaction") or "Not reported").strip(),
+                "latestTransactionDate": _provider_date(row.get("Latest Transaction Date")),
+                "sharesOwnedDirectly": _round(row.get("Shares Owned Directly"), 0),
+            })
+
+    top_institution_percent = _round(sum(float(item.get("percentHeld") or 0) for item in institutions), 2)
+    top_fund_percent = _round(sum(float(item.get("percentHeld") or 0) for item in funds), 2)
+    components = {
+        "majorOwnership": any(value not in (None, 0) for value in major.values()),
+        "institutionalHolders": bool(institutions),
+        "mutualFundHolders": bool(funds),
+        "insiderActivity": bool(transactions) or bool(purchase_summary),
+    }
+    evidence_count = sum(components.values())
+    if not evidence_count:
+        return {
+            "status": "unavailable",
+            "majorOwnership": major,
+            "institutionalHolders": [],
+            "mutualFundHolders": [],
+            "insiderSummary": insider_summary,
+            "recentInsiderTransactions": [],
+            "insiderRoster": [],
+            "coverage": components,
+            "source": "Yahoo Finance holder and insider datasets via yfinance",
+            "method": "No ownership dataset was returned for this listing.",
+            "disclaimer": "FinTrack does not estimate missing ownership or insider activity.",
+        }
+    return {
+        "status": "available",
+        "coverageLevel": "broad" if evidence_count >= 3 else "partial",
+        "coverage": components,
+        "majorOwnership": major,
+        "institutionalHolders": institutions,
+        "mutualFundHolders": funds,
+        "concentration": {
+            "returnedInstitutionCount": len(institutions),
+            "topInstitutionsPercentHeld": top_institution_percent,
+            "returnedFundCount": len(funds),
+            "topFundsPercentHeld": top_fund_percent,
+        },
+        "insiderSummary": insider_summary,
+        "recentInsiderTransactions": transactions,
+        "insiderRoster": roster,
+        "latestInsiderTransactionDate": next((item["date"] for item in transactions if item.get("date")), None),
+        "source": "Yahoo Finance holder and insider datasets via yfinance",
+        "method": "Provider ownership percentages and top-holder tables are normalized; returned-holder concentration and six-month insider net activity are calculated without extrapolating missing holders.",
+        "disclaimer": "Holder reports can be delayed, duplicated across fund families or unavailable by exchange. Insider transactions need context and are not a standalone bullish/bearish signal or investment advice.",
+    }
+
+
 def _fifty_two_week_position(price: Any, low: Any, high: Any) -> Optional[float]:
     current = _round(price, 6)
     lower = _round(low, 6)
@@ -1452,6 +1616,30 @@ def company_research(symbol: str) -> Dict[str, Any]:
         quarterly_income = ticker.quarterly_income_stmt
     except Exception:
         quarterly_income = None
+    try:
+        major_holders = ticker.major_holders
+    except Exception:
+        major_holders = None
+    try:
+        institutional_holders = ticker.institutional_holders
+    except Exception:
+        institutional_holders = None
+    try:
+        mutual_fund_holders = ticker.mutualfund_holders
+    except Exception:
+        mutual_fund_holders = None
+    try:
+        insider_transactions = ticker.insider_transactions
+    except Exception:
+        insider_transactions = None
+    try:
+        insider_purchases = ticker.insider_purchases
+    except Exception:
+        insider_purchases = None
+    try:
+        insider_roster = ticker.insider_roster_holders
+    except Exception:
+        insider_roster = None
 
     close = frame["Close"].astype(float)
     fifty_two_week_low = _round(frame["Low"].min()) if "Low" in frame else None
@@ -1466,6 +1654,14 @@ def company_research(symbol: str) -> Dict[str, Any]:
         balance_sheet,
         cash_flow,
         quarterly_income,
+    )
+    ownership = _ownership_intelligence(
+        major_holders,
+        institutional_holders,
+        mutual_fund_holders,
+        insider_transactions,
+        insider_purchases,
+        insider_roster,
     )
     news_evidence = market_news(symbol, 8)
     result = {
@@ -1501,6 +1697,7 @@ def company_research(symbol: str) -> Dict[str, Any]:
         },
         "financials": financials,
         "financialTrends": financial_trends,
+        "ownershipIntelligence": ownership,
         "catalysts": catalysts,
         "history": [
             {"date": index.strftime("%Y-%m-%d"), "close": _round(row["Close"])}
@@ -2303,6 +2500,11 @@ def _requests_financial_trend_analysis(message: str) -> bool:
     return any(term in lowered for term in FINANCIAL_TREND_QUERY_TERMS)
 
 
+def _requests_ownership_analysis(message: str) -> bool:
+    lowered = str(message or "").lower()
+    return any(term in lowered for term in OWNERSHIP_QUERY_TERMS)
+
+
 def market_prediction(symbol: str) -> Dict[str, Any]:
     symbol = _sanitize_symbol(symbol)
     cache_key = f"prediction:{symbol}"
@@ -2931,6 +3133,51 @@ def _verified_tool_answer(
                 "\n\nFinancial statement trend evidence\n"
                 "- Comparable provider statement periods available nahi hain; missing growth, margin ya cash-flow trend invent nahi kiya gaya."
             )
+    ownership_section = ""
+    if _requests_ownership_analysis(lowered):
+        ownership = (company_profile or {}).get("ownershipIntelligence") or {}
+        if ownership.get("status") == "available":
+            major = ownership.get("majorOwnership") or {}
+            concentration = ownership.get("concentration") or {}
+            insider = ownership.get("insiderSummary") or {}
+            institutions = ownership.get("institutionalHolders") or []
+            funds = ownership.get("mutualFundHolders") or []
+            transactions = ownership.get("recentInsiderTransactions") or []
+            institution_lines = [
+                f"- {item.get('holder')}: {item.get('percentHeld')}% held, "
+                f"{_compact_amount(item.get('shares'))} shares, reported {item.get('dateReported') or 'date unavailable'}."
+                for item in institutions[:3]
+            ]
+            transaction_lines = [
+                f"- {item.get('date') or 'Date unavailable'}: {item.get('insider')} "
+                f"({item.get('position')}) reported {item.get('type')} of "
+                f"{_compact_amount(item.get('shares'))} shares."
+                for item in transactions[:3]
+            ]
+            ownership_section = (
+                "\n\nOwnership and insider activity evidence\n"
+                f"- Provider-reported ownership: insiders {major.get('insidersPercentHeld')}%, "
+                f"institutions {major.get('institutionsPercentHeld')}%, institutions on float "
+                f"{major.get('institutionsFloatPercentHeld')}%, across {major.get('institutionsCount') or 0} reported institutions.\n"
+                f"- Returned-holder concentration only: top {concentration.get('returnedInstitutionCount') or 0} "
+                f"institution rows total {concentration.get('topInstitutionsPercentHeld')}%; top "
+                f"{concentration.get('returnedFundCount') or 0} mutual-fund rows total "
+                f"{concentration.get('topFundsPercentHeld')}%. FinTrack does not extrapolate unreturned holders.\n"
+                + ("\n".join(institution_lines) if institution_lines else "- Institutional holder rows provider ne return nahi kiye.")
+                + ("" if funds else "\n- Mutual-fund holder rows provider ne return nahi kiye.")
+                + f"\n- Six-month insider summary: {insider.get('netActivity')}; purchases "
+                f"{_compact_amount(insider.get('purchaseShares'))} shares in {insider.get('purchaseTransactions') or 0} "
+                f"transactions, sales {_compact_amount(insider.get('saleShares'))} shares in "
+                f"{insider.get('saleTransactions') or 0} transactions, net "
+                f"{_compact_amount(insider.get('netSharesPurchased'))} shares ({insider.get('netSharesPercent')}%).\n"
+                + ("\n".join(transaction_lines) if transaction_lines else "- Recent insider transaction rows provider ne return nahi kiye.")
+                + "\n- Holder reports can be delayed, and insider activity needs context; it is not a standalone bullish/bearish signal or investment advice."
+            )
+        else:
+            ownership_section = (
+                "\n\nOwnership and insider activity evidence\n"
+                "- Is listing ke liye provider ne ownership ya insider dataset return nahi kiya; missing holdings or activity invent nahi ki gayi."
+            )
     return (
         "Seedha jawab\n"
         f"{prediction['name']} ke liye model ka current scenario {prediction['outlook']} hai, lekin ise guaranteed "
@@ -2945,6 +3192,7 @@ def _verified_tool_answer(
         + catalyst_section
         + news_section
         + financial_trend_section
+        + ownership_section
         + "\n\nCalculation aur scenario\n"
         + f"- Current price se lower range tak downside: {brief['currentPrice']} - "
         + f"{prediction['expectedRange']['low']} = {brief['expectedDownsidePoints']} points "
@@ -3118,6 +3366,25 @@ def _llm_grounding_issue(
             )
             if not any(marker in normalized_answer for marker in financial_boundary_markers):
                 return "missing financial statement evidence boundary"
+    if _requests_ownership_analysis(lowered):
+        ownership = (company_profile or {}).get("ownershipIntelligence") or {}
+        if ownership.get("status") == "available":
+            major = ownership.get("majorOwnership") or {}
+            if any(term in lowered for term in ("ownership", "shareholding", "institutional")) and major.get("institutionsPercentHeld") is not None:
+                expected_percent = f"{abs(float(major['institutionsPercentHeld'])):.2f}".rstrip("0").rstrip(".")
+                if expected_percent not in normalized_answer:
+                    return "missing requested institutional ownership evidence"
+            insider = ownership.get("insiderSummary") or {}
+            if "insider" in lowered and insider.get("netActivity"):
+                expected_activity = str(insider["netActivity"]).lower()
+                if expected_activity not in normalized_answer:
+                    return "missing requested insider net activity evidence"
+            ownership_boundary_markers = (
+                "not a standalone", "not standalone", "delayed", "reporting delay",
+                "needs context", "need context", "not investment advice",
+            )
+            if not any(marker in normalized_answer for marker in ownership_boundary_markers):
+                return "missing ownership evidence boundary"
     if document_requested and not document_matches:
         return "no indexed document evidence available"
     if document_matches:
@@ -3369,6 +3636,7 @@ async def market_agent(request: FastApiRequest):
         }
     if "company" in context:
         financial_trends = context["company"].get("financialTrends") or {}
+        ownership = context["company"].get("ownershipIntelligence") or {}
         llm_context["company"] = {
             "sector": context["company"]["sector"],
             "industry": context["company"]["industry"],
@@ -3394,6 +3662,20 @@ async def market_agent(request: FastApiRequest):
                     for item in financial_trends.get("quarterly") or []
                 ],
                 "method": financial_trends.get("method"),
+            },
+            "ownershipAndInsiderActivity": {
+                "status": ownership.get("status"),
+                "coverageLevel": ownership.get("coverageLevel"),
+                "coverage": ownership.get("coverage"),
+                "majorOwnership": ownership.get("majorOwnership"),
+                "concentration": ownership.get("concentration"),
+                "insiderSummary": ownership.get("insiderSummary"),
+                "latestInsiderTransactionDate": ownership.get("latestInsiderTransactionDate"),
+                "topInstitutions": (ownership.get("institutionalHolders") or [])[:5],
+                "topMutualFunds": (ownership.get("mutualFundHolders") or [])[:5],
+                "recentInsiderTransactions": (ownership.get("recentInsiderTransactions") or [])[:6],
+                "method": ownership.get("method"),
+                "disclaimer": ownership.get("disclaimer"),
             },
         }
     if context.get("sectorPeers", {}).get("status") == "available":
@@ -3449,6 +3731,7 @@ async def market_agent(request: FastApiRequest):
         "Company catalyst dates can change; label analyst consensus and targets as external opinions separate from FinTrack ML. "
         "When headlineEvidence is supplied, call it title-keyword evidence, report source breadth and dates, and do not imply that headlines prove an event or understand full article context. "
         "When financialStatementTrends is supplied, distinguish annual from quarterly periods, use the supplied growth and margin calculations, and do not estimate missing statement rows. "
+        "When ownershipAndInsiderActivity is supplied, distinguish provider-reported total ownership from the sum of only returned top-holder rows. State missing holder-table coverage, reporting delays, and that insider activity needs context and is not a standalone trading signal. "
         "changePct is daily price change, not trading volume. RSI above 70 is overbought, below 30 is oversold. "
         "If balancedAccuracy is below 53, explicitly state that the model has no reliable directional edge. "
         "Keep the response readable and normally within about 550 words."
@@ -3477,6 +3760,7 @@ async def market_agent(request: FastApiRequest):
         "model_and_technical_analysis", "historical_date_analysis", "news_analysis",
         "macro_analysis", "market_breadth_analysis", "global_market_comparison",
         "financial_statement_trend_analysis", "company_catalyst_analysis", "sector_peer_analysis",
+        "ownership_and_insider_analysis",
     ))
 
     def verified_fallback() -> str:
