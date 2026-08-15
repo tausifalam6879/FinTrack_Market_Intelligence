@@ -545,6 +545,50 @@ main { width: min(1500px, calc(100% - 40px)); margin: 0 auto; }
 .eps-trend-strip strong.negative { color: #b14646; }
 .estimate-basis-warning { margin: 8px 0 0; padding: 6px 7px; border-radius: 7px; color: #805b2d; background: #fff3d6; font-size: 6px; line-height: 1.45; }
 .estimate-method { margin: 10px 0 0; color: var(--muted); font-size: 7px; line-height: 1.5; }
+.corporate-action-panel { margin-top: 11px; padding: 15px; border: 1px solid #bfcfe5; border-radius: 14px; background: linear-gradient(135deg,rgba(255,255,255,.94),rgba(239,246,255,.86)); }
+.corporate-action-panel.corporate-action-unavailable { border-style: dashed; }
+.corporate-action-unavailable > p, .corporate-action-empty { margin: 9px 0 0; color: var(--muted); font-size: 8px; line-height: 1.5; }
+.corporate-action-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; }
+.corporate-action-heading h4 { margin: 3px 0 0; font-size: 14px; }
+.corporate-action-heading > span { padding: 6px 9px; border: 1px solid #b9cce3; border-radius: 999px; color: #315d8c; background: #fff; font-size: 7px; font-weight: 900; text-transform: uppercase; }
+.corporate-action-summary { margin-top: 11px; display: grid; grid-template-columns: repeat(4,minmax(0,1fr)); gap: 7px; }
+.corporate-action-summary article { min-width: 0; padding: 10px; border: 1px solid #d5e1ef; border-top: 3px solid #4c7fba; border-radius: 10px; background: #fff; }
+.corporate-action-summary article.positive { border-top-color: #28976f; }
+.corporate-action-summary article.negative { border-top-color: #c85c62; }
+.corporate-action-summary small, .corporate-action-summary strong, .corporate-action-summary span { display: block; }
+.corporate-action-summary small, .corporate-action-summary span { color: var(--muted); font-size: 7px; }
+.corporate-action-summary strong { margin: 5px 0 3px; overflow: hidden; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+.corporate-action-layout { margin-top: 9px; display: grid; grid-template-columns: 1.1fr .9fr; gap: 9px; }
+.corporate-action-layout > article { min-width: 0; padding: 11px; border: 1px solid #d5e1ef; border-radius: 11px; background: #fff; }
+.corporate-action-card-heading { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.corporate-action-card-heading strong { font-size: 9px; }
+.corporate-action-card-heading span { color: var(--muted); font-size: 7px; text-align: right; }
+.annual-dividend-bars { margin-top: 9px; display: grid; gap: 6px; }
+.annual-dividend-bars > div { display: grid; grid-template-columns: 40px minmax(70px,1fr) minmax(76px,auto) 48px; align-items: center; gap: 7px; }
+.annual-dividend-bars span, .annual-dividend-bars small { color: var(--muted); font-size: 7px; }
+.annual-dividend-bars i { height: 7px; overflow: hidden; border-radius: 99px; background: #eaf0f7; }
+.annual-dividend-bars b { display: block; height: 100%; border-radius: inherit; background: linear-gradient(90deg,#4f81bd,#50a99b); }
+.annual-dividend-bars strong { font-size: 8px; text-align: right; }
+.annual-dividend-bars small { text-align: right; }
+.annual-dividend-bars .positive { color: #08775e; }
+.annual-dividend-bars .negative { color: #b14646; }
+.corporate-action-history-card { max-height: 220px; overflow-y: auto; }
+.corporate-action-event { padding: 7px 0; display: grid; grid-template-columns: 58px minmax(0,1fr); align-items: center; gap: 8px; border-top: 1px solid #e9eff6; }
+.corporate-action-event:first-of-type { margin-top: 6px; }
+.corporate-action-event > span { padding: 4px 5px; border-radius: 99px; color: #315d8c; background: #e9f2fc; font-size: 6px; font-weight: 850; text-align: center; text-transform: uppercase; }
+.corporate-action-event.split > span { color: #71551a; background: #fff2d5; }
+.corporate-action-event.gain > span { color: #236d54; background: #e4f6ee; }
+.corporate-action-event p { margin: 0; min-width: 0; }
+.corporate-action-event strong, .corporate-action-event small { display: block; }
+.corporate-action-event strong { overflow: hidden; font-size: 8px; text-overflow: ellipsis; white-space: nowrap; }
+.corporate-action-event small { margin-top: 3px; color: var(--muted); font-size: 7px; }
+.corporate-action-footnotes { margin-top: 9px; display: flex; flex-wrap: wrap; gap: 6px; }
+.corporate-action-footnotes span, .corporate-action-upcoming span { padding: 6px 8px; border-radius: 8px; color: var(--muted); background: rgba(255,255,255,.82); font-size: 7px; }
+.corporate-action-footnotes strong { color: var(--ink); }
+.corporate-action-footnotes .evidence-warning { color: #87591b; background: #fff4dc; }
+.corporate-action-upcoming { margin-top: 8px; display: flex; align-items: center; flex-wrap: wrap; gap: 6px; }
+.corporate-action-upcoming > strong { margin-right: 3px; font-size: 8px; }
+.corporate-action-method { margin: 10px 0 0; color: var(--muted); font-size: 7px; line-height: 1.5; }
 .risk-benchmark-panel { margin: 16px 0; padding: 22px; border: 1px solid #b9d5df; border-radius: 19px; background: linear-gradient(135deg,#f8fcfd,#f3f8fc 55%,#f8f5fb); }
 .risk-benchmark-panel.risk-unavailable { border-style: dashed; }
 .risk-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 20px; }
@@ -804,6 +848,7 @@ footer p { margin: 5px 0 0; }
   .financial-trend-summary { grid-template-columns: repeat(2,minmax(0,1fr)); }
   .ownership-summary-grid { grid-template-columns: repeat(2,minmax(0,1fr)); }
   .estimate-summary-grid { grid-template-columns: repeat(2,minmax(0,1fr)); }
+  .corporate-action-summary { grid-template-columns: repeat(2,minmax(0,1fr)); }
   .news-intelligence-metrics { grid-template-columns: repeat(2,minmax(0,1fr)); }
 }
 @media (max-width: 820px) {
@@ -826,6 +871,7 @@ footer p { margin: 5px 0 0; }
   .news-headline-evidence > div:last-of-type { grid-template-columns: repeat(2,minmax(0,1fr)); }
   .catalyst-evidence-grid { grid-template-columns: 1fr; }
   .estimate-revision-grid { grid-template-columns: 1fr; }
+  .corporate-action-layout { grid-template-columns: 1fr; }
   .validation-summary { grid-template-columns: repeat(3,minmax(0,1fr)); }
   .deep-learning-grid { grid-template-columns: repeat(2,minmax(0,1fr)); }
   .registry-metrics { grid-template-columns: repeat(3,minmax(0,1fr)); }
@@ -871,6 +917,10 @@ footer p { margin: 5px 0 0; }
   .catalyst-events { grid-template-columns: 1fr; }
   .estimate-heading, .estimate-card-heading { align-items: flex-start; flex-direction: column; }
   .estimate-summary-grid { grid-template-columns: 1fr; }
+  .corporate-action-heading, .corporate-action-card-heading { align-items: flex-start; flex-direction: column; }
+  .corporate-action-summary { grid-template-columns: 1fr; }
+  .annual-dividend-bars > div { grid-template-columns: 36px minmax(55px,1fr) minmax(68px,auto); }
+  .annual-dividend-bars small { grid-column: 2 / -1; }
   .news-intelligence-heading { flex-direction: column; }
   .news-intelligence-metrics, .news-headline-evidence > div:last-of-type { grid-template-columns: 1fr; }
   .financial-trend-heading { flex-direction: column; }

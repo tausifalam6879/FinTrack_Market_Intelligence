@@ -469,6 +469,7 @@ function CompanyFundamentalsPanel({ data, loading, error }) {
     </div>
     <CompanyCatalystPanel data={data.catalysts} currency={currency} />
     <CompanyAnalystEstimatePanel data={data.analystEstimateIntelligence} currency={currency} />
+    <CompanyCorporateActionPanel data={data.corporateActionIntelligence} currency={currency} />
     <div className="fundamental-groups">{groups.map(([title, entries]) => <FundamentalGroup key={title} title={title} entries={entries} />)}</div>
     <CompanyFinancialTrendPanel data={data.financialTrends} currency={currency} />
     <CompanyOwnershipPanel data={data.ownershipIntelligence} currency={currency} />
@@ -484,6 +485,82 @@ function PerformanceMetric({ label, value }) {
 
 function FundamentalGroup({ title, entries }) {
   return <article><h4>{title}</h4><dl>{entries.map(([label, value]) => <div key={label}><dt>{label}</dt><dd>{value}</dd></div>)}</dl></article>;
+}
+
+function CompanyCorporateActionPanel({ data, currency }) {
+  if (!data || data.status !== "available") return <section className="corporate-action-panel corporate-action-unavailable">
+    <div className="corporate-action-heading"><div><p className="eyebrow">DIVIDENDS & CORPORATE ACTIONS</p><h4>No distribution or split evidence available</h4></div><span>Missing is not zero</span></div>
+    <p>The provider returned no dividend, capital-gain distribution or split history for this listing. FinTrack does not infer a zero payout.</p>
+  </section>;
+
+  const summary = data.summary || {};
+  const snapshot = data.snapshot || {};
+  const annual = data.annualDividends || [];
+  const dividends = data.recentDividends || [];
+  const splits = data.recentSplits || [];
+  const capitalGains = data.recentCapitalGains || [];
+  const upcoming = data.upcomingEvents || [];
+  const localCurrency = data.currency || currency;
+  const value = (raw, digits = 2) => {
+    const numeric = Number(raw);
+    if (raw === null || raw === undefined || !Number.isFinite(numeric)) return "—";
+    return numeric.toLocaleString("en-IN", { maximumFractionDigits: digits });
+  };
+  const perShare = (raw) => raw === null || raw === undefined ? "—" : `${value(raw, 6)} ${localCurrency || "local currency"}`;
+  const percent = (raw, signed = false) => {
+    const numeric = Number(raw);
+    if (raw === null || raw === undefined || !Number.isFinite(numeric)) return "—";
+    return `${signed && numeric > 0 ? "+" : ""}${numeric.toFixed(2)}%`;
+  };
+  const formatDate = (raw) => {
+    if (!raw) return "Date unavailable";
+    const parsed = new Date(`${raw}T00:00:00`);
+    return Number.isNaN(parsed.getTime()) ? raw : parsed.toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" });
+  };
+  const maxAnnual = Math.max(...annual.map((item) => Number(item.totalPerShare) || 0), 1);
+  const hasDividendEvidence = dividends.length > 0 || annual.length > 0;
+  const cagrYears = summary.completedYearCagrStart && summary.completedYearCagrEnd
+    ? `${summary.completedYearCagrStart}–${summary.completedYearCagrEnd} completed years`
+    : "Needs two completed years";
+
+  return <section className="corporate-action-panel" aria-labelledby="corporate-action-title">
+    <div className="corporate-action-heading">
+      <div><p className="eyebrow">DIVIDENDS & CORPORATE ACTIONS</p><h4 id="corporate-action-title">Per-share distributions, growth evidence and stock splits</h4></div>
+      <span>{data.coverageLevel || "partial"} provider coverage</span>
+    </div>
+    <div className="corporate-action-summary">
+      <article><small>Trailing 12 months</small><strong>{perShare(summary.trailing12MonthTotalPerShare)}</strong><span>{summary.paymentsLast12Months || 0} recorded payment(s)</span></article>
+      <article><small>Current dividend yield</small><strong>{percent(snapshot.currentYieldPercent)}</strong><span>{snapshot.fiveYearAverageYieldPercent == null ? "5-year average unavailable" : `${percent(snapshot.fiveYearAverageYieldPercent)} five-year average`}</span></article>
+      <article className={Number(summary.completedYearDividendCagrPercent) >= 0 ? "positive" : "negative"}><small>Completed-year CAGR</small><strong>{percent(summary.completedYearDividendCagrPercent, true)}</strong><span>{cagrYears}</span></article>
+      <article><small>Latest split</small><strong>{summary.latestSplitRatio || "No split returned"}</strong><span>{summary.latestSplitDate ? formatDate(summary.latestSplitDate) : "Provider history unavailable"}</span></article>
+    </div>
+    <div className="corporate-action-layout">
+      <article className="annual-dividend-card">
+        <div className="corporate-action-card-heading"><strong>Annual dividend record</strong><span>Current calendar year is partial</span></div>
+        {annual.length ? <div className="annual-dividend-bars">{[...annual].reverse().map((item) => <div key={item.year}>
+          <span>{item.year}{item.isPartialYear ? "*" : ""}</span>
+          <i><b style={{ width: `${Math.max(4, (Number(item.totalPerShare || 0) / maxAnnual) * 100)}%` }} /></i>
+          <strong>{perShare(item.totalPerShare)}</strong>
+          <small className={Number(item.changePercent) >= 0 ? "positive" : "negative"}>{item.isPartialYear ? "partial" : `${percent(item.changePercent, true)} YoY`}</small>
+        </div>)}</div> : <p className="corporate-action-empty">No cash-distribution history was returned. Split evidence below remains independent.</p>}
+      </article>
+      <article className="corporate-action-history-card">
+        <div className="corporate-action-card-heading"><strong>Recent provider events</strong><span>Newest first</span></div>
+        {dividends.slice(0, 5).map((item, index) => <div className="corporate-action-event" key={`dividend-${item.date}-${index}`}><span>Dividend</span><p><strong>{perShare(item.amountPerShare)} per share</strong><small>{formatDate(item.date)}</small></p></div>)}
+        {splits.slice(0, 4).map((item, index) => <div className="corporate-action-event split" key={`split-${item.date}-${index}`}><span>Split</span><p><strong>{item.displayRatio}</strong><small>{formatDate(item.date)}</small></p></div>)}
+        {capitalGains.slice(0, 3).map((item, index) => <div className="corporate-action-event gain" key={`gain-${item.date}-${index}`}><span>Capital gain</span><p><strong>{perShare(item.amountPerShare)} per share</strong><small>{formatDate(item.date)}</small></p></div>)}
+        {!dividends.length && !splits.length && !capitalGains.length && <p className="corporate-action-empty">No dated event rows were returned by the provider.</p>}
+      </article>
+    </div>
+    <div className="corporate-action-footnotes">
+      <span>Payout ratio: <strong>{percent(snapshot.payoutRatioPercent)}</strong></span>
+      <span>Prior trailing window: <strong>{perShare(summary.previous12MonthTotalPerShare)}</strong></span>
+      <span>TTM change: <strong>{percent(summary.trailingChangePercent, true)}</strong></span>
+      {!hasDividendEvidence && <span className="evidence-warning">No cash history returned; this is not shown as zero.</span>}
+    </div>
+    {upcoming.length > 0 && <div className="corporate-action-upcoming"><strong>Upcoming provider dates</strong>{upcoming.map((item) => <span key={`${item.type}-${item.date}`}>{item.label}: {formatDate(item.date)}</span>)}</div>}
+    <p className="corporate-action-method"><strong>Method:</strong> {data.method} {data.disclaimer}</p>
+  </section>;
 }
 
 function CompanyFinancialTrendPanel({ data, currency }) {

@@ -5,7 +5,8 @@ import os
 import re
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
+from fractions import Fraction
 from threading import Lock
 from typing import Any, Dict, List, Optional
 from urllib.error import HTTPError, URLError
@@ -126,6 +127,13 @@ ESTIMATE_REVISION_QUERY_TERMS = (
     "estimate revision", "estimate revisions", "eps revision", "eps revisions",
     "estimate trend", "earnings outlook", "consensus eps", "consensus revenue",
     "upward revision", "downward revision", "revision breadth",
+)
+
+DIVIDEND_ACTION_QUERY_TERMS = (
+    "dividend history", "dividend growth", "dividend yield", "payout ratio",
+    "dividend consistency", "distribution history", "corporate action",
+    "stock split", "split history", "capital gain distribution", "ex-dividend",
+    "ex dividend", "dividend payment", "trailing dividend",
 )
 
 MARKET_BOARD = {
@@ -1585,6 +1593,167 @@ def _company_catalysts(
     }
 
 
+def _positive_number(value: Any, digits: int = 6) -> Optional[float]:
+    numeric = _round(value, digits)
+    return numeric if numeric is not None and numeric > 0 else None
+
+
+def _distribution_records(series: Optional[pd.Series]) -> List[Dict[str, Any]]:
+    if series is None or not isinstance(series, pd.Series) or series.empty:
+        return []
+    records: List[Dict[str, Any]] = []
+    for index, raw_value in series.items():
+        event_date = _provider_date(index)
+        value = _positive_number(raw_value)
+        if not event_date or value is None:
+            continue
+        records.append({"date": event_date, "amountPerShare": value})
+    records.sort(key=lambda item: item["date"], reverse=True)
+    return records
+
+
+def _split_records(series: Optional[pd.Series]) -> List[Dict[str, Any]]:
+    if series is None or not isinstance(series, pd.Series) or series.empty:
+        return []
+    records: List[Dict[str, Any]] = []
+    for index, raw_value in series.items():
+        event_date = _provider_date(index)
+        ratio = _positive_number(raw_value)
+        if not event_date or ratio is None or math.isclose(ratio, 1.0):
+            continue
+        fraction = Fraction(ratio).limit_denominator(20)
+        records.append({
+            "date": event_date,
+            "ratio": _round(ratio, 6),
+            "displayRatio": f"{fraction.numerator}-for-{fraction.denominator}",
+        })
+    records.sort(key=lambda item: item["date"], reverse=True)
+    return records
+
+
+def _corporate_action_intelligence(
+    info: Dict[str, Any],
+    dividends: Optional[pd.Series],
+    splits: Optional[pd.Series],
+    capital_gains: Optional[pd.Series],
+    catalyst_events: Optional[List[Dict[str, Any]]] = None,
+    *,
+    today: Optional[date] = None,
+) -> Dict[str, Any]:
+    """Normalize distributions and splits while preserving missing-vs-zero evidence."""
+    today = today or datetime.now(timezone.utc).date()
+    dividend_records = _distribution_records(dividends)
+    capital_gain_records = _distribution_records(capital_gains)
+    split_records = _split_records(splits)
+
+    annual_map: Dict[int, Dict[str, Any]] = {}
+    for item in dividend_records:
+        item_date = date.fromisoformat(item["date"])
+        if item_date > today:
+            continue
+        bucket = annual_map.setdefault(item_date.year, {"total": 0.0, "paymentCount": 0})
+        bucket["total"] += float(item["amountPerShare"])
+        bucket["paymentCount"] += 1
+    annual_dividends = [
+        {
+            "year": year,
+            "totalPerShare": _round(values["total"], 6),
+            "paymentCount": values["paymentCount"],
+            "isPartialYear": year == today.year,
+        }
+        for year, values in sorted(annual_map.items(), reverse=True)
+    ][:7]
+    for index, item in enumerate(annual_dividends):
+        previous = annual_dividends[index + 1] if index + 1 < len(annual_dividends) else None
+        item["changePercent"] = (
+            _safe_percent_change(item["totalPerShare"], previous["totalPerShare"])
+            if previous and not item["isPartialYear"] and not previous["isPartialYear"] else None
+        )
+
+    trailing_start = today - timedelta(days=365)
+    previous_start = today - timedelta(days=730)
+    trailing = [
+        item for item in dividend_records
+        if trailing_start < date.fromisoformat(item["date"]) <= today
+    ]
+    previous = [
+        item for item in dividend_records
+        if previous_start < date.fromisoformat(item["date"]) <= trailing_start
+    ]
+    trailing_total = _round(sum(float(item["amountPerShare"]) for item in trailing), 6) if trailing else None
+    previous_total = _round(sum(float(item["amountPerShare"]) for item in previous), 6) if previous else None
+
+    completed_years = sorted(
+        (item for item in annual_dividends if not item["isPartialYear"] and item["totalPerShare"] > 0),
+        key=lambda item: item["year"],
+    )
+    completed_years = completed_years[-6:]
+    dividend_cagr = None
+    if len(completed_years) >= 2:
+        first, last = completed_years[0], completed_years[-1]
+        year_span = last["year"] - first["year"]
+        if year_span > 0:
+            dividend_cagr = _round(
+                ((last["totalPerShare"] / first["totalPerShare"]) ** (1 / year_span) - 1) * 100,
+                2,
+            )
+
+    upcoming_events = [
+        item for item in (catalyst_events or [])
+        if item.get("type") in {"ex-dividend", "dividend-payment"}
+        and item.get("status") == "upcoming"
+    ]
+    snapshot = {
+        # Current quote-summary yield and five-year average are percentage points.
+        "currentYieldPercent": _positive_number(info.get("dividendYield"), 4),
+        # Yahoo's trailing yield field is a fraction when populated.
+        "trailingYieldPercent": (
+            _percentage_from_fraction(info.get("trailingAnnualDividendYield"))
+            if _positive_number(info.get("trailingAnnualDividendYield")) is not None else None
+        ),
+        "fiveYearAverageYieldPercent": _positive_number(info.get("fiveYearAvgDividendYield"), 4),
+        "payoutRatioPercent": (
+            _percentage_from_fraction(info.get("payoutRatio"))
+            if _positive_number(info.get("payoutRatio")) is not None else None
+        ),
+        "providerTrailingAnnualRate": _positive_number(info.get("trailingAnnualDividendRate"), 6),
+        "providerForwardAnnualRate": _positive_number(info.get("forwardAnnualDividendRate"), 6),
+    }
+    has_snapshot = any(value is not None for value in snapshot.values())
+    status = "available" if dividend_records or split_records or capital_gain_records or upcoming_events or has_snapshot else "unavailable"
+    coverage_components = sum(bool(value) for value in (
+        dividend_records, split_records, capital_gain_records, upcoming_events, has_snapshot,
+    ))
+    return {
+        "status": status,
+        "coverageLevel": "broad" if coverage_components >= 3 else ("partial" if status == "available" else "unavailable"),
+        "currency": info.get("currency"),
+        "quoteType": info.get("quoteType"),
+        "snapshot": snapshot,
+        "summary": {
+            "lastDividendDate": dividend_records[0]["date"] if dividend_records else None,
+            "lastDividendAmountPerShare": dividend_records[0]["amountPerShare"] if dividend_records else None,
+            "trailing12MonthTotalPerShare": trailing_total,
+            "previous12MonthTotalPerShare": previous_total,
+            "trailingChangePercent": _safe_percent_change(trailing_total, previous_total),
+            "paymentsLast12Months": len(trailing),
+            "completedYearDividendCagrPercent": dividend_cagr,
+            "completedYearCagrStart": completed_years[0]["year"] if len(completed_years) >= 2 else None,
+            "completedYearCagrEnd": completed_years[-1]["year"] if len(completed_years) >= 2 else None,
+            "latestSplitDate": split_records[0]["date"] if split_records else None,
+            "latestSplitRatio": split_records[0]["displayRatio"] if split_records else None,
+        },
+        "annualDividends": annual_dividends,
+        "recentDividends": dividend_records[:12],
+        "recentSplits": split_records[:8],
+        "recentCapitalGains": capital_gain_records[:8],
+        "upcomingEvents": upcoming_events,
+        "source": "Yahoo Finance distributions and corporate actions via yfinance",
+        "method": "FinTrack sums positive per-share payment history for trailing and calendar-year totals. Completed-year CAGR excludes the current partial year; provider yield and payout snapshots remain separate.",
+        "disclaimer": "Historical distributions are not guaranteed. Current calendar-year totals are partial, provider corporate-action coverage can vary, and a stock split does not create economic value by itself. Missing data is not treated as zero.",
+    }
+
+
 ESTIMATE_PERIOD_LABELS = {
     "0q": "Current quarter",
     "+1q": "Next quarter",
@@ -1825,6 +1994,18 @@ def company_research(symbol: str) -> Dict[str, Any]:
         growth_estimates = ticker.growth_estimates
     except Exception:
         growth_estimates = None
+    try:
+        dividends = ticker.dividends
+    except Exception:
+        dividends = None
+    try:
+        splits = ticker.splits
+    except Exception:
+        splits = None
+    try:
+        capital_gains = ticker.capital_gains
+    except Exception:
+        capital_gains = None
 
     close = frame["Close"].astype(float)
     fifty_two_week_low = _round(frame["Low"].min()) if "Low" in frame else None
@@ -1854,6 +2035,13 @@ def company_research(symbol: str) -> Dict[str, Any]:
         eps_revisions,
         eps_trend,
         growth_estimates,
+    )
+    corporate_actions = _corporate_action_intelligence(
+        info,
+        dividends,
+        splits,
+        capital_gains,
+        catalysts.get("events"),
     )
     news_evidence = market_news(symbol, 8)
     result = {
@@ -1891,6 +2079,7 @@ def company_research(symbol: str) -> Dict[str, Any]:
         "financialTrends": financial_trends,
         "ownershipIntelligence": ownership,
         "analystEstimateIntelligence": analyst_estimates,
+        "corporateActionIntelligence": corporate_actions,
         "catalysts": catalysts,
         "history": [
             {"date": index.strftime("%Y-%m-%d"), "close": _round(row["Close"])}
@@ -2703,6 +2892,11 @@ def _requests_estimate_revision_analysis(message: str) -> bool:
     return any(term in lowered for term in ESTIMATE_REVISION_QUERY_TERMS)
 
 
+def _requests_dividend_action_analysis(message: str) -> bool:
+    lowered = str(message or "").lower()
+    return any(term in lowered for term in DIVIDEND_ACTION_QUERY_TERMS)
+
+
 def market_prediction(symbol: str) -> Dict[str, Any]:
     symbol = _sanitize_symbol(symbol)
     cache_key = f"prediction:{symbol}"
@@ -3432,6 +3626,55 @@ def _verified_tool_answer(
                 "\n\nAnalyst estimates and revision evidence\n"
                 "- Is listing ke liye provider ne analyst estimate/revision dataset return nahi kiya; missing consensus invent nahi kiya gaya."
             )
+    dividend_action_section = ""
+    if _requests_dividend_action_analysis(lowered):
+        actions = (company_profile or {}).get("corporateActionIntelligence") or {}
+        if actions.get("status") == "available":
+            summary = actions.get("summary") or {}
+            action_snapshot = actions.get("snapshot") or {}
+            currency = actions.get("currency") or prediction.get("expectedRange", {}).get("currency") or "listing currency"
+            shown = lambda value: "unavailable" if value is None else str(value)
+            recent_dividends = actions.get("recentDividends") or []
+            annual = actions.get("annualDividends") or []
+            splits = actions.get("recentSplits") or []
+            capital_gains = actions.get("recentCapitalGains") or []
+            event_lines = [
+                f"- {item.get('label')}: {item.get('date')} ({item.get('status')})."
+                for item in (actions.get("upcomingEvents") or [])
+            ]
+            annual_lines = [
+                f"- {item.get('year')}: {item.get('totalPerShare')} {currency} per share across "
+                f"{item.get('paymentCount')} payment(s)"
+                + (" (partial calendar year)." if item.get("isPartialYear") else
+                   f"; annual change {shown(item.get('changePercent'))}%.")
+                for item in annual[:5]
+            ]
+            split_lines = [
+                f"- {item.get('date')}: {item.get('displayRatio')} split."
+                for item in splits[:4]
+            ]
+            dividend_action_section = (
+                "\n\nDividend and corporate-action evidence\n"
+                f"- Trailing 12-month cash distributions: {shown(summary.get('trailing12MonthTotalPerShare'))} "
+                f"{currency} per share across {summary.get('paymentsLast12Months') or 0} payment(s); prior trailing "
+                f"window {shown(summary.get('previous12MonthTotalPerShare'))}, change "
+                f"{shown(summary.get('trailingChangePercent'))}%.\n"
+                f"- Current yield {shown(action_snapshot.get('currentYieldPercent'))}%; payout ratio "
+                f"{shown(action_snapshot.get('payoutRatioPercent'))}%; completed-year dividend CAGR "
+                f"{shown(summary.get('completedYearDividendCagrPercent'))}% "
+                f"({shown(summary.get('completedYearCagrStart'))} to {shown(summary.get('completedYearCagrEnd'))}).\n"
+                + ("\n".join(annual_lines) if annual_lines else "- Provider payment history is unavailable; no zero dividend was inferred.")
+                + ("\n" + "\n".join(split_lines) if split_lines else "\n- No split history was returned by the provider.")
+                + (f"\n- Provider returned {len(capital_gains)} capital-gain distribution record(s)." if capital_gains else "")
+                + ("\n" + "\n".join(event_lines) if event_lines else "")
+                + "\n- Current calendar-year totals are partial. Historical distributions are not guaranteed, missing data is not zero, and a stock split does not create economic value by itself."
+            )
+        else:
+            dividend_action_section = (
+                "\n\nDividend and corporate-action evidence\n"
+                "- Provider ne is listing ke liye dividend, distribution ya split evidence return nahi kiya. "
+                "Missing data ko zero dividend ya no-action claim nahi maana gaya."
+            )
     return (
         "Seedha jawab\n"
         f"{prediction['name']} ke liye model ka current scenario {prediction['outlook']} hai, lekin ise guaranteed "
@@ -3448,6 +3691,7 @@ def _verified_tool_answer(
         + financial_trend_section
         + ownership_section
         + estimate_revision_section
+        + dividend_action_section
         + "\n\nCalculation aur scenario\n"
         + f"- Current price se lower range tak downside: {brief['currentPrice']} - "
         + f"{prediction['expectedRange']['low']} = {brief['expectedDownsidePoints']} points "
@@ -3665,6 +3909,34 @@ def _llm_grounding_issue(
             )
             if not any(marker in normalized_answer for marker in estimate_boundary_markers):
                 return "missing analyst-estimate evidence boundary"
+    if _requests_dividend_action_analysis(lowered):
+        actions = (company_profile or {}).get("corporateActionIntelligence") or {}
+        summary = actions.get("summary") or {}
+        action_snapshot = actions.get("snapshot") or {}
+        if actions.get("status") == "available":
+            if any(term in lowered for term in ("dividend history", "dividend growth", "trailing dividend", "distribution history")) and summary.get("trailing12MonthTotalPerShare") is not None:
+                expected_total = f"{abs(float(summary['trailing12MonthTotalPerShare'])):.6f}".rstrip("0").rstrip(".")
+                if expected_total not in normalized_answer:
+                    return "missing requested trailing dividend evidence"
+            if "dividend yield" in lowered and action_snapshot.get("currentYieldPercent") is not None:
+                expected_yield = f"{abs(float(action_snapshot['currentYieldPercent'])):.4f}".rstrip("0").rstrip(".")
+                if expected_yield not in normalized_answer:
+                    return "missing requested dividend yield evidence"
+            if "payout ratio" in lowered and action_snapshot.get("payoutRatioPercent") is not None:
+                expected_payout = f"{abs(float(action_snapshot['payoutRatioPercent'])):.2f}".rstrip("0").rstrip(".")
+                if expected_payout not in normalized_answer:
+                    return "missing requested payout ratio evidence"
+            if "split" in lowered and summary.get("latestSplitRatio"):
+                if str(summary["latestSplitRatio"]).lower() not in normalized_answer:
+                    return "missing requested stock-split evidence"
+            boundary_markers = (
+                "historical distributions are not guaranteed", "historical dividend is not guaranteed",
+                "current calendar-year totals are partial", "current year is partial", "partial calendar year",
+                "missing data is not zero", "missing data ko zero", "split does not create economic value",
+                "split does not create value",
+            )
+            if not any(marker in normalized_answer for marker in boundary_markers):
+                return "missing dividend/corporate-action evidence boundary"
     if document_requested and not document_matches:
         return "no indexed document evidence available"
     if document_matches:
@@ -3918,6 +4190,7 @@ async def market_agent(request: FastApiRequest):
         financial_trends = context["company"].get("financialTrends") or {}
         ownership = context["company"].get("ownershipIntelligence") or {}
         analyst_estimates = context["company"].get("analystEstimateIntelligence") or {}
+        corporate_actions = context["company"].get("corporateActionIntelligence") or {}
         llm_context["company"] = {
             "sector": context["company"]["sector"],
             "industry": context["company"]["industry"],
@@ -3969,6 +4242,22 @@ async def market_agent(request: FastApiRequest):
                     "disclaimer": analyst_estimates.get("disclaimer"),
                 },
             } if "analyst_estimate_revision_analysis" in plan["intents"] else {}),
+            **({
+                "dividendAndCorporateActions": {
+                    "status": corporate_actions.get("status"),
+                    "coverageLevel": corporate_actions.get("coverageLevel"),
+                    "currency": corporate_actions.get("currency"),
+                    "snapshot": corporate_actions.get("snapshot"),
+                    "summary": corporate_actions.get("summary"),
+                    "annualDividends": corporate_actions.get("annualDividends"),
+                    "recentDividends": corporate_actions.get("recentDividends"),
+                    "recentSplits": corporate_actions.get("recentSplits"),
+                    "recentCapitalGains": corporate_actions.get("recentCapitalGains"),
+                    "upcomingEvents": corporate_actions.get("upcomingEvents"),
+                    "method": corporate_actions.get("method"),
+                    "disclaimer": corporate_actions.get("disclaimer"),
+                },
+            } if "dividend_and_corporate_action_analysis" in plan["intents"] else {}),
         }
     if context.get("sectorPeers", {}).get("status") == "available":
         peer_context = context["sectorPeers"]
@@ -4025,6 +4314,7 @@ async def market_agent(request: FastApiRequest):
         "When financialStatementTrends is supplied, distinguish annual from quarterly periods, use the supplied growth and margin calculations, and do not estimate missing statement rows. "
         "When ownershipAndInsiderActivity is supplied, distinguish provider-reported total ownership from the sum of only returned top-holder rows. State missing holder-table coverage, reporting delays, and that insider activity needs context and is not a standalone trading signal. "
         "When analystEstimateRevisions is supplied, separate changing third-party analyst estimates from company guidance and FinTrack ML. Report the forecast period, ranges, analyst counts and up/down revision breadth; flag any supplied EPS trend basis mismatch instead of merging incompatible series. "
+        "When dividendAndCorporateActions is supplied, distinguish history-derived per-share distributions from provider yield/payout snapshots. Mark the current calendar year partial, never treat missing payments as zero, and state that historical distributions are not guaranteed and splits do not create economic value by themselves. "
         "changePct is daily price change, not trading volume. RSI above 70 is overbought, below 30 is oversold. "
         "If balancedAccuracy is below 53, explicitly state that the model has no reliable directional edge. "
         "Keep the response readable and normally within about 550 words."
@@ -4055,6 +4345,7 @@ async def market_agent(request: FastApiRequest):
         "financial_statement_trend_analysis", "company_catalyst_analysis", "sector_peer_analysis",
         "ownership_and_insider_analysis",
         "analyst_estimate_revision_analysis",
+        "dividend_and_corporate_action_analysis",
     ))
 
     def verified_fallback() -> str:

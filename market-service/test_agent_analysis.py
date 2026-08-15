@@ -499,6 +499,67 @@ class AgentAnalysisTests(unittest.TestCase):
         self.assertEqual("missing analyst-estimate evidence boundary", missing_boundary)
         self.assertIsNone(accepted)
 
+    def test_dividend_fallback_reports_ttm_growth_yield_split_and_boundaries(self):
+        company = {
+            "corporateActionIntelligence": {
+                "status": "available", "currency": "USD",
+                "snapshot": {"currentYieldPercent": 1.48, "payoutRatioPercent": 49.85},
+                "summary": {
+                    "trailing12MonthTotalPerShare": 1.67,
+                    "previous12MonthTotalPerShare": 1.63,
+                    "trailingChangePercent": 2.45, "paymentsLast12Months": 4,
+                    "completedYearDividendCagrPercent": 2.57,
+                    "completedYearCagrStart": 2021, "completedYearCagrEnd": 2025,
+                    "latestSplitRatio": "2-for-1",
+                },
+                "annualDividends": [{
+                    "year": 2026, "totalPerShare": 1.25, "paymentCount": 3,
+                    "isPartialYear": True, "changePercent": None,
+                }],
+                "recentSplits": [{"date": "2000-03-23", "displayRatio": "2-for-1"}],
+                "recentCapitalGains": [], "upcomingEvents": [],
+            }
+        }
+        answer = _verified_tool_answer(
+            "Dividend history, dividend yield, payout ratio aur split history batao",
+            self.snapshot, self.prediction,
+            ["market_snapshot", "technical_prediction", "company_fundamentals"],
+            {"factors": []}, company_profile=company,
+        )
+
+        self.assertIn("Dividend and corporate-action evidence", answer)
+        self.assertIn("1.67 USD per share", answer)
+        self.assertIn("Current yield 1.48%", answer)
+        self.assertIn("2-for-1 split", answer)
+        self.assertIn("partial calendar year", answer)
+        self.assertIn("Historical distributions are not guaranteed", answer)
+
+    def test_generated_dividend_answer_requires_requested_values_and_boundary(self):
+        company = {
+            "corporateActionIntelligence": {
+                "status": "available",
+                "snapshot": {"currentYieldPercent": 1.48, "payoutRatioPercent": 49.85},
+                "summary": {
+                    "trailing12MonthTotalPerShare": 1.67,
+                    "latestSplitRatio": "2-for-1",
+                },
+            }
+        }
+        base = "Weak model warning with detailed provider evidence and calculation context. " * 9
+        issue = _llm_grounding_issue(
+            base + "Yield is 1.48%, payout is 49.85%, latest split 2-for-1. Historical distributions are not guaranteed.",
+            "Dividend history, dividend yield, payout ratio aur split history batao",
+            self.prediction, {"factors": []}, company_profile=company,
+        )
+        accepted = _llm_grounding_issue(
+            base + "TTM dividend is 1.67, yield is 1.48%, payout is 49.85%, latest split 2-for-1. Historical distributions are not guaranteed.",
+            "Dividend history, dividend yield, payout ratio aur split history batao",
+            self.prediction, {"factors": []}, company_profile=company,
+        )
+
+        self.assertEqual("missing requested trailing dividend evidence", issue)
+        self.assertIsNone(accepted)
+
 
 if __name__ == "__main__":
     unittest.main()

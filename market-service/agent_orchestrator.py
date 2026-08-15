@@ -126,6 +126,9 @@ def build_agent_plan(
         "estimate revision", "estimate revisions", "eps revision", "eps revisions",
         "estimate trend", "earnings outlook", "consensus eps", "consensus revenue",
         "upward revision", "downward revision", "revision breadth",
+        "dividend history", "dividend growth", "dividend yield", "payout ratio",
+        "dividend consistency", "distribution history", "corporate action", "stock split",
+        "split history", "capital gain distribution", "dividend payment", "trailing dividend",
     ))
     catalyst_request = _contains(lowered, (
         "earnings date", "earnings calendar", "next earnings", "analyst rating", "analyst recommendation", "price target",
@@ -146,6 +149,12 @@ def build_agent_plan(
         "estimate revision", "estimate revisions", "eps revision", "eps revisions",
         "estimate trend", "earnings outlook", "consensus eps", "consensus revenue",
         "upward revision", "downward revision", "revision breadth",
+    ))
+    dividend_action_request = _contains(lowered, (
+        "dividend history", "dividend growth", "dividend yield", "payout ratio",
+        "dividend consistency", "distribution history", "corporate action", "stock split",
+        "split history", "capital gain distribution", "ex-dividend", "ex dividend",
+        "dividend payment", "trailing dividend",
     ))
     model_request = _contains(lowered, (
         "prediction", "forecast", "outlook", "bullish", "bearish", "next session", "model",
@@ -189,6 +198,8 @@ def build_agent_plan(
         add_intent("ownership_and_insider_analysis")
     if not is_index and (estimate_revision_request or comprehensive):
         add_intent("analyst_estimate_revision_analysis")
+    if not is_index and (dividend_action_request or comprehensive):
+        add_intent("dividend_and_corporate_action_analysis")
     if not is_index and (peer_request or comprehensive):
         add_intent("sector_peer_analysis")
         require("sector_peer_comparison", "Compare the company with dynamically discovered same-sector, same-market peers.")

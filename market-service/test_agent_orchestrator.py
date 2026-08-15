@@ -133,6 +133,19 @@ class AgentOrchestratorTests(unittest.TestCase):
         self.assertEqual("no_evidence", rag["status"])
         self.assertIn("reason", rag)
 
+    def test_dividend_and_split_question_uses_read_only_company_evidence_without_rag(self):
+        plan = build_agent_plan(
+            "Cisco ka dividend history, payout ratio aur stock split history batao",
+            "CSCO",
+        )
+
+        tools = [step["tool"] for step in plan["steps"]]
+        self.assertIn("dividend_and_corporate_action_analysis", plan["intents"])
+        self.assertIn("company_fundamentals", tools)
+        self.assertNotIn("company_document_rag", tools)
+        company_step = next(step for step in plan["steps"] if step["tool"] == "company_fundamentals")
+        self.assertEqual("read-only", company_step["access"])
+
     def test_public_agent_returns_plan_trace_and_document_citations(self):
         snapshot = {
             "price": 1400.0,
