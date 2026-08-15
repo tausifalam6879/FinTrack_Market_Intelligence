@@ -622,6 +622,69 @@ class AgentAnalysisTests(unittest.TestCase):
         self.assertEqual("missing requested shareholder cash-return evidence", missing)
         self.assertIsNone(accepted)
 
+    def test_liquidity_fallback_reports_basis_ratios_mismatch_and_boundary(self):
+        company = {
+            "liquidityDebtIntelligence": {
+                "status": "available", "currency": "USD", "financialSectorCaution": False,
+                "summary": {
+                    "latestPeriod": "2025-07-31", "latestLiquidFunds": 16_110_000_000,
+                    "latestLiquidityBasis": "cash, cash equivalents and short-term investments",
+                    "latestTotalDebt": 28_093_000_000, "latestDebtAfterLiquidFunds": 11_983_000_000,
+                    "latestBalancePosition": "net debt after liquid funds", "latestCurrentRatio": 0.998,
+                    "latestWorkingCapital": -78_000_000, "latestLiquidFundsToDebtPercent": 57.34,
+                    "latestTotalDebtToEquityRatio": 0.6, "latestTotalDebtToAssetsPercent": 22.97,
+                    "latestInterestCoverageRatio": 7.968, "latestDebtToEbitdaRatio": 1.812,
+                    "liquidFundsTrend": "mixed", "totalDebtTrend": "mixed",
+                    "providerNetDebtBasisMismatchPeriods": ["2025-07-31"],
+                },
+                "annual": [{
+                    "period": "2025-07-31", "liquidFunds": 16_110_000_000,
+                    "liquidityBasis": "cash, cash equivalents and short-term investments",
+                    "totalDebt": 28_093_000_000, "debtAfterLiquidFunds": 11_983_000_000,
+                    "currentRatio": 0.998,
+                }],
+            }
+        }
+        answer = _verified_tool_answer(
+            "Liquidity, net debt, current ratio aur interest coverage batao",
+            self.snapshot, self.prediction,
+            ["market_snapshot", "technical_prediction", "company_fundamentals"],
+            {"factors": []}, company_profile=company,
+        )
+
+        self.assertIn("Balance-sheet liquidity and debt-capacity evidence", answer)
+        self.assertIn("16.11B USD", answer)
+        self.assertIn("debt after liquid funds 11.98B USD", answer)
+        self.assertIn("interest coverage 7.968x", answer)
+        self.assertIn("basis differs", answer)
+        self.assertIn("not a credit rating", answer)
+
+    def test_generated_liquidity_answer_requires_values_basis_warning_and_boundary(self):
+        company = {
+            "liquidityDebtIntelligence": {
+                "status": "available", "currency": "USD", "financialSectorCaution": False,
+                "summary": {
+                    "latestLiquidFunds": 16_110_000_000, "latestDebtAfterLiquidFunds": 11_983_000_000,
+                    "latestCurrentRatio": 0.998, "latestInterestCoverageRatio": 7.968,
+                    "providerNetDebtBasisMismatchPeriods": ["2025-07-31"],
+                },
+            }
+        }
+        base = "Weak model warning with detailed provider statement calculations. " * 9
+        missing_basis = _llm_grounding_issue(
+            base + "Liquid funds are 16.11B USD, debt after liquid funds 11.98B USD, current ratio 0.998 and interest coverage 7.968. Statements can be restated.",
+            "Liquidity, net debt, current ratio aur interest coverage batao",
+            self.prediction, {"factors": []}, company_profile=company,
+        )
+        accepted = _llm_grounding_issue(
+            base + "Liquid funds are 16.11B USD, debt after liquid funds 11.98B USD, current ratio 0.998 and interest coverage 7.968. Provider net debt uses a different basis and is kept separate. This is not a credit rating.",
+            "Liquidity, net debt, current ratio aur interest coverage batao",
+            self.prediction, {"factors": []}, company_profile=company,
+        )
+
+        self.assertEqual("missing provider net-debt basis warning", missing_basis)
+        self.assertIsNone(accepted)
+
 
 if __name__ == "__main__":
     unittest.main()

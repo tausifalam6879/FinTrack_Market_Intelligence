@@ -473,6 +473,7 @@ function CompanyFundamentalsPanel({ data, loading, error }) {
     <div className="fundamental-groups">{groups.map(([title, entries]) => <FundamentalGroup key={title} title={title} entries={entries} />)}</div>
     <CompanyFinancialTrendPanel data={data.financialTrends} currency={currency} />
     <CompanyEarningsQualityPanel data={data.earningsQualityIntelligence} currency={currency} />
+    <CompanyLiquidityDebtPanel data={data.liquidityDebtIntelligence} currency={currency} />
     <CompanyOwnershipPanel data={data.ownershipIntelligence} currency={currency} />
     <CompanyNewsIntelligencePanel data={data.newsIntelligence} articles={data.news} />
     <p className="fundamentals-method"><strong>Source:</strong> {data.source}. Figures may use different reporting periods and are shown as provider evidence, not an accounting audit or investment recommendation.{data.dataAsOf ? ` Data as of ${new Date(data.dataAsOf).toLocaleString("en-IN")}.` : ""}</p>
@@ -709,6 +710,94 @@ function CompanyEarningsQualityPanel({ data, currency }) {
       </table>
     </div>
     <p className="earnings-quality-method"><strong>Method:</strong> {data.method} {data.disclaimer}</p>
+  </section>;
+}
+
+function CompanyLiquidityDebtPanel({ data, currency }) {
+  if (!data || data.status !== "available") return <section className="liquidity-debt-panel liquidity-debt-unavailable">
+    <div className="liquidity-debt-heading"><div><p className="eyebrow">BALANCE SHEET, LIQUIDITY & DEBT CAPACITY</p><h4>No comparable balance-sheet periods available</h4></div><span>Not estimated</span></div>
+    <p>The provider returned no usable annual liquidity or leverage rows, so FinTrack does not invent a balance-sheet assessment.</p>
+  </section>;
+
+  const summary = data.summary || {};
+  const annual = data.annual || [];
+  const latest = annual[annual.length - 1] || {};
+  const localCurrency = data.currency || currency;
+  const money = (raw) => formatCompactMoney(raw, localCurrency);
+  const ratio = (raw) => {
+    const numeric = Number(raw);
+    return raw === null || raw === undefined || !Number.isFinite(numeric) ? "—" : `${numeric.toFixed(2)}x`;
+  };
+  const percent = (raw, signed = false) => {
+    const numeric = Number(raw);
+    if (raw === null || raw === undefined || !Number.isFinite(numeric)) return "—";
+    return `${signed && numeric > 0 ? "+" : ""}${numeric.toFixed(1)}%`;
+  };
+  const formatDate = (raw) => {
+    if (!raw) return "Period unavailable";
+    const parsed = new Date(`${raw}T00:00:00`);
+    return Number.isNaN(parsed.getTime()) ? raw : parsed.toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" });
+  };
+  const direction = (raw, inverse = false) => {
+    const numeric = Number(raw);
+    if (raw === null || raw === undefined || !Number.isFinite(numeric) || numeric === 0) return "neutral";
+    const positive = inverse ? numeric < 0 : numeric > 0;
+    return positive ? "positive" : "negative";
+  };
+  const maxBalance = Math.max(...annual.flatMap((item) => [item.liquidFunds, item.totalDebt]).map((value) => Math.abs(Number(value) || 0)), 1);
+  const width = (raw) => `${Math.max(2, (Math.abs(Number(raw) || 0) / maxBalance) * 100)}%`;
+  const mismatchPeriods = summary.providerNetDebtBasisMismatchPeriods || [];
+  const structureItems = [
+    ["Debt / equity", ratio(summary.latestTotalDebtToEquityRatio), "Reported debt and equity"],
+    ["Debt / assets", percent(summary.latestTotalDebtToAssetsPercent), "Capital structure"],
+    ["Liquid funds / debt", percent(summary.latestLiquidFundsToDebtPercent), summary.latestLiquidityBasis || "Liquidity basis unavailable"],
+    ["Interest coverage", ratio(summary.latestInterestCoverageRatio), data.financialSectorCaution ? "Withheld for financial-sector comparability" : "EBIT / interest expense"],
+    ["Debt / EBITDA", ratio(summary.latestDebtToEbitdaRatio), data.financialSectorCaution ? "Withheld for financial-sector comparability" : "Reported annual EBITDA"],
+    ["Working capital", money(summary.latestWorkingCapital), "Current assets minus liabilities"],
+  ];
+
+  return <section className="liquidity-debt-panel" aria-labelledby="liquidity-debt-title">
+    <div className="liquidity-debt-heading">
+      <div><p className="eyebrow">BALANCE SHEET, LIQUIDITY & DEBT CAPACITY</p><h4 id="liquidity-debt-title">Reported liquidity, leverage and coverage evidence</h4></div>
+      <span>{data.coverageLevel || "partial"} statement coverage</span>
+    </div>
+    {data.financialSectorCaution && <div className="liquidity-debt-caution"><strong>Financial-sector context:</strong> Debt, liquidity and interest classifications reflect this business model. Industrial interest-coverage and debt/EBITDA ratios are intentionally withheld.</div>}
+    {mismatchPeriods.length > 0 && <div className="liquidity-basis-warning"><strong>Net-debt basis warning:</strong> Provider net debt differs from total debt minus disclosed liquid funds in {mismatchPeriods.length} returned period(s). FinTrack keeps both bases separate.</div>}
+    <div className="liquidity-debt-summary">
+      <article><small>Liquid funds</small><strong>{money(summary.latestLiquidFunds)}</strong><span>{summary.latestLiquidityBasis || "Basis unavailable"}</span></article>
+      <article className={direction(summary.latestDebtAfterLiquidFunds, true)}><small>Debt after liquid funds</small><strong>{money(summary.latestDebtAfterLiquidFunds)}</strong><span>{summary.latestBalancePosition || "Position unavailable"}</span></article>
+      <article><small>Current ratio</small><strong>{ratio(summary.latestCurrentRatio)}</strong><span>{money(summary.latestWorkingCapital)} working capital</span></article>
+      <article><small>Interest coverage</small><strong>{ratio(summary.latestInterestCoverageRatio)}</strong><span>{ratio(summary.latestDebtToEbitdaRatio)} debt / EBITDA</span></article>
+    </div>
+    <div className="liquidity-debt-layout">
+      <article className="liquidity-debt-trend-card">
+        <div className="liquidity-debt-card-heading"><strong>Liquid funds versus total debt</strong><span>Aligned annual fiscal periods</span></div>
+        <div className="liquidity-debt-legend"><span className="liquid">Liquid funds</span><span className="debt">Total debt</span></div>
+        <div className="liquidity-debt-bars">{annual.map((item) => <div key={item.period}>
+          <span>{new Date(`${item.period}T00:00:00`).getFullYear()}</span>
+          <section><i className="liquid"><b style={{ width: width(item.liquidFunds) }} /></i><i className="debt"><b style={{ width: width(item.totalDebt) }} /></i></section>
+          <p><strong>{money(item.debtAfterLiquidFunds)}</strong><small>{item.balancePosition}</small></p>
+        </div>)}</div>
+        <div className="liquidity-trend-chips"><span>Liquid funds: <strong>{summary.liquidFundsTrend || "unavailable"}</strong></span><span>Total debt: <strong>{summary.totalDebtTrend || "unavailable"}</strong></span></div>
+      </article>
+      <article className="debt-structure-card">
+        <div className="liquidity-debt-card-heading"><strong>Latest reported structure</strong><span>{formatDate(summary.latestPeriod)}</span></div>
+        <div className="debt-structure-grid">{structureItems.map(([label, value, hint]) => <div key={label}><small>{label}</small><strong>{value}</strong><span>{hint}</span></div>)}</div>
+      </article>
+    </div>
+    <div className="liquidity-debt-table-wrap">
+      <div className="liquidity-debt-card-heading"><strong>Balance-sheet history</strong><span>Missing statement rows remain unavailable</span></div>
+      <table className="liquidity-debt-table">
+        <thead><tr><th>Fiscal period</th><th>Liquid funds</th><th>Total debt</th><th>Debt after liquidity</th><th>Current ratio</th><th>Working capital</th><th>Debt / equity</th><th>Interest coverage</th></tr></thead>
+        <tbody>{[...annual].reverse().map((item) => <tr key={item.period}>
+          <td><strong>{formatDate(item.period)}</strong><small>{item.liquidityBasis}</small></td>
+          <td>{money(item.liquidFunds)}</td><td>{money(item.totalDebt)}<small>{percent(item.totalDebtYoYPercent, true)} YoY</small></td>
+          <td className={direction(item.debtAfterLiquidFunds, true)}>{money(item.debtAfterLiquidFunds)}</td><td>{ratio(item.currentRatio)}</td>
+          <td className={direction(item.workingCapital)}>{money(item.workingCapital)}</td><td>{ratio(item.totalDebtToEquityRatio)}</td><td>{ratio(item.interestCoverageRatio)}</td>
+        </tr>)}</tbody>
+      </table>
+    </div>
+    <p className="liquidity-debt-method"><strong>Method:</strong> {data.method} {data.disclaimer}</p>
   </section>;
 }
 

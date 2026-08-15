@@ -391,6 +391,58 @@ main { width: min(1500px, calc(100% - 40px)); margin: 0 auto; }
 .earnings-quality-table td.positive { color: #08775e; }
 .earnings-quality-table td.negative { color: #b14646; }
 .earnings-quality-method { margin: 10px 0 0; color: var(--muted); font-size: 7px; line-height: 1.5; }
+.liquidity-debt-panel { margin-top: 11px; padding: 15px; border: 1px solid #bcd9d7; border-radius: 14px; background: linear-gradient(135deg,rgba(255,255,255,.94),rgba(239,249,248,.88)); }
+.liquidity-debt-panel.liquidity-debt-unavailable { border-style: dashed; }
+.liquidity-debt-unavailable > p { margin: 9px 0 0; color: var(--muted); font-size: 8px; line-height: 1.5; }
+.liquidity-debt-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; }
+.liquidity-debt-heading h4 { margin: 3px 0 0; font-size: 14px; }
+.liquidity-debt-heading > span { padding: 6px 9px; border: 1px solid #b6d3cf; border-radius: 999px; color: #276c63; background: #fff; font-size: 7px; font-weight: 900; text-transform: uppercase; }
+.liquidity-debt-caution, .liquidity-basis-warning { margin-top: 9px; padding: 8px 10px; border: 1px solid #e5ce9f; border-radius: 9px; color: #765421; background: #fff7e6; font-size: 7px; line-height: 1.5; }
+.liquidity-basis-warning { color: #4c5677; border-color: #c9d0e5; background: #f2f4fb; }
+.liquidity-debt-summary { margin-top: 11px; display: grid; grid-template-columns: repeat(4,minmax(0,1fr)); gap: 7px; }
+.liquidity-debt-summary article { min-width: 0; padding: 10px; border: 1px solid #d4e6e3; border-top: 3px solid #338c80; border-radius: 10px; background: #fff; }
+.liquidity-debt-summary article.positive { border-top-color: #28976f; }
+.liquidity-debt-summary article.negative { border-top-color: #c85c62; }
+.liquidity-debt-summary small, .liquidity-debt-summary strong, .liquidity-debt-summary span { display: block; }
+.liquidity-debt-summary small, .liquidity-debt-summary span { color: var(--muted); font-size: 7px; }
+.liquidity-debt-summary strong { margin: 5px 0 3px; overflow: hidden; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+.liquidity-debt-layout { margin-top: 9px; display: grid; grid-template-columns: 1.05fr .95fr; gap: 9px; }
+.liquidity-debt-layout > article { min-width: 0; padding: 11px; border: 1px solid #d4e6e3; border-radius: 11px; background: #fff; }
+.liquidity-debt-card-heading { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.liquidity-debt-card-heading strong { font-size: 9px; }
+.liquidity-debt-card-heading span { color: var(--muted); font-size: 7px; text-align: right; }
+.liquidity-debt-legend { margin-top: 9px; display: flex; gap: 12px; color: var(--muted); font-size: 6px; }
+.liquidity-debt-legend span::before { display: inline-block; width: 7px; height: 7px; margin-right: 4px; border-radius: 2px; background: #3d9b8f; content: ""; }
+.liquidity-debt-legend .debt::before { background: #667ca4; }
+.liquidity-debt-bars { margin-top: 8px; display: grid; gap: 7px; }
+.liquidity-debt-bars > div { display: grid; grid-template-columns: 34px minmax(90px,1fr) minmax(88px,auto); align-items: center; gap: 7px; }
+.liquidity-debt-bars > div > span { color: var(--muted); font-size: 7px; }
+.liquidity-debt-bars section { display: grid; gap: 3px; }
+.liquidity-debt-bars i { display: block; height: 5px; overflow: hidden; border-radius: 99px; background: #eaf2f1; }
+.liquidity-debt-bars i b { display: block; height: 100%; border-radius: inherit; background: #3d9b8f; }
+.liquidity-debt-bars i.debt b { background: #667ca4; }
+.liquidity-debt-bars p { margin: 0; text-align: right; }
+.liquidity-debt-bars p strong, .liquidity-debt-bars p small { display: block; }
+.liquidity-debt-bars p strong { font-size: 8px; }
+.liquidity-debt-bars p small { margin-top: 2px; color: var(--muted); font-size: 6px; text-transform: capitalize; }
+.liquidity-trend-chips { margin-top: 9px; display: flex; flex-wrap: wrap; gap: 6px; }
+.liquidity-trend-chips span { padding: 6px 8px; border-radius: 8px; color: var(--muted); background: #f3f8f7; font-size: 7px; }
+.liquidity-trend-chips strong { color: var(--ink); text-transform: capitalize; }
+.debt-structure-grid { margin-top: 9px; display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 6px; }
+.debt-structure-grid > div { min-width: 0; padding: 8px; border-radius: 8px; background: #f4f8f7; }
+.debt-structure-grid small, .debt-structure-grid strong, .debt-structure-grid span { display: block; }
+.debt-structure-grid small, .debt-structure-grid span { color: var(--muted); font-size: 6px; }
+.debt-structure-grid strong { margin: 4px 0 2px; overflow: hidden; font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
+.liquidity-debt-table-wrap { margin-top: 9px; padding: 11px; overflow-x: auto; border: 1px solid #d4e6e3; border-radius: 11px; background: #fff; }
+.liquidity-debt-table { width: 100%; margin-top: 8px; border-collapse: collapse; font-size: 7px; white-space: nowrap; }
+.liquidity-debt-table th { padding: 7px 6px; color: var(--muted); font-size: 6px; text-align: right; text-transform: uppercase; }
+.liquidity-debt-table th:first-child, .liquidity-debt-table td:first-child { text-align: left; }
+.liquidity-debt-table td { padding: 8px 6px; border-top: 1px solid #e8f0ef; text-align: right; }
+.liquidity-debt-table td strong, .liquidity-debt-table td small { display: block; }
+.liquidity-debt-table td small { margin-top: 2px; color: var(--muted); font-size: 6px; }
+.liquidity-debt-table td.positive { color: #08775e; }
+.liquidity-debt-table td.negative { color: #b14646; }
+.liquidity-debt-method { margin: 10px 0 0; color: var(--muted); font-size: 7px; line-height: 1.5; }
 .ownership-panel { margin-top: 11px; padding: 15px; border: 1px solid #c8d8cf; border-radius: 14px; background: linear-gradient(135deg,rgba(255,255,255,.92),rgba(239,249,244,.84)); }
 .ownership-panel.ownership-unavailable { border-style: dashed; }
 .ownership-unavailable > p, .ownership-missing { margin: 9px 0 0; color: var(--muted); font-size: 8px; line-height: 1.5; }
@@ -897,6 +949,7 @@ footer p { margin: 5px 0 0; }
   .fundamental-groups { grid-template-columns: 1fr; }
   .financial-trend-summary { grid-template-columns: repeat(2,minmax(0,1fr)); }
   .earnings-quality-summary { grid-template-columns: repeat(2,minmax(0,1fr)); }
+  .liquidity-debt-summary { grid-template-columns: repeat(2,minmax(0,1fr)); }
   .ownership-summary-grid { grid-template-columns: repeat(2,minmax(0,1fr)); }
   .estimate-summary-grid { grid-template-columns: repeat(2,minmax(0,1fr)); }
   .corporate-action-summary { grid-template-columns: repeat(2,minmax(0,1fr)); }
@@ -923,6 +976,7 @@ footer p { margin: 5px 0 0; }
   .catalyst-evidence-grid { grid-template-columns: 1fr; }
   .estimate-revision-grid { grid-template-columns: 1fr; }
   .earnings-quality-layout { grid-template-columns: 1fr; }
+  .liquidity-debt-layout { grid-template-columns: 1fr; }
   .corporate-action-layout { grid-template-columns: 1fr; }
   .validation-summary { grid-template-columns: repeat(3,minmax(0,1fr)); }
   .deep-learning-grid { grid-template-columns: repeat(2,minmax(0,1fr)); }
@@ -980,6 +1034,9 @@ footer p { margin: 5px 0 0; }
   .earnings-quality-heading, .earnings-quality-card-heading { align-items: flex-start; flex-direction: column; }
   .earnings-quality-summary { grid-template-columns: 1fr; }
   .capital-allocation-grid { grid-template-columns: 1fr; }
+  .liquidity-debt-heading, .liquidity-debt-card-heading { align-items: flex-start; flex-direction: column; }
+  .liquidity-debt-summary { grid-template-columns: 1fr; }
+  .debt-structure-grid { grid-template-columns: 1fr; }
   .ownership-heading { flex-direction: column; }
   .ownership-summary-grid, .ownership-holder-grid, .insider-activity-layout { grid-template-columns: 1fr; }
   .insider-transaction-list > div { grid-template-columns: 54px minmax(80px,.75fr) minmax(110px,1.25fr); }

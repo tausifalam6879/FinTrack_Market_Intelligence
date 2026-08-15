@@ -159,6 +159,19 @@ class AgentOrchestratorTests(unittest.TestCase):
         company_step = next(step for step in plan["steps"] if step["tool"] == "company_fundamentals")
         self.assertEqual("read-only", company_step["access"])
 
+    def test_liquidity_and_debt_question_uses_read_only_company_statements_without_rag(self):
+        plan = build_agent_plan(
+            "Cisco ki liquidity, net debt, current ratio aur interest coverage batao",
+            "CSCO",
+        )
+
+        tools = [step["tool"] for step in plan["steps"]]
+        self.assertIn("liquidity_and_debt_capacity_analysis", plan["intents"])
+        self.assertIn("company_fundamentals", tools)
+        self.assertNotIn("company_document_rag", tools)
+        company_step = next(step for step in plan["steps"] if step["tool"] == "company_fundamentals")
+        self.assertEqual("read-only", company_step["access"])
+
     def test_public_agent_returns_plan_trace_and_document_citations(self):
         snapshot = {
             "price": 1400.0,

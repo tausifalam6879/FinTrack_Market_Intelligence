@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import date
+import re
 from typing import Any, Dict, List, Optional
 
 
@@ -96,8 +97,7 @@ def build_agent_plan(
         "annual report", "annual reports", "10-k", "10k", "filing", "document",
         "management discussion", "investor presentation",
         "page citation", "source citation", "report me", "report mein", "debt ke",
-        "rag",
-    ))
+    )) or bool(re.search(r"\brag\b", lowered))
     news_request = _contains(lowered, (
         "news", "headline", "announcement", "sentiment", "latest update", "war",
     ))
@@ -133,6 +133,10 @@ def build_agent_plan(
         "fcf conversion", "free cash flow conversion", "capital allocation", "buyback",
         "share repurchase", "stock repurchase", "stock issuance", "share issuance",
         "debt repayment", "debt issuance", "cash deployment", "shareholder return",
+        "balance sheet health", "balance sheet strength", "liquidity", "liquidity trend",
+        "cash position", "cash balance", "net debt", "debt capacity", "debt trend",
+        "working capital", "current ratio", "interest coverage", "debt to ebitda",
+        "debt to equity", "debt to assets", "cash to debt", "leverage trend",
     ))
     catalyst_request = _contains(lowered, (
         "earnings date", "earnings calendar", "next earnings", "analyst rating", "analyst recommendation", "price target",
@@ -165,6 +169,12 @@ def build_agent_plan(
         "fcf conversion", "free cash flow conversion", "capital allocation", "buyback",
         "share repurchase", "stock repurchase", "stock issuance", "share issuance",
         "debt repayment", "debt issuance", "cash deployment", "shareholder return",
+    ))
+    liquidity_debt_request = _contains(lowered, (
+        "balance sheet health", "balance sheet strength", "liquidity", "liquidity trend",
+        "cash position", "cash balance", "net debt", "debt capacity", "debt trend",
+        "working capital", "current ratio", "interest coverage", "debt to ebitda",
+        "debt to equity", "debt to assets", "cash to debt", "leverage trend",
     ))
     model_request = _contains(lowered, (
         "prediction", "forecast", "outlook", "bullish", "bearish", "next session", "model",
@@ -212,6 +222,8 @@ def build_agent_plan(
         add_intent("dividend_and_corporate_action_analysis")
     if not is_index and (earnings_quality_request or comprehensive):
         add_intent("earnings_quality_and_capital_allocation_analysis")
+    if not is_index and (liquidity_debt_request or comprehensive):
+        add_intent("liquidity_and_debt_capacity_analysis")
     if not is_index and (peer_request or comprehensive):
         add_intent("sector_peer_analysis")
         require("sector_peer_comparison", "Compare the company with dynamically discovered same-sector, same-market peers.")

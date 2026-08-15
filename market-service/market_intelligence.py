@@ -143,6 +143,13 @@ EARNINGS_QUALITY_QUERY_TERMS = (
     "debt repayment", "debt issuance", "cash deployment", "shareholder return",
 )
 
+LIQUIDITY_DEBT_QUERY_TERMS = (
+    "balance sheet health", "balance sheet strength", "liquidity", "liquidity trend",
+    "cash position", "cash balance", "net debt", "debt capacity", "debt trend",
+    "working capital", "current ratio", "interest coverage", "debt to ebitda",
+    "debt to equity", "debt to assets", "cash to debt", "leverage trend",
+)
+
 MARKET_BOARD = {
     "^NSEI": {"name": "Nifty 50", "region": "India", "currency": "INR", "kind": "index", "sector": "Indices"},
     "^BSESN": {"name": "BSE Sensex", "region": "India", "currency": "INR", "kind": "index", "sector": "Indices"},
@@ -1479,6 +1486,221 @@ def _earnings_quality_intelligence(
     }
 
 
+def _safe_ratio(numerator: Any, denominator: Any, digits: int = 3) -> Optional[float]:
+    numerator_value = _round(numerator, 6)
+    denominator_value = _round(denominator, 6)
+    if numerator_value is None or denominator_value in (None, 0):
+        return None
+    return _round(numerator_value / denominator_value, digits)
+
+
+def _liquidity_debt_intelligence(
+    info: Dict[str, Any],
+    income_statement: Optional[pd.DataFrame],
+    balance_sheet: Optional[pd.DataFrame],
+) -> Dict[str, Any]:
+    """Build aligned balance-sheet liquidity and debt-capacity evidence."""
+    if balance_sheet is None or balance_sheet.empty:
+        return {
+            "status": "unavailable",
+            "coverageLevel": "unavailable",
+            "annual": [],
+            "summary": {},
+            "source": "Yahoo Finance company balance sheets via yfinance",
+            "method": "No annual balance-sheet periods were returned.",
+            "disclaimer": "FinTrack does not estimate missing liquidity or leverage rows.",
+        }
+
+    sector = str(info.get("sector") or "")
+    industry = str(info.get("industry") or "")
+    financial_sector_caution = (
+        "financial" in sector.lower()
+        or any(term in industry.lower() for term in ("bank", "insurance", "credit", "capital markets"))
+    )
+    periods = sorted(balance_sheet.columns, key=pd.Timestamp)[-5:]
+    annual: List[Dict[str, Any]] = []
+    for period in periods:
+        liquid_funds = _statement_value(
+            balance_sheet,
+            ("Cash Cash Equivalents And Short Term Investments", "Cash And Short Term Investments"),
+            period,
+        )
+        liquidity_basis = "cash, cash equivalents and short-term investments"
+        if liquid_funds is None:
+            liquid_funds = _statement_value(
+                balance_sheet,
+                ("Cash And Cash Equivalents", "Cash Financial", "Cash"),
+                period,
+            )
+            liquidity_basis = "cash and cash equivalents only"
+        cash_only = _statement_value(
+            balance_sheet,
+            ("Cash And Cash Equivalents", "Cash Financial", "Cash"),
+            period,
+        )
+        total_debt = _statement_value(balance_sheet, ("Total Debt",), period)
+        provider_net_debt = _statement_value(balance_sheet, ("Net Debt",), period)
+        current_assets = _statement_value(balance_sheet, ("Current Assets", "Total Current Assets"), period)
+        current_liabilities = _statement_value(
+            balance_sheet,
+            ("Current Liabilities", "Total Current Liabilities"),
+            period,
+        )
+        working_capital = _statement_value(balance_sheet, ("Working Capital",), period)
+        if working_capital is None and current_assets is not None and current_liabilities is not None:
+            working_capital = _round(current_assets - current_liabilities, 0)
+        equity = _statement_value(
+            balance_sheet,
+            ("Stockholders Equity", "Total Stockholder Equity", "Common Stock Equity", "Total Equity Gross Minority Interest"),
+            period,
+        )
+        total_assets = _statement_value(balance_sheet, ("Total Assets",), period)
+        total_liabilities = _statement_value(
+            balance_sheet,
+            ("Total Liabilities Net Minority Interest", "Total Liabilities"),
+            period,
+        )
+        inventory = _statement_value(balance_sheet, ("Inventory",), period)
+        receivables = _statement_value(balance_sheet, ("Accounts Receivable", "Receivables"), period)
+        ebit = _statement_value(income_statement, ("EBIT", "Operating Income"), period)
+        ebitda = _statement_value(income_statement, ("EBITDA", "Normalized EBITDA"), period)
+        interest_expense = _statement_value(
+            income_statement,
+            ("Interest Expense Non Operating", "Interest Expense"),
+            period,
+        )
+        interest_expense_magnitude = abs(interest_expense) if interest_expense not in (None, 0) else interest_expense
+        debt_after_liquid_funds = (
+            _round(total_debt - liquid_funds, 0)
+            if total_debt is not None and liquid_funds is not None else None
+        )
+        provider_net_debt_difference = (
+            _round(provider_net_debt - debt_after_liquid_funds, 0)
+            if provider_net_debt is not None and debt_after_liquid_funds is not None else None
+        )
+        mismatch_denominator = max(abs(provider_net_debt or 0), abs(debt_after_liquid_funds or 0), 1)
+        provider_basis_mismatch = (
+            provider_net_debt_difference is not None
+            and abs(provider_net_debt_difference) / mismatch_denominator > 0.05
+        )
+        evidence = (
+            liquid_funds, total_debt, provider_net_debt, current_assets, current_liabilities,
+            working_capital, equity, total_assets, total_liabilities, ebit, ebitda,
+            interest_expense,
+        )
+        if not any(value is not None for value in evidence):
+            continue
+        annual.append({
+            "period": _provider_date(period),
+            "liquidFunds": liquid_funds,
+            "cashAndCashEquivalents": cash_only,
+            "liquidityBasis": liquidity_basis,
+            "totalDebt": total_debt,
+            "providerNetDebt": provider_net_debt,
+            "debtAfterLiquidFunds": debt_after_liquid_funds,
+            "providerNetDebtDifference": provider_net_debt_difference,
+            "providerNetDebtBasisMismatch": provider_basis_mismatch,
+            "balancePosition": (
+                "net cash after liquid funds" if debt_after_liquid_funds is not None and debt_after_liquid_funds < 0 else
+                "net debt after liquid funds" if debt_after_liquid_funds is not None and debt_after_liquid_funds > 0 else
+                "balanced debt and liquid funds" if debt_after_liquid_funds == 0 else "unavailable"
+            ),
+            "currentAssets": current_assets,
+            "currentLiabilities": current_liabilities,
+            "workingCapital": working_capital,
+            "currentRatio": _safe_ratio(current_assets, current_liabilities),
+            "stockholdersEquity": equity,
+            "totalAssets": total_assets,
+            "totalLiabilities": total_liabilities,
+            "totalDebtToEquityRatio": _safe_ratio(total_debt, equity),
+            "totalDebtToAssetsPercent": _safe_margin(total_debt, total_assets),
+            "liabilitiesToAssetsPercent": _safe_margin(total_liabilities, total_assets),
+            "liquidFundsToDebtPercent": _safe_margin(liquid_funds, total_debt),
+            "ebit": ebit,
+            "ebitda": ebitda,
+            "interestExpense": interest_expense_magnitude,
+            "interestCoverageRatio": (
+                _safe_ratio(ebit, interest_expense_magnitude)
+                if not financial_sector_caution and ebit is not None and ebit > 0 and interest_expense_magnitude not in (None, 0)
+                else None
+            ),
+            "debtToEbitdaRatio": (
+                _safe_ratio(total_debt, ebitda)
+                if not financial_sector_caution and ebitda is not None and ebitda > 0
+                else None
+            ),
+            "inventory": inventory,
+            "accountsReceivable": receivables,
+        })
+
+    if not annual:
+        return {
+            "status": "unavailable",
+            "coverageLevel": "unavailable",
+            "annual": [],
+            "summary": {},
+            "source": "Yahoo Finance company balance sheets via yfinance",
+            "method": "No usable annual liquidity or leverage rows were returned.",
+            "disclaimer": "FinTrack does not estimate missing liquidity or leverage rows.",
+        }
+
+    for index, item in enumerate(annual):
+        previous = annual[index - 1] if index else {}
+        item["liquidFundsYoYPercent"] = _safe_percent_change(item.get("liquidFunds"), previous.get("liquidFunds"))
+        item["totalDebtYoYPercent"] = _safe_percent_change(item.get("totalDebt"), previous.get("totalDebt"))
+        item["workingCapitalChange"] = (
+            _round(item["workingCapital"] - previous["workingCapital"], 0)
+            if item.get("workingCapital") is not None and previous.get("workingCapital") is not None else None
+        )
+
+    latest = annual[-1]
+    basis_mismatch_periods = [item["period"] for item in annual if item.get("providerNetDebtBasisMismatch")]
+    coverage_components = {
+        "liquidFunds": latest.get("liquidFunds") is not None,
+        "debt": latest.get("totalDebt") is not None,
+        "workingCapital": latest.get("workingCapital") is not None,
+        "capitalStructure": latest.get("stockholdersEquity") is not None and latest.get("totalAssets") is not None,
+        "interestCoverage": latest.get("interestCoverageRatio") is not None,
+    }
+    evidence_count = sum(coverage_components.values())
+    return {
+        "status": "available",
+        "coverageLevel": "broad" if len(annual) >= 3 and evidence_count >= 4 else "partial",
+        "coverage": coverage_components,
+        "currency": info.get("currency"),
+        "sector": sector or None,
+        "industry": industry or None,
+        "financialSectorCaution": financial_sector_caution,
+        "annual": annual,
+        "summary": {
+            "latestPeriod": latest.get("period"),
+            "periodCount": len(annual),
+            "latestLiquidFunds": latest.get("liquidFunds"),
+            "latestLiquidityBasis": latest.get("liquidityBasis"),
+            "latestTotalDebt": latest.get("totalDebt"),
+            "latestDebtAfterLiquidFunds": latest.get("debtAfterLiquidFunds"),
+            "latestBalancePosition": latest.get("balancePosition"),
+            "latestCurrentRatio": latest.get("currentRatio"),
+            "latestWorkingCapital": latest.get("workingCapital"),
+            "latestTotalDebtToEquityRatio": latest.get("totalDebtToEquityRatio"),
+            "latestTotalDebtToAssetsPercent": latest.get("totalDebtToAssetsPercent"),
+            "latestLiquidFundsToDebtPercent": latest.get("liquidFundsToDebtPercent"),
+            "latestInterestCoverageRatio": latest.get("interestCoverageRatio"),
+            "latestDebtToEbitdaRatio": latest.get("debtToEbitdaRatio"),
+            "liquidFundsTrend": _series_trend([item.get("liquidFunds") for item in annual]),
+            "totalDebtTrend": _series_trend([item.get("totalDebt") for item in annual]),
+            "providerNetDebtBasisMismatchPeriods": basis_mismatch_periods,
+        },
+        "source": "Yahoo Finance annual balance sheets and income statements via yfinance",
+        "method": "FinTrack aligns reported fiscal periods, calculates debt after liquid funds as total debt minus the disclosed liquidity basis, and keeps the provider net-debt field separate. Current ratio, capital-structure and coverage ratios use only returned statement rows.",
+        "disclaimer": (
+            "This is descriptive balance-sheet evidence, not a credit rating or synthetic health score. Statements can be restated and missing rows are not zero. "
+            + ("For financial institutions, debt, liquidity and interest classifications reflect the business model; industrial-company coverage ratios are intentionally withheld. " if financial_sector_caution else "")
+            + "Debt capacity also depends on maturities, covenants and cash-flow stability that may not be present in these provider statements."
+        ),
+    }
+
+
 def _normalize_holder_rows(frame: Optional[pd.DataFrame], limit: int = 8) -> List[Dict[str, Any]]:
     if frame is None or frame.empty:
         return []
@@ -2227,6 +2449,7 @@ def company_research(symbol: str) -> Dict[str, Any]:
         quarterly_income,
     )
     earnings_quality = _earnings_quality_intelligence(info, financial_trends, cash_flow)
+    liquidity_debt = _liquidity_debt_intelligence(info, income_statement, balance_sheet)
     ownership = _ownership_intelligence(
         major_holders,
         institutional_holders,
@@ -2284,6 +2507,7 @@ def company_research(symbol: str) -> Dict[str, Any]:
         "financials": financials,
         "financialTrends": financial_trends,
         "earningsQualityIntelligence": earnings_quality,
+        "liquidityDebtIntelligence": liquidity_debt,
         "ownershipIntelligence": ownership,
         "analystEstimateIntelligence": analyst_estimates,
         "corporateActionIntelligence": corporate_actions,
@@ -3109,6 +3333,11 @@ def _requests_earnings_quality_analysis(message: str) -> bool:
     return any(term in lowered for term in EARNINGS_QUALITY_QUERY_TERMS)
 
 
+def _requests_liquidity_debt_analysis(message: str) -> bool:
+    lowered = str(message or "").lower()
+    return any(term in lowered for term in LIQUIDITY_DEBT_QUERY_TERMS)
+
+
 def market_prediction(symbol: str) -> Dict[str, Any]:
     symbol = _sanitize_symbol(symbol)
     cache_key = f"prediction:{symbol}"
@@ -3931,6 +4160,55 @@ def _verified_tool_answer(
                 "\n\nEarnings quality and capital-allocation evidence\n"
                 "- Comparable annual income/cash-flow periods available nahi hain; missing conversion, buyback, issuance ya debt-flow evidence invent nahi kiya gaya."
             )
+    liquidity_debt_section = ""
+    if _requests_liquidity_debt_analysis(lowered):
+        liquidity = (company_profile or {}).get("liquidityDebtIntelligence") or {}
+        if liquidity.get("status") == "available":
+            summary = liquidity.get("summary") or {}
+            annual = liquidity.get("annual") or []
+            liquidity_currency = liquidity.get("currency") or prediction.get("expectedRange", {}).get("currency")
+            shown_ratio = lambda value: "unavailable" if value is None else f"{value}x"
+            shown_percent = lambda value: "unavailable" if value is None else f"{value}%"
+            annual_lines = [
+                f"- {item.get('period')}: liquid funds {_compact_amount(item.get('liquidFunds'), liquidity_currency)} "
+                f"({item.get('liquidityBasis')}), total debt {_compact_amount(item.get('totalDebt'), liquidity_currency)}, "
+                f"debt after liquid funds {_compact_amount(item.get('debtAfterLiquidFunds'), liquidity_currency)}, "
+                f"current ratio {shown_ratio(item.get('currentRatio'))}."
+                for item in annual[-4:]
+            ]
+            mismatch_periods = summary.get("providerNetDebtBasisMismatchPeriods") or []
+            mismatch_line = (
+                f"\n- Provider net-debt basis differs from FinTrack's total-debt-minus-liquid-funds calculation in {', '.join(mismatch_periods)}; the values are kept separate."
+                if mismatch_periods else ""
+            )
+            sector_caution = (
+                "\n- Financial-institution caution: debt, liquidity and interest classifications reflect the business model; industrial-company interest coverage and debt/EBITDA are intentionally withheld."
+                if liquidity.get("financialSectorCaution") else ""
+            )
+            liquidity_debt_section = (
+                "\n\nBalance-sheet liquidity and debt-capacity evidence\n"
+                f"- Latest reported period {summary.get('latestPeriod')}: liquid funds "
+                f"{_compact_amount(summary.get('latestLiquidFunds'), liquidity_currency)} using "
+                f"{summary.get('latestLiquidityBasis')}; total debt {_compact_amount(summary.get('latestTotalDebt'), liquidity_currency)}; "
+                f"debt after liquid funds {_compact_amount(summary.get('latestDebtAfterLiquidFunds'), liquidity_currency)} "
+                f"({summary.get('latestBalancePosition')}).\n"
+                f"- Liquidity: current ratio {shown_ratio(summary.get('latestCurrentRatio'))}, working capital "
+                f"{_compact_amount(summary.get('latestWorkingCapital'), liquidity_currency)}, liquid-funds-to-debt "
+                f"{shown_percent(summary.get('latestLiquidFundsToDebtPercent'))}; liquid-funds trend {summary.get('liquidFundsTrend')}.\n"
+                f"- Debt capacity: debt/equity {shown_ratio(summary.get('latestTotalDebtToEquityRatio'))}, debt/assets "
+                f"{shown_percent(summary.get('latestTotalDebtToAssetsPercent'))}, interest coverage "
+                f"{shown_ratio(summary.get('latestInterestCoverageRatio'))}, debt/EBITDA "
+                f"{shown_ratio(summary.get('latestDebtToEbitdaRatio'))}; total-debt trend {summary.get('totalDebtTrend')}.\n"
+                + "\n".join(annual_lines)
+                + mismatch_line
+                + sector_caution
+                + "\n- This is descriptive balance-sheet evidence, not a credit rating or synthetic health score. Statements can be restated, missing rows are not zero, and debt capacity also depends on maturities, covenants and cash-flow stability."
+            )
+        else:
+            liquidity_debt_section = (
+                "\n\nBalance-sheet liquidity and debt-capacity evidence\n"
+                "- Provider ne comparable annual balance-sheet rows return nahi kiye; missing liquidity, leverage ya coverage ratios invent nahi kiye gaye."
+            )
     return (
         "Seedha jawab\n"
         f"{prediction['name']} ke liye model ka current scenario {prediction['outlook']} hai, lekin ise guaranteed "
@@ -3949,6 +4227,7 @@ def _verified_tool_answer(
         + estimate_revision_section
         + dividend_action_section
         + earnings_quality_section
+        + liquidity_debt_section
         + "\n\nCalculation aur scenario\n"
         + f"- Current price se lower range tak downside: {brief['currentPrice']} - "
         + f"{prediction['expectedRange']['low']} = {brief['expectedDownsidePoints']} points "
@@ -4220,6 +4499,40 @@ def _llm_grounding_issue(
             )
             if not any(marker in normalized_answer for marker in quality_boundary_markers):
                 return "missing earnings-quality evidence boundary"
+    if _requests_liquidity_debt_analysis(lowered):
+        liquidity = (company_profile or {}).get("liquidityDebtIntelligence") or {}
+        summary = liquidity.get("summary") or {}
+        if liquidity.get("status") == "available":
+            if any(term in lowered for term in ("liquidity", "cash position", "cash balance")) and summary.get("latestLiquidFunds") is not None:
+                expected_liquidity = _compact_amount(summary["latestLiquidFunds"], liquidity.get("currency")).lower()
+                if expected_liquidity not in normalized_answer:
+                    return "missing requested liquid-funds evidence"
+            if "net debt" in lowered and summary.get("latestDebtAfterLiquidFunds") is not None:
+                expected_net_debt = _compact_amount(summary["latestDebtAfterLiquidFunds"], liquidity.get("currency")).lower()
+                if expected_net_debt not in normalized_answer:
+                    return "missing requested debt-after-liquid-funds evidence"
+            if "current ratio" in lowered and summary.get("latestCurrentRatio") is not None:
+                expected_ratio = f"{abs(float(summary['latestCurrentRatio'])):.3f}".rstrip("0").rstrip(".")
+                if expected_ratio not in normalized_answer:
+                    return "missing requested current-ratio evidence"
+            if "interest coverage" in lowered and summary.get("latestInterestCoverageRatio") is not None:
+                expected_ratio = f"{abs(float(summary['latestInterestCoverageRatio'])):.3f}".rstrip("0").rstrip(".")
+                if expected_ratio not in normalized_answer:
+                    return "missing requested interest-coverage evidence"
+            if any(term in lowered for term in ("debt trend", "leverage trend")) and summary.get("totalDebtTrend"):
+                if str(summary["totalDebtTrend"]).lower() not in normalized_answer:
+                    return "missing requested total-debt trend"
+            if summary.get("providerNetDebtBasisMismatchPeriods") and not any(marker in normalized_answer for marker in ("different basis", "basis differs", "basis mismatch", "kept separate", "provider net debt")):
+                return "missing provider net-debt basis warning"
+            if liquidity.get("financialSectorCaution") and not any(marker in normalized_answer for marker in ("financial institution", "financial-sector", "bank", "business model", "intentionally withheld")):
+                return "missing financial-sector liquidity caution"
+            liquidity_boundary_markers = (
+                "not a credit rating", "not credit rating", "not a synthetic health score",
+                "not a health score", "statements can be restated", "may be restated",
+                "missing rows are not zero", "missing data is not zero", "maturities", "covenants",
+            )
+            if not any(marker in normalized_answer for marker in liquidity_boundary_markers):
+                return "missing liquidity/debt evidence boundary"
     if document_requested and not document_matches:
         return "no indexed document evidence available"
     if document_matches:
@@ -4475,6 +4788,7 @@ async def market_agent(request: FastApiRequest):
         analyst_estimates = context["company"].get("analystEstimateIntelligence") or {}
         corporate_actions = context["company"].get("corporateActionIntelligence") or {}
         earnings_quality = context["company"].get("earningsQualityIntelligence") or {}
+        liquidity_debt = context["company"].get("liquidityDebtIntelligence") or {}
         llm_context["company"] = {
             "sector": context["company"]["sector"],
             "industry": context["company"]["industry"],
@@ -4555,6 +4869,20 @@ async def market_agent(request: FastApiRequest):
                     "disclaimer": earnings_quality.get("disclaimer"),
                 },
             } if "earnings_quality_and_capital_allocation_analysis" in plan["intents"] else {}),
+            **({
+                "liquidityAndDebtCapacity": {
+                    "status": liquidity_debt.get("status"),
+                    "coverageLevel": liquidity_debt.get("coverageLevel"),
+                    "coverage": liquidity_debt.get("coverage"),
+                    "currency": liquidity_debt.get("currency"),
+                    "sector": liquidity_debt.get("sector"),
+                    "financialSectorCaution": liquidity_debt.get("financialSectorCaution"),
+                    "summary": liquidity_debt.get("summary"),
+                    "annual": liquidity_debt.get("annual"),
+                    "method": liquidity_debt.get("method"),
+                    "disclaimer": liquidity_debt.get("disclaimer"),
+                },
+            } if "liquidity_and_debt_capacity_analysis" in plan["intents"] else {}),
         }
     if context.get("sectorPeers", {}).get("status") == "available":
         peer_context = context["sectorPeers"]
@@ -4613,6 +4941,7 @@ async def market_agent(request: FastApiRequest):
         "When analystEstimateRevisions is supplied, separate changing third-party analyst estimates from company guidance and FinTrack ML. Report the forecast period, ranges, analyst counts and up/down revision breadth; flag any supplied EPS trend basis mismatch instead of merging incompatible series. "
         "When dividendAndCorporateActions is supplied, distinguish history-derived per-share distributions from provider yield/payout snapshots. Mark the current calendar year partial, never treat missing payments as zero, and state that historical distributions are not guaranteed and splits do not create economic value by themselves. "
         "When earningsQualityAndCapitalAllocation is supplied, use only aligned reported periods, call cash-conversion ratios descriptive rather than a quality score, and keep dividends, repurchases, stock issuance and debt flows separate. State that statements can be restated and missing rows are not zero. For a supplied financial-sector caution, explain why bank/financial cash-flow and debt classifications are not directly comparable with industrial companies. "
+        "When liquidityAndDebtCapacity is supplied, identify the disclosed liquid-funds basis, keep provider net debt separate from total debt minus liquid funds, and report any supplied basis mismatch. Treat all ratios as descriptive rather than a credit rating or health score. For a supplied financial-sector caution, do not invent industrial interest-coverage or debt/EBITDA ratios. "
         "changePct is daily price change, not trading volume. RSI above 70 is overbought, below 30 is oversold. "
         "If balancedAccuracy is below 53, explicitly state that the model has no reliable directional edge. "
         "Keep the response readable and normally within about 550 words."
@@ -4645,6 +4974,7 @@ async def market_agent(request: FastApiRequest):
         "analyst_estimate_revision_analysis",
         "dividend_and_corporate_action_analysis",
         "earnings_quality_and_capital_allocation_analysis",
+        "liquidity_and_debt_capacity_analysis",
     ))
 
     def verified_fallback() -> str:
