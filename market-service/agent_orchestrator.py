@@ -129,6 +129,10 @@ def build_agent_plan(
         "dividend history", "dividend growth", "dividend yield", "payout ratio",
         "dividend consistency", "distribution history", "corporate action", "stock split",
         "split history", "capital gain distribution", "dividend payment", "trailing dividend",
+        "earnings quality", "cash conversion", "profit to cash", "operating cash conversion",
+        "fcf conversion", "free cash flow conversion", "capital allocation", "buyback",
+        "share repurchase", "stock repurchase", "stock issuance", "share issuance",
+        "debt repayment", "debt issuance", "cash deployment", "shareholder return",
     ))
     catalyst_request = _contains(lowered, (
         "earnings date", "earnings calendar", "next earnings", "analyst rating", "analyst recommendation", "price target",
@@ -155,6 +159,12 @@ def build_agent_plan(
         "dividend consistency", "distribution history", "corporate action", "stock split",
         "split history", "capital gain distribution", "ex-dividend", "ex dividend",
         "dividend payment", "trailing dividend",
+    ))
+    earnings_quality_request = _contains(lowered, (
+        "earnings quality", "cash conversion", "profit to cash", "operating cash conversion",
+        "fcf conversion", "free cash flow conversion", "capital allocation", "buyback",
+        "share repurchase", "stock repurchase", "stock issuance", "share issuance",
+        "debt repayment", "debt issuance", "cash deployment", "shareholder return",
     ))
     model_request = _contains(lowered, (
         "prediction", "forecast", "outlook", "bullish", "bearish", "next session", "model",
@@ -200,6 +210,8 @@ def build_agent_plan(
         add_intent("analyst_estimate_revision_analysis")
     if not is_index and (dividend_action_request or comprehensive):
         add_intent("dividend_and_corporate_action_analysis")
+    if not is_index and (earnings_quality_request or comprehensive):
+        add_intent("earnings_quality_and_capital_allocation_analysis")
     if not is_index and (peer_request or comprehensive):
         add_intent("sector_peer_analysis")
         require("sector_peer_comparison", "Compare the company with dynamically discovered same-sector, same-market peers.")

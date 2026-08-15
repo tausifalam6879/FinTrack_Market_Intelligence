@@ -560,6 +560,68 @@ class AgentAnalysisTests(unittest.TestCase):
         self.assertEqual("missing requested trailing dividend evidence", issue)
         self.assertIsNone(accepted)
 
+    def test_earnings_quality_fallback_reports_conversion_allocation_and_boundary(self):
+        company = {
+            "earningsQualityIntelligence": {
+                "status": "available", "currency": "USD", "financialSectorCaution": False,
+                "summary": {
+                    "latestPeriod": "2025-07-31",
+                    "latestOperatingCashConversionPercent": 131.42,
+                    "latestFreeCashFlowConversionPercent": 123.04,
+                    "latestEarningsCashGap": 3_393_000_000,
+                    "latestCapitalExpenditure": 905_000_000,
+                    "latestCapitalExpenditureToOperatingCashFlowPercent": 6.38,
+                    "latestShareholderCashReturns": 13_659_000_000,
+                    "latestShareholderReturnsToFreeCashFlowPercent": 102.8,
+                    "latestFreeCashFlowAfterShareholderReturns": -371_000_000,
+                    "latestNetCommonStockIssuance": -6_486_000_000,
+                    "latestNetDebtIssuance": -2_812_000_000,
+                    "positiveFreeCashFlowPeriods": 4, "freeCashFlowPeriodCount": 4,
+                },
+                "annual": [{
+                    "period": "2025-07-31", "netIncome": 10_800_000_000,
+                    "operatingCashFlow": 14_193_000_000, "operatingCashConversionPercent": 131.42,
+                    "freeCashFlow": 13_288_000_000, "shareholderCashReturns": 13_659_000_000,
+                }],
+            }
+        }
+        answer = _verified_tool_answer(
+            "Earnings quality, cash conversion aur capital allocation samjhao",
+            self.snapshot, self.prediction,
+            ["market_snapshot", "technical_prediction", "company_fundamentals"],
+            {"factors": []}, company_profile=company,
+        )
+
+        self.assertIn("Earnings quality and capital-allocation evidence", answer)
+        self.assertIn("operating-cash conversion 131.42%", answer)
+        self.assertIn("13.66B USD", answer)
+        self.assertIn("not an accounting-quality score", answer)
+
+    def test_generated_earnings_quality_answer_requires_conversion_returns_and_boundary(self):
+        company = {
+            "earningsQualityIntelligence": {
+                "status": "available", "currency": "USD", "financialSectorCaution": False,
+                "summary": {
+                    "latestOperatingCashConversionPercent": 131.42,
+                    "latestShareholderCashReturns": 13_659_000_000,
+                },
+            }
+        }
+        base = "Weak model warning with detailed provider statement evidence and calculations. " * 9
+        missing = _llm_grounding_issue(
+            base + "Operating cash conversion is 131.42%. Statements can be restated.",
+            "Earnings quality, cash conversion aur capital allocation samjhao",
+            self.prediction, {"factors": []}, company_profile=company,
+        )
+        accepted = _llm_grounding_issue(
+            base + "Operating cash conversion is 131.42% and shareholder cash returns are 13.66B USD. This is descriptive, not an accounting-quality score.",
+            "Earnings quality, cash conversion aur capital allocation samjhao",
+            self.prediction, {"factors": []}, company_profile=company,
+        )
+
+        self.assertEqual("missing requested shareholder cash-return evidence", missing)
+        self.assertIsNone(accepted)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -472,6 +472,7 @@ function CompanyFundamentalsPanel({ data, loading, error }) {
     <CompanyCorporateActionPanel data={data.corporateActionIntelligence} currency={currency} />
     <div className="fundamental-groups">{groups.map(([title, entries]) => <FundamentalGroup key={title} title={title} entries={entries} />)}</div>
     <CompanyFinancialTrendPanel data={data.financialTrends} currency={currency} />
+    <CompanyEarningsQualityPanel data={data.earningsQualityIntelligence} currency={currency} />
     <CompanyOwnershipPanel data={data.ownershipIntelligence} currency={currency} />
     <CompanyNewsIntelligencePanel data={data.newsIntelligence} articles={data.news} />
     <p className="fundamentals-method"><strong>Source:</strong> {data.source}. Figures may use different reporting periods and are shown as provider evidence, not an accounting audit or investment recommendation.{data.dataAsOf ? ` Data as of ${new Date(data.dataAsOf).toLocaleString("en-IN")}.` : ""}</p>
@@ -626,6 +627,88 @@ function CompanyFinancialTrendPanel({ data, currency }) {
       })}</div> : <p>No comparable quarterly revenue periods were returned.</p>}
     </div>
     <p className="financial-trend-method"><strong>Method:</strong> {data.method} {data.disclaimer}</p>
+  </section>;
+}
+
+function CompanyEarningsQualityPanel({ data, currency }) {
+  if (!data || data.status !== "available") return <section className="earnings-quality-panel earnings-quality-unavailable">
+    <div className="earnings-quality-heading"><div><p className="eyebrow">EARNINGS QUALITY & CAPITAL ALLOCATION</p><h4>No comparable cash-flow periods available</h4></div><span>Not estimated</span></div>
+    <p>The provider returned no aligned annual income and cash-flow rows, so FinTrack does not invent conversion or capital-allocation evidence.</p>
+  </section>;
+
+  const summary = data.summary || {};
+  const annual = data.annual || [];
+  const latest = annual[annual.length - 1] || {};
+  const localCurrency = data.currency || currency;
+  const percent = (raw, signed = false) => {
+    const numeric = Number(raw);
+    if (raw === null || raw === undefined || !Number.isFinite(numeric)) return "—";
+    return `${signed && numeric > 0 ? "+" : ""}${numeric.toFixed(1)}%`;
+  };
+  const formatDate = (raw) => {
+    if (!raw) return "Period unavailable";
+    const parsed = new Date(`${raw}T00:00:00`);
+    return Number.isNaN(parsed.getTime()) ? raw : parsed.toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" });
+  };
+  const money = (raw) => formatCompactMoney(raw, localCurrency);
+  const direction = (raw) => raw === null || raw === undefined ? "" : Number(raw) >= 0 ? "positive" : "negative";
+  const conversionDirection = (raw) => raw === null || raw === undefined ? "" : direction(Number(raw) - 100);
+  const maxCashMagnitude = Math.max(...annual.flatMap((item) => [item.netIncome, item.operatingCashFlow, item.freeCashFlow]).map((item) => Math.abs(Number(item) || 0)), 1);
+  const barWidth = (raw) => `${Math.max(2, (Math.abs(Number(raw) || 0) / maxCashMagnitude) * 100)}%`;
+  const allocationItems = [
+    ["Capital expenditure", latest.capitalExpenditure, `${percent(latest.capitalExpenditureToOperatingCashFlowPercent)} of operating cash`],
+    ["Cash dividends", latest.dividendsPaid, "Reported cash outflow"],
+    ["Share repurchases", latest.shareRepurchases, "Reported cash outflow"],
+    ["Share issuance", latest.shareIssuance, "Reported cash inflow"],
+    ["Debt repayment", latest.debtRepayment, "Reported cash outflow"],
+    ["Debt issuance", latest.debtIssuance, "Reported cash inflow"],
+  ];
+
+  return <section className="earnings-quality-panel" aria-labelledby="earnings-quality-title">
+    <div className="earnings-quality-heading">
+      <div><p className="eyebrow">EARNINGS QUALITY & CAPITAL ALLOCATION</p><h4 id="earnings-quality-title">Cash conversion and reported deployment of capital</h4></div>
+      <span>{data.coverageLevel || "partial"} statement coverage</span>
+    </div>
+    {data.financialSectorCaution && <div className="earnings-quality-caution"><strong>Financial-sector context:</strong> Debt and operating cash-flow classifications reflect this business model and are not directly comparable with industrial companies.</div>}
+    <div className="earnings-quality-summary">
+      <article className={conversionDirection(summary.latestOperatingCashConversionPercent)}><small>Operating-cash conversion</small><strong>{percent(summary.latestOperatingCashConversionPercent)}</strong><span>OCF / positive net income</span></article>
+      <article className={conversionDirection(summary.latestFreeCashFlowConversionPercent)}><small>Free-cash-flow conversion</small><strong>{percent(summary.latestFreeCashFlowConversionPercent)}</strong><span>FCF / positive net income</span></article>
+      <article><small>Positive FCF periods</small><strong>{summary.positiveFreeCashFlowPeriods || 0} / {summary.freeCashFlowPeriodCount || 0}</strong><span>Returned annual periods only</span></article>
+      <article className={direction(summary.latestFreeCashFlowAfterShareholderReturns)}><small>FCF after cash returns</small><strong>{money(summary.latestFreeCashFlowAfterShareholderReturns)}</strong><span>{percent(summary.latestShareholderReturnsToFreeCashFlowPercent)} of positive FCF returned</span></article>
+    </div>
+    <div className="earnings-quality-layout">
+      <article className="cash-conversion-card">
+        <div className="earnings-quality-card-heading"><strong>Profit-to-cash evidence</strong><span>Aligned annual fiscal periods</span></div>
+        <div className="cash-conversion-legend"><span className="income">Net income</span><span className="operating">Operating cash</span><span className="free">Free cash flow</span></div>
+        <div className="cash-conversion-bars">{annual.map((item) => <div key={item.period}>
+          <span>{new Date(`${item.period}T00:00:00`).getFullYear()}</span>
+          <section>
+            <i className="income"><b style={{ width: barWidth(item.netIncome) }} /></i>
+            <i className="operating"><b style={{ width: barWidth(item.operatingCashFlow) }} /></i>
+            <i className="free"><b style={{ width: barWidth(item.freeCashFlow) }} /></i>
+          </section>
+          <p><strong>{percent(item.operatingCashConversionPercent)}</strong><small>OCF conversion</small></p>
+        </div>)}</div>
+      </article>
+      <article className="capital-allocation-card">
+        <div className="earnings-quality-card-heading"><strong>Latest capital allocation</strong><span>{formatDate(summary.latestPeriod)}</span></div>
+        <div className="capital-allocation-grid">{allocationItems.map(([label, amount, hint]) => <div key={label}>
+          <small>{label}</small><strong>{money(amount)}</strong><span>{amount === null || amount === undefined ? "Provider row unavailable" : hint}</span>
+        </div>)}</div>
+      </article>
+    </div>
+    <div className="earnings-quality-table-wrap">
+      <div className="earnings-quality-card-heading"><strong>Reported conversion history</strong><span>Ratios require positive reported net income</span></div>
+      <table className="earnings-quality-table">
+        <thead><tr><th>Fiscal period</th><th>Net income</th><th>Operating cash</th><th>OCF conversion</th><th>Free cash flow</th><th>FCF conversion</th><th>Shareholder cash returns</th></tr></thead>
+        <tbody>{[...annual].reverse().map((item) => <tr key={item.period}>
+          <td><strong>{formatDate(item.period)}</strong><small>{item.conversionBasis}</small></td>
+          <td>{money(item.netIncome)}</td><td>{money(item.operatingCashFlow)}</td><td>{percent(item.operatingCashConversionPercent)}</td>
+          <td className={direction(item.freeCashFlow)}>{money(item.freeCashFlow)}</td><td>{percent(item.freeCashFlowConversionPercent)}</td><td>{money(item.shareholderCashReturns)}</td>
+        </tr>)}</tbody>
+      </table>
+    </div>
+    <p className="earnings-quality-method"><strong>Method:</strong> {data.method} {data.disclaimer}</p>
   </section>;
 }
 

@@ -136,6 +136,13 @@ DIVIDEND_ACTION_QUERY_TERMS = (
     "ex dividend", "dividend payment", "trailing dividend",
 )
 
+EARNINGS_QUALITY_QUERY_TERMS = (
+    "earnings quality", "cash conversion", "profit to cash", "operating cash conversion",
+    "fcf conversion", "free cash flow conversion", "capital allocation", "buyback",
+    "share repurchase", "stock repurchase", "stock issuance", "share issuance",
+    "debt repayment", "debt issuance", "cash deployment", "shareholder return",
+)
+
 MARKET_BOARD = {
     "^NSEI": {"name": "Nifty 50", "region": "India", "currency": "INR", "kind": "index", "sector": "Indices"},
     "^BSESN": {"name": "BSE Sensex", "region": "India", "currency": "INR", "kind": "index", "sector": "Indices"},
@@ -1274,6 +1281,204 @@ def _financial_statement_trends(
     }
 
 
+def _statement_outflow(value: Any) -> Optional[float]:
+    """Return a reported cash outflow magnitude without reclassifying positive reversals."""
+    numeric = _round(value, 6)
+    if numeric is None:
+        return None
+    if numeric < 0:
+        return _round(abs(numeric), 0)
+    if numeric == 0:
+        return 0.0
+    return None
+
+
+def _statement_inflow(value: Any) -> Optional[float]:
+    numeric = _round(value, 6)
+    if numeric is None:
+        return None
+    return _round(numeric, 0) if numeric >= 0 else None
+
+
+def _earnings_quality_intelligence(
+    info: Dict[str, Any],
+    financial_trends: Dict[str, Any],
+    cash_flow: Optional[pd.DataFrame],
+) -> Dict[str, Any]:
+    """Align cash generation and capital-allocation rows by reported fiscal period."""
+    base_annual = financial_trends.get("annual") or []
+    annual: List[Dict[str, Any]] = []
+    for base in base_annual:
+        period_label = base.get("period")
+        period = next(
+            (
+                column for column in cash_flow.columns
+                if _provider_date(column) == period_label
+            ),
+            None,
+        ) if cash_flow is not None and not cash_flow.empty else None
+
+        dividends_raw = _statement_value(
+            cash_flow,
+            ("Cash Dividends Paid", "Common Stock Dividend Paid", "Common Stock Dividend Payments"),
+            period,
+        )
+        repurchases_raw = _statement_value(
+            cash_flow,
+            ("Repurchase Of Capital Stock", "Common Stock Issuance Or Purchase", "Repurchase Of Stock"),
+            period,
+        )
+        stock_issuance_raw = _statement_value(
+            cash_flow,
+            ("Issuance Of Capital Stock", "Common Stock Issuance"),
+            period,
+        )
+        net_stock_issuance = _statement_value(cash_flow, ("Net Common Stock Issuance",), period)
+        debt_repayment_raw = _statement_value(
+            cash_flow,
+            ("Repayment Of Debt", "Long Term Debt Payments"),
+            period,
+        )
+        debt_issuance_raw = _statement_value(
+            cash_flow,
+            ("Issuance Of Debt", "Long Term Debt Issuance"),
+            period,
+        )
+        net_debt_issuance = _statement_value(
+            cash_flow,
+            ("Net Issuance Payments Of Debt", "Net Long Term Debt Issuance"),
+            period,
+        )
+        net_income = base.get("netIncome")
+        operating_cash_flow = base.get("operatingCashFlow")
+        free_cash_flow = base.get("freeCashFlow")
+        capital_expenditure = _statement_outflow(base.get("capitalExpenditure"))
+        dividends_paid = _statement_outflow(dividends_raw)
+        share_repurchases = _statement_outflow(repurchases_raw)
+        share_issuance = _statement_inflow(stock_issuance_raw)
+        debt_repayment = _statement_outflow(debt_repayment_raw)
+        debt_issuance = _statement_inflow(debt_issuance_raw)
+        shareholder_returns = (
+            _round((dividends_paid or 0) + (share_repurchases or 0), 0)
+            if dividends_paid is not None or share_repurchases is not None else None
+        )
+        operating_conversion = (
+            _safe_margin(operating_cash_flow, net_income)
+            if net_income is not None and net_income > 0 else None
+        )
+        free_cash_conversion = (
+            _safe_margin(free_cash_flow, net_income)
+            if net_income is not None and net_income > 0 else None
+        )
+        returns_to_fcf = (
+            _safe_margin(shareholder_returns, free_cash_flow)
+            if free_cash_flow is not None and free_cash_flow > 0 else None
+        )
+        capex_to_ocf = (
+            _safe_margin(capital_expenditure, operating_cash_flow)
+            if operating_cash_flow is not None and operating_cash_flow > 0 else None
+        )
+        evidence = [
+            net_income, operating_cash_flow, free_cash_flow, capital_expenditure,
+            dividends_paid, share_repurchases, share_issuance, debt_repayment,
+            debt_issuance, net_stock_issuance, net_debt_issuance,
+        ]
+        if not any(value is not None for value in evidence):
+            continue
+        annual.append({
+            "period": period_label,
+            "netIncome": net_income,
+            "operatingCashFlow": operating_cash_flow,
+            "freeCashFlow": free_cash_flow,
+            "earningsCashGap": (
+                _round(operating_cash_flow - net_income, 0)
+                if operating_cash_flow is not None and net_income is not None else None
+            ),
+            "operatingCashConversionPercent": operating_conversion,
+            "freeCashFlowConversionPercent": free_cash_conversion,
+            "capitalExpenditure": capital_expenditure,
+            "capitalExpenditureToOperatingCashFlowPercent": capex_to_ocf,
+            "dividendsPaid": dividends_paid,
+            "shareRepurchases": share_repurchases,
+            "shareIssuance": share_issuance,
+            "netCommonStockIssuance": net_stock_issuance,
+            "shareholderCashReturns": shareholder_returns,
+            "shareholderReturnsToFreeCashFlowPercent": returns_to_fcf,
+            "freeCashFlowAfterShareholderReturns": (
+                _round(free_cash_flow - shareholder_returns, 0)
+                if free_cash_flow is not None and shareholder_returns is not None else None
+            ),
+            "debtRepayment": debt_repayment,
+            "debtIssuance": debt_issuance,
+            "netDebtIssuance": net_debt_issuance,
+            "conversionBasis": (
+                "positive reported net income"
+                if net_income is not None and net_income > 0 else
+                "not meaningful because reported net income is non-positive"
+                if net_income is not None else "net income unavailable"
+            ),
+        })
+
+    if not annual:
+        return {
+            "status": "unavailable",
+            "coverageLevel": "unavailable",
+            "annual": [],
+            "summary": {},
+            "source": "Yahoo Finance company cash-flow and income statements via yfinance",
+            "method": "No comparable annual income/cash-flow periods were returned.",
+            "disclaimer": "FinTrack does not estimate missing cash-flow or capital-allocation rows.",
+        }
+
+    latest = annual[-1]
+    sector = str(info.get("sector") or "")
+    industry = str(info.get("industry") or "")
+    financial_sector_caution = (
+        "financial" in sector.lower()
+        or any(term in industry.lower() for term in ("bank", "insurance", "credit", "capital markets"))
+    )
+    cash_periods = [item for item in annual if item.get("operatingCashFlow") is not None]
+    positive_fcf_periods = [item for item in annual if item.get("freeCashFlow") is not None and item["freeCashFlow"] > 0]
+    allocation_components = [
+        latest.get("dividendsPaid"), latest.get("shareRepurchases"), latest.get("shareIssuance"),
+        latest.get("debtRepayment"), latest.get("debtIssuance"),
+    ]
+    latest_core = all(latest.get(key) is not None for key in ("netIncome", "operatingCashFlow", "freeCashFlow"))
+    coverage_level = "broad" if len(cash_periods) >= 3 and latest_core and any(value is not None for value in allocation_components) else "partial"
+    return {
+        "status": "available",
+        "coverageLevel": coverage_level,
+        "currency": info.get("currency"),
+        "sector": sector or None,
+        "industry": industry or None,
+        "financialSectorCaution": financial_sector_caution,
+        "annual": annual,
+        "summary": {
+            "latestPeriod": latest.get("period"),
+            "periodCount": len(annual),
+            "latestOperatingCashConversionPercent": latest.get("operatingCashConversionPercent"),
+            "latestFreeCashFlowConversionPercent": latest.get("freeCashFlowConversionPercent"),
+            "latestEarningsCashGap": latest.get("earningsCashGap"),
+            "latestCapitalExpenditure": latest.get("capitalExpenditure"),
+            "latestCapitalExpenditureToOperatingCashFlowPercent": latest.get("capitalExpenditureToOperatingCashFlowPercent"),
+            "latestShareholderCashReturns": latest.get("shareholderCashReturns"),
+            "latestShareholderReturnsToFreeCashFlowPercent": latest.get("shareholderReturnsToFreeCashFlowPercent"),
+            "latestFreeCashFlowAfterShareholderReturns": latest.get("freeCashFlowAfterShareholderReturns"),
+            "latestNetCommonStockIssuance": latest.get("netCommonStockIssuance"),
+            "latestNetDebtIssuance": latest.get("netDebtIssuance"),
+            "positiveFreeCashFlowPeriods": len(positive_fcf_periods),
+            "freeCashFlowPeriodCount": sum(item.get("freeCashFlow") is not None for item in annual),
+        },
+        "source": "Yahoo Finance annual company cash-flow and income statements via yfinance",
+        "method": "FinTrack aligns reported fiscal periods, divides operating/free cash flow by positive reported net income, and separates dividends, repurchases, issuance and debt flows. Positive reversals in outflow rows are not reclassified as spending.",
+        "disclaimer": (
+            "Cash conversion is descriptive, not an accounting-quality score. Statements can be restated and missing rows are not zero. "
+            + ("For financial institutions, debt and operating cash-flow classifications reflect the business model and are not directly comparable with industrial companies. " if financial_sector_caution else "")
+            + "Capital allocation evidence is not a standalone investment signal or recommendation."
+        ),
+    }
+
+
 def _normalize_holder_rows(frame: Optional[pd.DataFrame], limit: int = 8) -> List[Dict[str, Any]]:
     if frame is None or frame.empty:
         return []
@@ -2021,6 +2226,7 @@ def company_research(symbol: str) -> Dict[str, Any]:
         cash_flow,
         quarterly_income,
     )
+    earnings_quality = _earnings_quality_intelligence(info, financial_trends, cash_flow)
     ownership = _ownership_intelligence(
         major_holders,
         institutional_holders,
@@ -2077,6 +2283,7 @@ def company_research(symbol: str) -> Dict[str, Any]:
         },
         "financials": financials,
         "financialTrends": financial_trends,
+        "earningsQualityIntelligence": earnings_quality,
         "ownershipIntelligence": ownership,
         "analystEstimateIntelligence": analyst_estimates,
         "corporateActionIntelligence": corporate_actions,
@@ -2897,6 +3104,11 @@ def _requests_dividend_action_analysis(message: str) -> bool:
     return any(term in lowered for term in DIVIDEND_ACTION_QUERY_TERMS)
 
 
+def _requests_earnings_quality_analysis(message: str) -> bool:
+    lowered = str(message or "").lower()
+    return any(term in lowered for term in EARNINGS_QUALITY_QUERY_TERMS)
+
+
 def market_prediction(symbol: str) -> Dict[str, Any]:
     symbol = _sanitize_symbol(symbol)
     cache_key = f"prediction:{symbol}"
@@ -3675,6 +3887,50 @@ def _verified_tool_answer(
                 "- Provider ne is listing ke liye dividend, distribution ya split evidence return nahi kiya. "
                 "Missing data ko zero dividend ya no-action claim nahi maana gaya."
             )
+    earnings_quality_section = ""
+    if _requests_earnings_quality_analysis(lowered):
+        quality = (company_profile or {}).get("earningsQualityIntelligence") or {}
+        if quality.get("status") == "available":
+            summary = quality.get("summary") or {}
+            annual = quality.get("annual") or []
+            latest = annual[-1] if annual else {}
+            quality_currency = quality.get("currency") or prediction.get("expectedRange", {}).get("currency")
+            shown_percent = lambda value: "unavailable" if value is None else f"{value}%"
+            annual_lines = [
+                f"- {item.get('period')}: net income {_compact_amount(item.get('netIncome'), quality_currency)}, "
+                f"operating cash {_compact_amount(item.get('operatingCashFlow'), quality_currency)} "
+                f"({shown_percent(item.get('operatingCashConversionPercent'))} of positive net income), FCF "
+                f"{_compact_amount(item.get('freeCashFlow'), quality_currency)}; shareholder cash returns "
+                f"{_compact_amount(item.get('shareholderCashReturns'), quality_currency)}."
+                for item in annual[-4:]
+            ]
+            sector_caution = (
+                "\n- Financial-institution caution: debt and operating cash-flow classifications reflect the business model and are not directly comparable with industrial companies."
+                if quality.get("financialSectorCaution") else ""
+            )
+            earnings_quality_section = (
+                "\n\nEarnings quality and capital-allocation evidence\n"
+                f"- Latest reported period {summary.get('latestPeriod')}: operating-cash conversion "
+                f"{shown_percent(summary.get('latestOperatingCashConversionPercent'))}, FCF conversion "
+                f"{shown_percent(summary.get('latestFreeCashFlowConversionPercent'))}, earnings-to-operating-cash gap "
+                f"{_compact_amount(summary.get('latestEarningsCashGap'), quality_currency)}.\n"
+                f"- Capital deployment: capex {_compact_amount(summary.get('latestCapitalExpenditure'), quality_currency)} "
+                f"({shown_percent(summary.get('latestCapitalExpenditureToOperatingCashFlowPercent'))} of operating cash), "
+                f"shareholder cash returns {_compact_amount(summary.get('latestShareholderCashReturns'), quality_currency)} "
+                f"({shown_percent(summary.get('latestShareholderReturnsToFreeCashFlowPercent'))} of positive FCF), "
+                f"FCF after those returns {_compact_amount(summary.get('latestFreeCashFlowAfterShareholderReturns'), quality_currency)}.\n"
+                f"- Net common-stock issuance {_compact_amount(summary.get('latestNetCommonStockIssuance'), quality_currency)}; "
+                f"net debt issuance {_compact_amount(summary.get('latestNetDebtIssuance'), quality_currency)}; positive FCF in "
+                f"{summary.get('positiveFreeCashFlowPeriods') or 0} of {summary.get('freeCashFlowPeriodCount') or 0} returned period(s).\n"
+                + "\n".join(annual_lines)
+                + sector_caution
+                + "\n- Cash conversion is descriptive, not an accounting-quality score. Statements can be restated, missing rows are not zero, and capital allocation is not a standalone investment signal."
+            )
+        else:
+            earnings_quality_section = (
+                "\n\nEarnings quality and capital-allocation evidence\n"
+                "- Comparable annual income/cash-flow periods available nahi hain; missing conversion, buyback, issuance ya debt-flow evidence invent nahi kiya gaya."
+            )
     return (
         "Seedha jawab\n"
         f"{prediction['name']} ke liye model ka current scenario {prediction['outlook']} hai, lekin ise guaranteed "
@@ -3692,6 +3948,7 @@ def _verified_tool_answer(
         + ownership_section
         + estimate_revision_section
         + dividend_action_section
+        + earnings_quality_section
         + "\n\nCalculation aur scenario\n"
         + f"- Current price se lower range tak downside: {brief['currentPrice']} - "
         + f"{prediction['expectedRange']['low']} = {brief['expectedDownsidePoints']} points "
@@ -3937,6 +4194,32 @@ def _llm_grounding_issue(
             )
             if not any(marker in normalized_answer for marker in boundary_markers):
                 return "missing dividend/corporate-action evidence boundary"
+    if _requests_earnings_quality_analysis(lowered):
+        quality = (company_profile or {}).get("earningsQualityIntelligence") or {}
+        summary = quality.get("summary") or {}
+        if quality.get("status") == "available":
+            if any(term in lowered for term in ("earnings quality", "cash conversion", "profit to cash", "operating cash conversion")) and summary.get("latestOperatingCashConversionPercent") is not None:
+                expected_conversion = f"{abs(float(summary['latestOperatingCashConversionPercent'])):.2f}".rstrip("0").rstrip(".")
+                if expected_conversion not in normalized_answer:
+                    return "missing requested operating-cash conversion evidence"
+            if any(term in lowered for term in ("fcf conversion", "free cash flow conversion")) and summary.get("latestFreeCashFlowConversionPercent") is not None:
+                expected_conversion = f"{abs(float(summary['latestFreeCashFlowConversionPercent'])):.2f}".rstrip("0").rstrip(".")
+                if expected_conversion not in normalized_answer:
+                    return "missing requested free-cash-flow conversion evidence"
+            if any(term in lowered for term in ("capital allocation", "buyback", "share repurchase", "shareholder return")) and summary.get("latestShareholderCashReturns") is not None:
+                expected_returns = _compact_amount(summary["latestShareholderCashReturns"], quality.get("currency")).lower()
+                if expected_returns not in normalized_answer:
+                    return "missing requested shareholder cash-return evidence"
+            if quality.get("financialSectorCaution") and not any(marker in normalized_answer for marker in ("financial institution", "financial-sector", "bank cash", "not directly comparable", "business model")):
+                return "missing financial-sector cash-flow caution"
+            quality_boundary_markers = (
+                "not an accounting-quality score", "not an accounting quality score",
+                "descriptive", "statements can be restated", "may be restated",
+                "missing rows are not zero", "missing data is not zero",
+                "not a standalone investment signal", "not a standalone signal",
+            )
+            if not any(marker in normalized_answer for marker in quality_boundary_markers):
+                return "missing earnings-quality evidence boundary"
     if document_requested and not document_matches:
         return "no indexed document evidence available"
     if document_matches:
@@ -4191,6 +4474,7 @@ async def market_agent(request: FastApiRequest):
         ownership = context["company"].get("ownershipIntelligence") or {}
         analyst_estimates = context["company"].get("analystEstimateIntelligence") or {}
         corporate_actions = context["company"].get("corporateActionIntelligence") or {}
+        earnings_quality = context["company"].get("earningsQualityIntelligence") or {}
         llm_context["company"] = {
             "sector": context["company"]["sector"],
             "industry": context["company"]["industry"],
@@ -4258,6 +4542,19 @@ async def market_agent(request: FastApiRequest):
                     "disclaimer": corporate_actions.get("disclaimer"),
                 },
             } if "dividend_and_corporate_action_analysis" in plan["intents"] else {}),
+            **({
+                "earningsQualityAndCapitalAllocation": {
+                    "status": earnings_quality.get("status"),
+                    "coverageLevel": earnings_quality.get("coverageLevel"),
+                    "currency": earnings_quality.get("currency"),
+                    "sector": earnings_quality.get("sector"),
+                    "financialSectorCaution": earnings_quality.get("financialSectorCaution"),
+                    "summary": earnings_quality.get("summary"),
+                    "annual": earnings_quality.get("annual"),
+                    "method": earnings_quality.get("method"),
+                    "disclaimer": earnings_quality.get("disclaimer"),
+                },
+            } if "earnings_quality_and_capital_allocation_analysis" in plan["intents"] else {}),
         }
     if context.get("sectorPeers", {}).get("status") == "available":
         peer_context = context["sectorPeers"]
@@ -4315,6 +4612,7 @@ async def market_agent(request: FastApiRequest):
         "When ownershipAndInsiderActivity is supplied, distinguish provider-reported total ownership from the sum of only returned top-holder rows. State missing holder-table coverage, reporting delays, and that insider activity needs context and is not a standalone trading signal. "
         "When analystEstimateRevisions is supplied, separate changing third-party analyst estimates from company guidance and FinTrack ML. Report the forecast period, ranges, analyst counts and up/down revision breadth; flag any supplied EPS trend basis mismatch instead of merging incompatible series. "
         "When dividendAndCorporateActions is supplied, distinguish history-derived per-share distributions from provider yield/payout snapshots. Mark the current calendar year partial, never treat missing payments as zero, and state that historical distributions are not guaranteed and splits do not create economic value by themselves. "
+        "When earningsQualityAndCapitalAllocation is supplied, use only aligned reported periods, call cash-conversion ratios descriptive rather than a quality score, and keep dividends, repurchases, stock issuance and debt flows separate. State that statements can be restated and missing rows are not zero. For a supplied financial-sector caution, explain why bank/financial cash-flow and debt classifications are not directly comparable with industrial companies. "
         "changePct is daily price change, not trading volume. RSI above 70 is overbought, below 30 is oversold. "
         "If balancedAccuracy is below 53, explicitly state that the model has no reliable directional edge. "
         "Keep the response readable and normally within about 550 words."
@@ -4346,6 +4644,7 @@ async def market_agent(request: FastApiRequest):
         "ownership_and_insider_analysis",
         "analyst_estimate_revision_analysis",
         "dividend_and_corporate_action_analysis",
+        "earnings_quality_and_capital_allocation_analysis",
     ))
 
     def verified_fallback() -> str:

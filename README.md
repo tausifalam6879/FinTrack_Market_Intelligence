@@ -19,6 +19,7 @@ A focused public financial-information dashboard extracted as a new, independent
 - dynamic ownership and insider-activity intelligence with provider-reported major ownership, returned-holder concentration, institutional/mutual-fund tables, six-month net activity and dated transactions;
 - dynamic third-party analyst-estimate intelligence with period-specific EPS/revenue ranges, growth expectations, analyst coverage, up/down revision breadth, EPS trend snapshots and explicit basis-mismatch warnings;
 - dynamic dividend and corporate-action intelligence with history-derived trailing distributions, completed-year growth, yield/payout snapshots, capital-gain distributions, stock splits and honest split-only or unavailable states;
+- reported earnings-quality and capital-allocation intelligence with aligned profit-to-cash conversion, free-cash-flow consistency, capex, dividends, repurchases, stock/debt issuance and financial-sector comparability cautions;
 - configurable downside alerts with optional browser notifications and a 15-minute scan interval;
 - a draggable sliding section selector for quick market, currency, news and intelligence navigation;
 - transparent, experimental market analytics;
@@ -118,7 +119,7 @@ For each live prediction, FinTrack also produces a local sensitivity explanation
 
 ## Hybrid agentic research flow
 
-The public `/market/agent` route uses a `plan -> execute -> synthesize` workflow. `agent_orchestrator.py` deterministically classifies the question and selects only the required read-only tools: current quote, ML/technical outlook, requested historical session, company fundamentals, financial-statement, ownership, analyst-estimate and dividend/corporate-action evidence, indexed document RAG, recent headlines, macro factors, market breadth or global indices. The LLM does not choose tools and no mutation-capable tool is exposed, so prompt text cannot approve a model, upload a document or alter project data.
+The public `/market/agent` route uses a `plan -> execute -> synthesize` workflow. `agent_orchestrator.py` deterministically classifies the question and selects only the required read-only tools: current quote, ML/technical outlook, requested historical session, company fundamentals, financial-statement, earnings-quality/capital-allocation, ownership, analyst-estimate and dividend/corporate-action evidence, indexed document RAG, recent headlines, macro factors, market breadth or global indices. The LLM does not choose tools and no mutation-capable tool is exposed, so prompt text cannot approve a model, upload a document or alter project data.
 
 For annual-report, filing, debt, revenue or citation questions, the agent retrieves existing indexed chunks and requires exact `[S# p.#]` citations in any accepted generated answer. When there is no indexed evidence, the trace reports `no_evidence` and the deterministic fallback refuses to invent a filing claim. The API returns `agentPlan`, `toolTrace`, `evidenceSources` and `citations`; the chat UI exposes these behind an expandable evidence trace so an interviewer or user can audit why each tool ran and what it returned.
 
