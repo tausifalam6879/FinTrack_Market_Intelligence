@@ -443,6 +443,58 @@ main { width: min(1500px, calc(100% - 40px)); margin: 0 auto; }
 .liquidity-debt-table td.positive { color: #08775e; }
 .liquidity-debt-table td.negative { color: #b14646; }
 .liquidity-debt-method { margin: 10px 0 0; color: var(--muted); font-size: 7px; line-height: 1.5; }
+.profitability-returns-panel { margin-top: 11px; padding: 15px; border: 1px solid #d7c9df; border-radius: 14px; background: linear-gradient(135deg,rgba(255,255,255,.94),rgba(249,244,251,.88)); }
+.profitability-returns-panel.profitability-returns-unavailable { border-style: dashed; }
+.profitability-returns-unavailable > p { margin: 9px 0 0; color: var(--muted); font-size: 8px; line-height: 1.5; }
+.profitability-returns-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; }
+.profitability-returns-heading h4 { margin: 3px 0 0; font-size: 14px; }
+.profitability-returns-heading > span { padding: 6px 9px; border: 1px solid #d6c3df; border-radius: 999px; color: #6d4f7d; background: #fff; font-size: 7px; font-weight: 900; text-transform: uppercase; }
+.profitability-returns-caution { margin-top: 9px; padding: 8px 10px; border: 1px solid #e5ce9f; border-radius: 9px; color: #765421; background: #fff7e6; font-size: 7px; line-height: 1.5; }
+.profitability-returns-summary { margin-top: 11px; display: grid; grid-template-columns: repeat(4,minmax(0,1fr)); gap: 7px; }
+.profitability-returns-summary article { min-width: 0; padding: 10px; border: 1px solid #e5dce9; border-top: 3px solid #89619a; border-radius: 10px; background: #fff; }
+.profitability-returns-summary article.positive { border-top-color: #28976f; }
+.profitability-returns-summary article.negative { border-top-color: #c85c62; }
+.profitability-returns-summary small, .profitability-returns-summary strong, .profitability-returns-summary span { display: block; }
+.profitability-returns-summary small, .profitability-returns-summary span { color: var(--muted); font-size: 7px; }
+.profitability-returns-summary strong { margin: 5px 0 3px; overflow: hidden; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+.profitability-returns-layout { margin-top: 9px; display: grid; grid-template-columns: 1.05fr .95fr; gap: 9px; }
+.profitability-returns-layout > article { min-width: 0; padding: 11px; border: 1px solid #e5dce9; border-radius: 11px; background: #fff; }
+.profitability-returns-card-heading { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.profitability-returns-card-heading strong { font-size: 9px; }
+.profitability-returns-card-heading span { color: var(--muted); font-size: 7px; text-align: right; }
+.margin-progression-legend { margin-top: 9px; display: flex; flex-wrap: wrap; gap: 6px 12px; color: var(--muted); font-size: 6px; }
+.margin-progression-legend span::before { display: inline-block; width: 7px; height: 7px; margin-right: 4px; border-radius: 2px; background: #a777b6; content: ""; }
+.margin-progression-legend .operating::before { background: #2c8c83; }
+.margin-progression-legend .net::before { background: #4f87c1; }
+.margin-progression-bars { margin-top: 8px; display: grid; gap: 7px; }
+.margin-progression-bars > div { display: grid; grid-template-columns: 34px minmax(90px,1fr) 76px; align-items: center; gap: 7px; }
+.margin-progression-bars > div > span { color: var(--muted); font-size: 7px; }
+.margin-progression-bars section { display: grid; gap: 2px; }
+.margin-progression-bars i { display: block; height: 4px; overflow: hidden; border-radius: 99px; background: #f2edf4; }
+.margin-progression-bars i b { display: block; height: 100%; border-radius: inherit; background: #a777b6; }
+.margin-progression-bars i.operating b { background: #2c8c83; }
+.margin-progression-bars i.net b { background: #4f87c1; }
+.margin-progression-bars i b.negative { background: #c85c62; }
+.margin-progression-bars p { margin: 0; text-align: right; }
+.margin-progression-bars p strong, .margin-progression-bars p small { display: block; }
+.margin-progression-bars p strong { font-size: 8px; }
+.margin-progression-bars p small { margin-top: 2px; color: var(--muted); font-size: 6px; }
+.profitability-trend-chips { margin-top: 9px; display: flex; flex-wrap: wrap; gap: 6px; }
+.profitability-trend-chips span { padding: 5px 7px; border-radius: 999px; color: var(--muted); background: #f5f0f7; font-size: 6px; text-transform: capitalize; }
+.capital-efficiency-grid { margin-top: 9px; display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 6px; }
+.capital-efficiency-grid > div { min-width: 0; padding: 8px; border-radius: 8px; background: #f8f5f9; }
+.capital-efficiency-grid small, .capital-efficiency-grid strong, .capital-efficiency-grid span { display: block; }
+.capital-efficiency-grid small, .capital-efficiency-grid span { color: var(--muted); font-size: 6px; }
+.capital-efficiency-grid strong { margin: 4px 0 2px; overflow: hidden; font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
+.profitability-returns-table-wrap { margin-top: 9px; padding: 11px; overflow-x: auto; border: 1px solid #e5dce9; border-radius: 11px; background: #fff; }
+.profitability-returns-table { width: 100%; margin-top: 8px; border-collapse: collapse; font-size: 7px; white-space: nowrap; }
+.profitability-returns-table th { padding: 7px 6px; color: var(--muted); font-size: 6px; text-align: right; text-transform: uppercase; }
+.profitability-returns-table th:first-child, .profitability-returns-table td:first-child { text-align: left; }
+.profitability-returns-table td { padding: 8px 6px; border-top: 1px solid #eee8f0; text-align: right; }
+.profitability-returns-table tr.latest td { background: #fcf9fd; }
+.profitability-returns-table td strong, .profitability-returns-table td small { display: block; }
+.profitability-returns-table td small { margin-top: 2px; color: var(--muted); font-size: 6px; }
+.profitability-returns-method { margin: 10px 0 0; color: var(--muted); font-size: 7px; line-height: 1.5; }
 .ownership-panel { margin-top: 11px; padding: 15px; border: 1px solid #c8d8cf; border-radius: 14px; background: linear-gradient(135deg,rgba(255,255,255,.92),rgba(239,249,244,.84)); }
 .ownership-panel.ownership-unavailable { border-style: dashed; }
 .ownership-unavailable > p, .ownership-missing { margin: 9px 0 0; color: var(--muted); font-size: 8px; line-height: 1.5; }
@@ -950,6 +1002,7 @@ footer p { margin: 5px 0 0; }
   .financial-trend-summary { grid-template-columns: repeat(2,minmax(0,1fr)); }
   .earnings-quality-summary { grid-template-columns: repeat(2,minmax(0,1fr)); }
   .liquidity-debt-summary { grid-template-columns: repeat(2,minmax(0,1fr)); }
+  .profitability-returns-summary { grid-template-columns: repeat(2,minmax(0,1fr)); }
   .ownership-summary-grid { grid-template-columns: repeat(2,minmax(0,1fr)); }
   .estimate-summary-grid { grid-template-columns: repeat(2,minmax(0,1fr)); }
   .corporate-action-summary { grid-template-columns: repeat(2,minmax(0,1fr)); }
@@ -977,6 +1030,7 @@ footer p { margin: 5px 0 0; }
   .estimate-revision-grid { grid-template-columns: 1fr; }
   .earnings-quality-layout { grid-template-columns: 1fr; }
   .liquidity-debt-layout { grid-template-columns: 1fr; }
+  .profitability-returns-layout { grid-template-columns: 1fr; }
   .corporate-action-layout { grid-template-columns: 1fr; }
   .validation-summary { grid-template-columns: repeat(3,minmax(0,1fr)); }
   .deep-learning-grid { grid-template-columns: repeat(2,minmax(0,1fr)); }
@@ -1037,6 +1091,8 @@ footer p { margin: 5px 0 0; }
   .liquidity-debt-heading, .liquidity-debt-card-heading { align-items: flex-start; flex-direction: column; }
   .liquidity-debt-summary { grid-template-columns: 1fr; }
   .debt-structure-grid { grid-template-columns: 1fr; }
+  .profitability-returns-heading, .profitability-returns-card-heading { align-items: flex-start; flex-direction: column; }
+  .profitability-returns-summary, .capital-efficiency-grid { grid-template-columns: 1fr; }
   .ownership-heading { flex-direction: column; }
   .ownership-summary-grid, .ownership-holder-grid, .insider-activity-layout { grid-template-columns: 1fr; }
   .insider-transaction-list > div { grid-template-columns: 54px minmax(80px,.75fr) minmax(110px,1.25fr); }

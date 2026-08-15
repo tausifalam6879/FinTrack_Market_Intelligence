@@ -137,6 +137,10 @@ def build_agent_plan(
         "cash position", "cash balance", "net debt", "debt capacity", "debt trend",
         "working capital", "current ratio", "interest coverage", "debt to ebitda",
         "debt to equity", "debt to assets", "cash to debt", "leverage trend",
+        "profitability", "return on equity", " roe ", "return on assets", " roa ",
+        "return on invested capital", " roic ", "gross margin", "net margin",
+        "asset turnover", "capital efficiency", "equity multiplier", "dupont", "du pont",
+        "effective tax rate", "return ratio", "return ratios",
     ))
     catalyst_request = _contains(lowered, (
         "earnings date", "earnings calendar", "next earnings", "analyst rating", "analyst recommendation", "price target",
@@ -176,6 +180,13 @@ def build_agent_plan(
         "working capital", "current ratio", "interest coverage", "debt to ebitda",
         "debt to equity", "debt to assets", "cash to debt", "leverage trend",
     ))
+    padded_lowered = f" {lowered} "
+    profitability_return_request = _contains(padded_lowered, (
+        " profitability", " return on equity", " roe ", " return on assets", " roa ",
+        " return on invested capital", " roic ", " gross margin", " net margin",
+        " asset turnover", " capital efficiency", " equity multiplier", " dupont", " du pont",
+        " effective tax rate", " return ratio", " return ratios",
+    )) or bool(re.search(r"\b(?:roe|roa|roic)\b", lowered))
     model_request = _contains(lowered, (
         "prediction", "forecast", "outlook", "bullish", "bearish", "next session", "model",
         "probability", "kal", "tomorrow",
@@ -207,7 +218,7 @@ def build_agent_plan(
     if requested_date:
         add_intent("historical_date_analysis")
         require("historical_market_session", f"Look up the requested date {requested_date.isoformat()} without using today's data.")
-    if not is_index and (company_request or document_request or comprehensive):
+    if not is_index and (company_request or document_request or profitability_return_request or comprehensive):
         add_intent("company_research")
         require("company_fundamentals", "Provide company identity and available market-profile fundamentals.")
     if not is_index and (catalyst_request or comprehensive):
@@ -224,6 +235,8 @@ def build_agent_plan(
         add_intent("earnings_quality_and_capital_allocation_analysis")
     if not is_index and (liquidity_debt_request or comprehensive):
         add_intent("liquidity_and_debt_capacity_analysis")
+    if not is_index and (profitability_return_request or comprehensive):
+        add_intent("profitability_returns_and_efficiency_analysis")
     if not is_index and (peer_request or comprehensive):
         add_intent("sector_peer_analysis")
         require("sector_peer_comparison", "Compare the company with dynamically discovered same-sector, same-market peers.")

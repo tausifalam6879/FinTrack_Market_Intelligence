@@ -150,6 +150,13 @@ LIQUIDITY_DEBT_QUERY_TERMS = (
     "debt to equity", "debt to assets", "cash to debt", "leverage trend",
 )
 
+PROFITABILITY_RETURN_QUERY_TERMS = (
+    "profitability", "return on equity", " roe ", "return on assets", " roa ",
+    "return on invested capital", " roic ", "gross margin", "net margin",
+    "asset turnover", "capital efficiency", "equity multiplier", "dupont", "du pont",
+    "effective tax rate", "return ratio", "return ratios",
+)
+
 MARKET_BOARD = {
     "^NSEI": {"name": "Nifty 50", "region": "India", "currency": "INR", "kind": "index", "sector": "Indices"},
     "^BSESN": {"name": "BSE Sensex", "region": "India", "currency": "INR", "kind": "index", "sector": "Indices"},
@@ -1494,6 +1501,226 @@ def _safe_ratio(numerator: Any, denominator: Any, digits: int = 3) -> Optional[f
     return _round(numerator_value / denominator_value, digits)
 
 
+def _profitability_returns_intelligence(
+    info: Dict[str, Any],
+    income_statement: Optional[pd.DataFrame],
+    balance_sheet: Optional[pd.DataFrame],
+) -> Dict[str, Any]:
+    """Calculate statement-aligned margins, returns and capital efficiency.
+
+    Return ratios require both beginning and ending balance-sheet values. This
+    avoids presenting a year-end balance as if it represented capital employed
+    throughout the fiscal period.
+    """
+    frames = [
+        frame for frame in (income_statement, balance_sheet)
+        if frame is not None and not frame.empty
+    ]
+    if not frames:
+        return {
+            "status": "unavailable",
+            "coverageLevel": "unavailable",
+            "annual": [],
+            "summary": {},
+            "source": "Yahoo Finance annual company income statements and balance sheets via yfinance",
+            "method": "No annual income-statement or balance-sheet periods were returned.",
+            "disclaimer": "FinTrack does not estimate missing profitability or return-on-capital rows.",
+        }
+
+    sector = str(info.get("sector") or "")
+    industry = str(info.get("industry") or "")
+    financial_sector_caution = (
+        "financial" in sector.lower()
+        or any(term in industry.lower() for term in ("bank", "insurance", "credit", "capital markets"))
+    )
+    periods = sorted({period for frame in frames for period in frame.columns}, key=pd.Timestamp)[-5:]
+    annual: List[Dict[str, Any]] = []
+    for period in periods:
+        revenue = _statement_value(income_statement, ("Total Revenue", "Operating Revenue"), period)
+        gross_profit = _statement_value(income_statement, ("Gross Profit",), period)
+        operating_income = _statement_value(income_statement, ("Operating Income",), period)
+        ebit = _statement_value(income_statement, ("EBIT", "Operating Income"), period)
+        net_income = _statement_value(
+            income_statement,
+            ("Net Income", "Net Income Common Stockholders", "Net Income Including Noncontrolling Interests"),
+            period,
+        )
+        pretax_income = _statement_value(income_statement, ("Pretax Income", "Income Before Tax"), period)
+        tax_provision = _statement_value(income_statement, ("Tax Provision", "Income Tax Expense"), period)
+        total_assets = _statement_value(balance_sheet, ("Total Assets",), period)
+        equity = _statement_value(
+            balance_sheet,
+            ("Stockholders Equity", "Total Stockholder Equity", "Common Stock Equity", "Total Equity Gross Minority Interest"),
+            period,
+        )
+        total_debt = _statement_value(balance_sheet, ("Total Debt",), period)
+        liquid_funds = _statement_value(
+            balance_sheet,
+            ("Cash Cash Equivalents And Short Term Investments", "Cash And Short Term Investments"),
+            period,
+        )
+        liquidity_basis = "cash, cash equivalents and short-term investments"
+        if liquid_funds is None:
+            liquid_funds = _statement_value(
+                balance_sheet,
+                ("Cash And Cash Equivalents", "Cash Financial", "Cash"),
+                period,
+            )
+            liquidity_basis = "cash and cash equivalents only"
+        effective_tax_rate = None
+        if pretax_income is not None and pretax_income > 0 and tax_provision is not None and tax_provision >= 0:
+            candidate_rate = _safe_margin(tax_provision, pretax_income)
+            if candidate_rate is not None and 0 <= candidate_rate <= 50:
+                effective_tax_rate = candidate_rate
+        invested_capital = (
+            _round(total_debt + equity - liquid_funds, 0)
+            if total_debt is not None and equity is not None and liquid_funds is not None else None
+        )
+        evidence = (
+            revenue, gross_profit, operating_income, ebit, net_income, pretax_income,
+            tax_provision, total_assets, equity, total_debt, liquid_funds,
+        )
+        if not any(value is not None for value in evidence):
+            continue
+        annual.append({
+            "period": _provider_date(period),
+            "revenue": revenue,
+            "grossProfit": gross_profit,
+            "operatingIncome": operating_income,
+            "ebit": ebit,
+            "netIncome": net_income,
+            "pretaxIncome": pretax_income,
+            "taxProvision": tax_provision,
+            "effectiveTaxRatePercent": effective_tax_rate,
+            "totalAssets": total_assets,
+            "stockholdersEquity": equity,
+            "totalDebt": total_debt,
+            "liquidFunds": liquid_funds,
+            "liquidityBasis": liquidity_basis if liquid_funds is not None else "unavailable",
+            "investedCapital": invested_capital if invested_capital is None or invested_capital > 0 else None,
+            "grossMarginPercent": _safe_margin(gross_profit, revenue),
+            "operatingMarginPercent": _safe_margin(operating_income, revenue),
+            "netMarginPercent": _safe_margin(net_income, revenue),
+        })
+
+    if not annual:
+        return {
+            "status": "unavailable",
+            "coverageLevel": "unavailable",
+            "annual": [],
+            "summary": {},
+            "source": "Yahoo Finance annual company income statements and balance sheets via yfinance",
+            "method": "No usable aligned profitability periods were returned.",
+            "disclaimer": "FinTrack does not estimate missing profitability or return-on-capital rows.",
+        }
+
+    for index, item in enumerate(annual):
+        previous = annual[index - 1] if index else {}
+        previous_balance_comparable = False
+        if item.get("period") and previous.get("period"):
+            period_gap = (date.fromisoformat(item["period"]) - date.fromisoformat(previous["period"])).days
+            previous_balance_comparable = 270 <= period_gap <= 460
+        average_assets = (
+            _round((item["totalAssets"] + previous["totalAssets"]) / 2, 2)
+            if previous_balance_comparable and item.get("totalAssets") is not None and item["totalAssets"] > 0
+            and previous.get("totalAssets") is not None and previous["totalAssets"] > 0 else None
+        )
+        average_equity = (
+            _round((item["stockholdersEquity"] + previous["stockholdersEquity"]) / 2, 2)
+            if previous_balance_comparable and item.get("stockholdersEquity") is not None and item["stockholdersEquity"] > 0
+            and previous.get("stockholdersEquity") is not None and previous["stockholdersEquity"] > 0 else None
+        )
+        average_invested_capital = (
+            _round((item["investedCapital"] + previous["investedCapital"]) / 2, 2)
+            if previous_balance_comparable and item.get("investedCapital") is not None and item["investedCapital"] > 0
+            and previous.get("investedCapital") is not None and previous["investedCapital"] > 0 else None
+        )
+        nopat = (
+            _round(item["ebit"] * (1 - item["effectiveTaxRatePercent"] / 100), 0)
+            if not financial_sector_caution and item.get("ebit") is not None
+            and item.get("effectiveTaxRatePercent") is not None else None
+        )
+        item.update({
+            "previousBalanceComparable": previous_balance_comparable,
+            "averageTotalAssets": average_assets,
+            "averageStockholdersEquity": average_equity,
+            "averageInvestedCapital": average_invested_capital,
+            "returnOnAssetsPercent": _safe_margin(item.get("netIncome"), average_assets),
+            "returnOnEquityPercent": _safe_margin(item.get("netIncome"), average_equity),
+            "assetTurnoverRatio": _safe_ratio(item.get("revenue"), average_assets),
+            "equityMultiplierRatio": _safe_ratio(average_assets, average_equity),
+            "nopat": nopat,
+            "returnOnInvestedCapitalPercent": (
+                _safe_margin(nopat, average_invested_capital)
+                if not financial_sector_caution else None
+            ),
+        })
+        for metric, output in (
+            ("grossMarginPercent", "grossMarginChangePoints"),
+            ("operatingMarginPercent", "operatingMarginChangePoints"),
+            ("netMarginPercent", "netMarginChangePoints"),
+            ("returnOnAssetsPercent", "returnOnAssetsChangePoints"),
+            ("returnOnEquityPercent", "returnOnEquityChangePoints"),
+            ("returnOnInvestedCapitalPercent", "returnOnInvestedCapitalChangePoints"),
+        ):
+            item[output] = (
+                _round(item[metric] - previous[metric], 2)
+                if item.get(metric) is not None and previous.get(metric) is not None else None
+            )
+
+    latest = annual[-1]
+    coverage = {
+        "margins": any(latest.get(key) is not None for key in ("grossMarginPercent", "operatingMarginPercent", "netMarginPercent")),
+        "returns": any(latest.get(key) is not None for key in ("returnOnAssetsPercent", "returnOnEquityPercent")),
+        "efficiency": latest.get("assetTurnoverRatio") is not None,
+        "roic": latest.get("returnOnInvestedCapitalPercent") is not None,
+    }
+    broad_components = (coverage["margins"] and coverage["returns"] and coverage["efficiency"])
+    if not financial_sector_caution:
+        broad_components = broad_components and coverage["roic"]
+    return {
+        "status": "available",
+        "coverageLevel": "broad" if len(annual) >= 3 and broad_components else "partial",
+        "coverage": coverage,
+        "currency": info.get("currency"),
+        "sector": sector or None,
+        "industry": industry or None,
+        "financialSectorCaution": financial_sector_caution,
+        "annual": annual,
+        "summary": {
+            "latestPeriod": latest.get("period"),
+            "periodCount": len(annual),
+            "latestGrossMarginPercent": latest.get("grossMarginPercent"),
+            "latestOperatingMarginPercent": latest.get("operatingMarginPercent"),
+            "latestNetMarginPercent": latest.get("netMarginPercent"),
+            "latestGrossMarginChangePoints": latest.get("grossMarginChangePoints"),
+            "latestOperatingMarginChangePoints": latest.get("operatingMarginChangePoints"),
+            "latestNetMarginChangePoints": latest.get("netMarginChangePoints"),
+            "latestReturnOnAssetsPercent": latest.get("returnOnAssetsPercent"),
+            "latestReturnOnEquityPercent": latest.get("returnOnEquityPercent"),
+            "latestReturnOnInvestedCapitalPercent": latest.get("returnOnInvestedCapitalPercent"),
+            "latestReturnOnAssetsChangePoints": latest.get("returnOnAssetsChangePoints"),
+            "latestReturnOnEquityChangePoints": latest.get("returnOnEquityChangePoints"),
+            "latestReturnOnInvestedCapitalChangePoints": latest.get("returnOnInvestedCapitalChangePoints"),
+            "latestAssetTurnoverRatio": latest.get("assetTurnoverRatio"),
+            "latestEquityMultiplierRatio": latest.get("equityMultiplierRatio"),
+            "latestEffectiveTaxRatePercent": latest.get("effectiveTaxRatePercent"),
+            "latestNopat": latest.get("nopat"),
+            "latestAverageInvestedCapital": latest.get("averageInvestedCapital"),
+            "operatingMarginTrend": _series_trend([item.get("operatingMarginPercent") for item in annual]),
+            "returnOnEquityTrend": _series_trend([item.get("returnOnEquityPercent") for item in annual]),
+            "returnOnInvestedCapitalTrend": _series_trend([item.get("returnOnInvestedCapitalPercent") for item in annual]),
+        },
+        "source": "Yahoo Finance annual company income statements and balance sheets via yfinance",
+        "method": "FinTrack aligns reported fiscal periods; margins use reported revenue, return ratios require comparable adjacent fiscal periods and use average beginning and ending assets/equity, and industrial ROIC uses NOPAT divided by average debt plus equity minus disclosed liquid funds.",
+        "disclaimer": (
+            "These are descriptive accounting ratios, not a profitability score, moat rating or investment recommendation. Statements can be restated and missing rows are not zero. "
+            + ("For financial institutions, ROA and ROE remain descriptive but industrial ROIC is intentionally withheld because debt and cash are operating inputs. " if financial_sector_caution else "ROIC depends on a provider-derived effective tax rate and the disclosed liquid-funds basis; it is an approximation, not company-reported ROIC. ")
+            + "Cross-company comparisons require consistent fiscal periods and accounting policies."
+        ),
+    }
+
+
 def _liquidity_debt_intelligence(
     info: Dict[str, Any],
     income_statement: Optional[pd.DataFrame],
@@ -2450,6 +2677,7 @@ def company_research(symbol: str) -> Dict[str, Any]:
     )
     earnings_quality = _earnings_quality_intelligence(info, financial_trends, cash_flow)
     liquidity_debt = _liquidity_debt_intelligence(info, income_statement, balance_sheet)
+    profitability_returns = _profitability_returns_intelligence(info, income_statement, balance_sheet)
     ownership = _ownership_intelligence(
         major_holders,
         institutional_holders,
@@ -2508,6 +2736,7 @@ def company_research(symbol: str) -> Dict[str, Any]:
         "financialTrends": financial_trends,
         "earningsQualityIntelligence": earnings_quality,
         "liquidityDebtIntelligence": liquidity_debt,
+        "profitabilityReturnsIntelligence": profitability_returns,
         "ownershipIntelligence": ownership,
         "analystEstimateIntelligence": analyst_estimates,
         "corporateActionIntelligence": corporate_actions,
@@ -3336,6 +3565,14 @@ def _requests_earnings_quality_analysis(message: str) -> bool:
 def _requests_liquidity_debt_analysis(message: str) -> bool:
     lowered = str(message or "").lower()
     return any(term in lowered for term in LIQUIDITY_DEBT_QUERY_TERMS)
+
+
+def _requests_profitability_return_analysis(message: str) -> bool:
+    lowered = f" {' '.join(str(message or '').lower().split())} "
+    return (
+        any(term in lowered for term in PROFITABILITY_RETURN_QUERY_TERMS)
+        or bool(re.search(r"\b(?:roe|roa|roic)\b", lowered))
+    )
 
 
 def market_prediction(symbol: str) -> Dict[str, Any]:
@@ -4209,6 +4446,50 @@ def _verified_tool_answer(
                 "\n\nBalance-sheet liquidity and debt-capacity evidence\n"
                 "- Provider ne comparable annual balance-sheet rows return nahi kiye; missing liquidity, leverage ya coverage ratios invent nahi kiye gaye."
             )
+    profitability_returns_section = ""
+    if _requests_profitability_return_analysis(lowered):
+        returns = (company_profile or {}).get("profitabilityReturnsIntelligence") or {}
+        if returns.get("status") == "available":
+            summary = returns.get("summary") or {}
+            annual = returns.get("annual") or []
+            shown_percent = lambda value: "unavailable" if value is None else f"{value}%"
+            shown_ratio = lambda value: "unavailable" if value is None else f"{value}x"
+            annual_lines = [
+                f"- {item.get('period')}: gross/operating/net margins "
+                f"{shown_percent(item.get('grossMarginPercent'))}/{shown_percent(item.get('operatingMarginPercent'))}/"
+                f"{shown_percent(item.get('netMarginPercent'))}; ROA {shown_percent(item.get('returnOnAssetsPercent'))}, "
+                f"ROE {shown_percent(item.get('returnOnEquityPercent'))}, ROIC "
+                f"{shown_percent(item.get('returnOnInvestedCapitalPercent'))}, asset turnover "
+                f"{shown_ratio(item.get('assetTurnoverRatio'))}."
+                for item in annual[-4:]
+            ]
+            sector_caution = (
+                "\n- Financial-institution caution: ROA and ROE remain descriptive, but industrial ROIC is intentionally withheld because debt and cash are operating inputs."
+                if returns.get("financialSectorCaution") else
+                "\n- ROIC is an approximation using provider-derived tax rate and average debt plus equity minus disclosed liquid funds; it is not company-reported ROIC."
+            )
+            profitability_returns_section = (
+                "\n\nProfitability, returns and capital-efficiency evidence\n"
+                f"- Latest reported period {summary.get('latestPeriod')}: gross margin "
+                f"{shown_percent(summary.get('latestGrossMarginPercent'))}, operating margin "
+                f"{shown_percent(summary.get('latestOperatingMarginPercent'))}, net margin "
+                f"{shown_percent(summary.get('latestNetMarginPercent'))}.\n"
+                f"- Average-balance returns: ROA {shown_percent(summary.get('latestReturnOnAssetsPercent'))}, "
+                f"ROE {shown_percent(summary.get('latestReturnOnEquityPercent'))}, industrial ROIC "
+                f"{shown_percent(summary.get('latestReturnOnInvestedCapitalPercent'))}.\n"
+                f"- Efficiency bridge: asset turnover {shown_ratio(summary.get('latestAssetTurnoverRatio'))}, "
+                f"equity multiplier {shown_ratio(summary.get('latestEquityMultiplierRatio'))}, effective tax rate "
+                f"{shown_percent(summary.get('latestEffectiveTaxRatePercent'))}; operating-margin trend "
+                f"{summary.get('operatingMarginTrend')}.\n"
+                + "\n".join(annual_lines)
+                + sector_caution
+                + "\n- ROA, ROE and ROIC use average beginning and ending balances. These are descriptive accounting ratios, not a profitability score, moat rating or investment recommendation; statements can be restated and cross-company accounting policies can differ."
+            )
+        else:
+            profitability_returns_section = (
+                "\n\nProfitability, returns and capital-efficiency evidence\n"
+                "- Provider ne aligned annual income-statement aur balance-sheet rows return nahi kiye; missing margins, ROA, ROE ya ROIC invent nahi kiye gaye."
+            )
     return (
         "Seedha jawab\n"
         f"{prediction['name']} ke liye model ka current scenario {prediction['outlook']} hai, lekin ise guaranteed "
@@ -4228,6 +4509,7 @@ def _verified_tool_answer(
         + dividend_action_section
         + earnings_quality_section
         + liquidity_debt_section
+        + profitability_returns_section
         + "\n\nCalculation aur scenario\n"
         + f"- Current price se lower range tak downside: {brief['currentPrice']} - "
         + f"{prediction['expectedRange']['low']} = {brief['expectedDownsidePoints']} points "
@@ -4533,6 +4815,35 @@ def _llm_grounding_issue(
             )
             if not any(marker in normalized_answer for marker in liquidity_boundary_markers):
                 return "missing liquidity/debt evidence boundary"
+    if _requests_profitability_return_analysis(lowered):
+        returns = (company_profile or {}).get("profitabilityReturnsIntelligence") or {}
+        summary = returns.get("summary") or {}
+        if returns.get("status") == "available":
+            if re.search(r"\broe\b|return on equity", lowered) and summary.get("latestReturnOnEquityPercent") is not None:
+                expected_roe = f"{abs(float(summary['latestReturnOnEquityPercent'])):.2f}".rstrip("0").rstrip(".")
+                if expected_roe not in normalized_answer:
+                    return "missing requested return-on-equity evidence"
+            if re.search(r"\broa\b|return on assets", lowered) and summary.get("latestReturnOnAssetsPercent") is not None:
+                expected_roa = f"{abs(float(summary['latestReturnOnAssetsPercent'])):.2f}".rstrip("0").rstrip(".")
+                if expected_roa not in normalized_answer:
+                    return "missing requested return-on-assets evidence"
+            if re.search(r"\broic\b|return on invested capital", lowered) and summary.get("latestReturnOnInvestedCapitalPercent") is not None:
+                expected_roic = f"{abs(float(summary['latestReturnOnInvestedCapitalPercent'])):.2f}".rstrip("0").rstrip(".")
+                if expected_roic not in normalized_answer:
+                    return "missing requested return-on-invested-capital evidence"
+            if "gross margin" in lowered and summary.get("latestGrossMarginPercent") is not None:
+                expected_margin = f"{abs(float(summary['latestGrossMarginPercent'])):.2f}".rstrip("0").rstrip(".")
+                if expected_margin not in normalized_answer:
+                    return "missing requested gross-margin evidence"
+            if returns.get("financialSectorCaution") and not any(marker in normalized_answer for marker in ("financial institution", "financial-sector", "bank", "intentionally withheld", "operating inputs")):
+                return "missing financial-sector profitability caution"
+            return_boundary_markers = (
+                "average beginning and ending", "average beginning/ending", "average balance",
+                "not a profitability score", "not profitability score", "not a moat rating",
+                "statements can be restated", "may be restated", "accounting policies",
+            )
+            if not any(marker in normalized_answer for marker in return_boundary_markers):
+                return "missing profitability/returns evidence boundary"
     if document_requested and not document_matches:
         return "no indexed document evidence available"
     if document_matches:
@@ -4789,6 +5100,7 @@ async def market_agent(request: FastApiRequest):
         corporate_actions = context["company"].get("corporateActionIntelligence") or {}
         earnings_quality = context["company"].get("earningsQualityIntelligence") or {}
         liquidity_debt = context["company"].get("liquidityDebtIntelligence") or {}
+        profitability_returns = context["company"].get("profitabilityReturnsIntelligence") or {}
         llm_context["company"] = {
             "sector": context["company"]["sector"],
             "industry": context["company"]["industry"],
@@ -4883,6 +5195,20 @@ async def market_agent(request: FastApiRequest):
                     "disclaimer": liquidity_debt.get("disclaimer"),
                 },
             } if "liquidity_and_debt_capacity_analysis" in plan["intents"] else {}),
+            **({
+                "profitabilityReturnsAndEfficiency": {
+                    "status": profitability_returns.get("status"),
+                    "coverageLevel": profitability_returns.get("coverageLevel"),
+                    "coverage": profitability_returns.get("coverage"),
+                    "currency": profitability_returns.get("currency"),
+                    "sector": profitability_returns.get("sector"),
+                    "financialSectorCaution": profitability_returns.get("financialSectorCaution"),
+                    "summary": profitability_returns.get("summary"),
+                    "annual": profitability_returns.get("annual"),
+                    "method": profitability_returns.get("method"),
+                    "disclaimer": profitability_returns.get("disclaimer"),
+                },
+            } if "profitability_returns_and_efficiency_analysis" in plan["intents"] else {}),
         }
     if context.get("sectorPeers", {}).get("status") == "available":
         peer_context = context["sectorPeers"]
@@ -4942,6 +5268,7 @@ async def market_agent(request: FastApiRequest):
         "When dividendAndCorporateActions is supplied, distinguish history-derived per-share distributions from provider yield/payout snapshots. Mark the current calendar year partial, never treat missing payments as zero, and state that historical distributions are not guaranteed and splits do not create economic value by themselves. "
         "When earningsQualityAndCapitalAllocation is supplied, use only aligned reported periods, call cash-conversion ratios descriptive rather than a quality score, and keep dividends, repurchases, stock issuance and debt flows separate. State that statements can be restated and missing rows are not zero. For a supplied financial-sector caution, explain why bank/financial cash-flow and debt classifications are not directly comparable with industrial companies. "
         "When liquidityAndDebtCapacity is supplied, identify the disclosed liquid-funds basis, keep provider net debt separate from total debt minus liquid funds, and report any supplied basis mismatch. Treat all ratios as descriptive rather than a credit rating or health score. For a supplied financial-sector caution, do not invent industrial interest-coverage or debt/EBITDA ratios. "
+        "When profitabilityReturnsAndEfficiency is supplied, report margins separately from average-balance ROA/ROE and any approximate industrial ROIC. Explain the average beginning/ending balance method, do not present ratios as a score or moat rating, and do not invent industrial ROIC for a supplied financial-sector caution. "
         "changePct is daily price change, not trading volume. RSI above 70 is overbought, below 30 is oversold. "
         "If balancedAccuracy is below 53, explicitly state that the model has no reliable directional edge. "
         "Keep the response readable and normally within about 550 words."
@@ -4975,6 +5302,7 @@ async def market_agent(request: FastApiRequest):
         "dividend_and_corporate_action_analysis",
         "earnings_quality_and_capital_allocation_analysis",
         "liquidity_and_debt_capacity_analysis",
+        "profitability_returns_and_efficiency_analysis",
     ))
 
     def verified_fallback() -> str:

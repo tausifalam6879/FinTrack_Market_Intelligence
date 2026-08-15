@@ -686,5 +686,83 @@ class AgentAnalysisTests(unittest.TestCase):
         self.assertIsNone(accepted)
 
 
+    def test_profitability_returns_fallback_reports_margins_returns_and_method_boundary(self):
+        company = {
+            "profitabilityReturnsIntelligence": {
+                "status": "available",
+                "currency": "USD",
+                "financialSectorCaution": False,
+                "annual": [{
+                    "period": "2025-12-31", "grossMarginPercent": 44.0,
+                    "operatingMarginPercent": 16.0, "netMarginPercent": 12.0,
+                    "returnOnAssetsPercent": 13.33, "returnOnEquityPercent": 26.67,
+                    "returnOnInvestedCapitalPercent": 22.09, "assetTurnoverRatio": 1.111,
+                }],
+                "summary": {
+                    "latestPeriod": "2025-12-31", "latestGrossMarginPercent": 44.0,
+                    "latestOperatingMarginPercent": 16.0, "latestNetMarginPercent": 12.0,
+                    "latestReturnOnAssetsPercent": 13.33, "latestReturnOnEquityPercent": 26.67,
+                    "latestReturnOnInvestedCapitalPercent": 22.09,
+                    "latestAssetTurnoverRatio": 1.111, "latestEquityMultiplierRatio": 2.0,
+                    "latestEffectiveTaxRatePercent": 25.0, "operatingMarginTrend": "growing",
+                },
+            }
+        }
+        answer = _verified_tool_answer(
+            "ROE, ROIC, gross margin aur asset turnover samjhao",
+            self.snapshot,
+            self.prediction,
+            ["market_snapshot", "technical_prediction", "company_fundamentals"],
+            {"factors": []},
+            company_profile=company,
+        )
+
+        self.assertIn("Profitability, returns and capital-efficiency evidence", answer)
+        self.assertIn("ROE 26.67%", answer)
+        self.assertIn("industrial ROIC 22.09%", answer)
+        self.assertIn("gross margin 44.0%", answer)
+        self.assertIn("average beginning and ending balances", answer)
+        self.assertIn("not a profitability score", answer)
+
+    def test_generated_profitability_answer_requires_requested_values_and_boundary(self):
+        company = {
+            "profitabilityReturnsIntelligence": {
+                "status": "available",
+                "financialSectorCaution": False,
+                "summary": {
+                    "latestReturnOnEquityPercent": 26.67,
+                    "latestReturnOnInvestedCapitalPercent": 22.09,
+                    "latestGrossMarginPercent": 44.0,
+                },
+            }
+        }
+        base = "Weak model warning with detailed provider calculation evidence. " * 10
+        missing_value = _llm_grounding_issue(
+            base + "ROE is 26.67 percent and gross margin is 44 percent.",
+            "ROE, ROIC aur gross margin samjhao",
+            self.prediction,
+            {"factors": []},
+            company_profile=company,
+        )
+        missing_boundary = _llm_grounding_issue(
+            base + "ROE is 26.67 percent, ROIC is 22.09 percent and gross margin is 44 percent.",
+            "ROE, ROIC aur gross margin samjhao",
+            self.prediction,
+            {"factors": []},
+            company_profile=company,
+        )
+        accepted = _llm_grounding_issue(
+            base + "ROE is 26.67 percent, ROIC is 22.09 percent and gross margin is 44 percent. Return ratios use average beginning and ending balances and are not a profitability score.",
+            "ROE, ROIC aur gross margin samjhao",
+            self.prediction,
+            {"factors": []},
+            company_profile=company,
+        )
+
+        self.assertEqual("missing requested return-on-invested-capital evidence", missing_value)
+        self.assertEqual("missing profitability/returns evidence boundary", missing_boundary)
+        self.assertIsNone(accepted)
+
+
 if __name__ == "__main__":
     unittest.main()

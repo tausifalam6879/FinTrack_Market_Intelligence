@@ -472,6 +472,7 @@ function CompanyFundamentalsPanel({ data, loading, error }) {
     <CompanyCorporateActionPanel data={data.corporateActionIntelligence} currency={currency} />
     <div className="fundamental-groups">{groups.map(([title, entries]) => <FundamentalGroup key={title} title={title} entries={entries} />)}</div>
     <CompanyFinancialTrendPanel data={data.financialTrends} currency={currency} />
+    <CompanyProfitabilityReturnsPanel data={data.profitabilityReturnsIntelligence} currency={currency} />
     <CompanyEarningsQualityPanel data={data.earningsQualityIntelligence} currency={currency} />
     <CompanyLiquidityDebtPanel data={data.liquidityDebtIntelligence} currency={currency} />
     <CompanyOwnershipPanel data={data.ownershipIntelligence} currency={currency} />
@@ -798,6 +799,99 @@ function CompanyLiquidityDebtPanel({ data, currency }) {
       </table>
     </div>
     <p className="liquidity-debt-method"><strong>Method:</strong> {data.method} {data.disclaimer}</p>
+  </section>;
+}
+
+function CompanyProfitabilityReturnsPanel({ data, currency }) {
+  if (!data || data.status !== "available") return <section className="profitability-returns-panel profitability-returns-unavailable">
+    <div className="profitability-returns-heading"><div><p className="eyebrow">PROFITABILITY, RETURNS & CAPITAL EFFICIENCY</p><h4>No aligned profitability periods available</h4></div><span>Not estimated</span></div>
+    <p>The provider returned no usable annual income-statement and balance-sheet combination, so FinTrack does not invent margins or return ratios.</p>
+  </section>;
+
+  const summary = data.summary || {};
+  const annual = data.annual || [];
+  const latest = annual[annual.length - 1] || {};
+  const localCurrency = data.currency || currency;
+  const percent = (raw, signed = false) => {
+    const numeric = Number(raw);
+    if (raw === null || raw === undefined || !Number.isFinite(numeric)) return "—";
+    return `${signed && numeric > 0 ? "+" : ""}${numeric.toFixed(1)}%`;
+  };
+  const ratio = (raw) => {
+    const numeric = Number(raw);
+    return raw === null || raw === undefined || !Number.isFinite(numeric) ? "—" : `${numeric.toFixed(2)}x`;
+  };
+  const money = (raw) => formatCompactMoney(raw, localCurrency);
+  const formatDate = (raw) => {
+    if (!raw) return "Period unavailable";
+    const parsed = new Date(`${raw}T00:00:00`);
+    return Number.isNaN(parsed.getTime()) ? raw : parsed.toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" });
+  };
+  const direction = (raw) => {
+    const numeric = Number(raw);
+    if (raw === null || raw === undefined || !Number.isFinite(numeric) || numeric === 0) return "neutral";
+    return numeric > 0 ? "positive" : "negative";
+  };
+  const points = (raw) => {
+    const numeric = Number(raw);
+    if (raw === null || raw === undefined || !Number.isFinite(numeric)) return "Prior comparison unavailable";
+    return `${numeric > 0 ? "+" : ""}${numeric.toFixed(1)} pts vs prior year`;
+  };
+  const marginMaximum = Math.max(...annual.flatMap((item) => [item.grossMarginPercent, item.operatingMarginPercent, item.netMarginPercent]).map((value) => Math.abs(Number(value) || 0)), 1);
+  const marginWidth = (raw) => `${Math.max(2, (Math.abs(Number(raw) || 0) / marginMaximum) * 100)}%`;
+  const efficiencyItems = [
+    ["Asset turnover", ratio(summary.latestAssetTurnoverRatio), "Revenue / average assets"],
+    ["Equity multiplier", ratio(summary.latestEquityMultiplierRatio), "Average assets / average equity"],
+    ["Effective tax rate", percent(summary.latestEffectiveTaxRatePercent), "Reported tax / positive pretax income"],
+    ["Average invested capital", money(summary.latestAverageInvestedCapital), "Average debt + equity − liquid funds"],
+    ["Approximate NOPAT", money(summary.latestNopat), "EBIT after provider-derived tax"],
+    ["ROIC trend", String(summary.returnOnInvestedCapitalTrend || "unavailable").replace(/^./, (letter) => letter.toUpperCase()), "Comparable returned periods"],
+  ];
+
+  return <section className="profitability-returns-panel" aria-labelledby="profitability-returns-title">
+    <div className="profitability-returns-heading">
+      <div><p className="eyebrow">PROFITABILITY, RETURNS & CAPITAL EFFICIENCY</p><h4 id="profitability-returns-title">Margins and average-balance return evidence</h4></div>
+      <span>{data.coverageLevel || "partial"} statement coverage</span>
+    </div>
+    {data.financialSectorCaution && <div className="profitability-returns-caution"><strong>Financial-sector context:</strong> ROA and ROE remain descriptive. Industrial ROIC is intentionally withheld because debt and cash are operating inputs for financial institutions.</div>}
+    <div className="profitability-returns-summary">
+      <article className={direction(summary.latestReturnOnAssetsChangePoints)}><small>Return on assets</small><strong>{percent(summary.latestReturnOnAssetsPercent)}</strong><span>{points(summary.latestReturnOnAssetsChangePoints)}</span></article>
+      <article className={direction(summary.latestReturnOnEquityChangePoints)}><small>Return on equity</small><strong>{percent(summary.latestReturnOnEquityPercent)}</strong><span>{points(summary.latestReturnOnEquityChangePoints)}</span></article>
+      <article className={direction(summary.latestReturnOnInvestedCapitalChangePoints)}><small>Approximate ROIC</small><strong>{percent(summary.latestReturnOnInvestedCapitalPercent)}</strong><span>{data.financialSectorCaution ? "Withheld for sector comparability" : points(summary.latestReturnOnInvestedCapitalChangePoints)}</span></article>
+      <article><small>Asset turnover</small><strong>{ratio(summary.latestAssetTurnoverRatio)}</strong><span>{ratio(summary.latestEquityMultiplierRatio)} equity multiplier</span></article>
+    </div>
+    <div className="profitability-returns-layout">
+      <article className="margin-progression-card">
+        <div className="profitability-returns-card-heading"><strong>Margin progression</strong><span>Aligned annual fiscal periods</span></div>
+        <div className="margin-progression-legend"><span className="gross">Gross</span><span className="operating">Operating</span><span className="net">Net</span></div>
+        <div className="margin-progression-bars">{annual.map((item) => <div key={item.period}>
+          <span>{new Date(`${item.period}T00:00:00`).getFullYear()}</span>
+          <section>
+            <i className="gross"><b className={Number(item.grossMarginPercent) < 0 ? "negative" : ""} style={{ width: marginWidth(item.grossMarginPercent) }} /></i>
+            <i className="operating"><b className={Number(item.operatingMarginPercent) < 0 ? "negative" : ""} style={{ width: marginWidth(item.operatingMarginPercent) }} /></i>
+            <i className="net"><b className={Number(item.netMarginPercent) < 0 ? "negative" : ""} style={{ width: marginWidth(item.netMarginPercent) }} /></i>
+          </section>
+          <p><strong>{percent(item.operatingMarginPercent)}</strong><small>operating margin</small></p>
+        </div>)}</div>
+        <div className="profitability-trend-chips"><span>Operating margin: <strong>{summary.operatingMarginTrend || "unavailable"}</strong></span><span>ROE: <strong>{summary.returnOnEquityTrend || "unavailable"}</strong></span></div>
+      </article>
+      <article className="capital-efficiency-card">
+        <div className="profitability-returns-card-heading"><strong>Latest efficiency bridge</strong><span>{formatDate(summary.latestPeriod)}</span></div>
+        <div className="capital-efficiency-grid">{efficiencyItems.map(([label, value, hint]) => <div key={label}><small>{label}</small><strong>{value}</strong><span>{hint}</span></div>)}</div>
+      </article>
+    </div>
+    <div className="profitability-returns-table-wrap">
+      <div className="profitability-returns-card-heading"><strong>Profitability and return history</strong><span>Return ratios require beginning and ending balances</span></div>
+      <table className="profitability-returns-table">
+        <thead><tr><th>Fiscal period</th><th>Gross margin</th><th>Operating margin</th><th>Net margin</th><th>ROA</th><th>ROE</th><th>Approx. ROIC</th><th>Asset turnover</th></tr></thead>
+        <tbody>{[...annual].reverse().map((item) => <tr key={item.period} className={item.period === latest.period ? "latest" : ""}>
+          <td><strong>{formatDate(item.period)}</strong><small>{item.period === latest.period ? "Latest reported" : "Annual reported"}</small></td>
+          <td>{percent(item.grossMarginPercent)}</td><td>{percent(item.operatingMarginPercent)}<small>{points(item.operatingMarginChangePoints)}</small></td><td>{percent(item.netMarginPercent)}</td>
+          <td>{percent(item.returnOnAssetsPercent)}</td><td>{percent(item.returnOnEquityPercent)}</td><td>{percent(item.returnOnInvestedCapitalPercent)}</td><td>{ratio(item.assetTurnoverRatio)}</td>
+        </tr>)}</tbody>
+      </table>
+    </div>
+    <p className="profitability-returns-method"><strong>Method:</strong> {data.method} {data.disclaimer}</p>
   </section>;
 }
 
