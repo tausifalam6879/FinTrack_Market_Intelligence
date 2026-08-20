@@ -301,10 +301,10 @@ export default function IntelligenceDesk({ initialSymbol = "^NSEI" }) {
     setMessages((current) => [...current, userMessage]); setQuestion(""); setAsking(true);
     try {
       const sectionInstruction = {
-        overview: "Focus only on the visible overview, price, outlook, risk and technical metrics.",
-        company: "Focus only on the visible company fundamentals, performance, catalysts, estimates and peer evidence.",
-        documents: "Focus only on indexed company reports and RAG evidence; do not invent missing document facts.",
-        mlops: "Focus only on the visible model, validation, experiment, monitoring and MLOps evidence."
+        overview: "Section: overview. Explain only the dashboard data the user asks about, what it measures, how to read the displayed value, and its main limitation.",
+        company: "Section: company evidence. Explain only the company data the user asks about, what it measures, and its main limitation.",
+        documents: "Section: reports and RAG. Answer only from indexed company reports; do not invent missing document facts.",
+        mlops: "Section: model and MLOps. Explain only the model or monitoring data the user asks about, what it measures, and its main limitation."
       }[activeView];
       const response = await marketApi.agent({ message: `${sectionInstruction} User question: ${clean}`, symbol, recentMessages: messages.slice(-6) });
       setMessages((current) => [...current, { role: "assistant", content: response.answer, meta: response }]);

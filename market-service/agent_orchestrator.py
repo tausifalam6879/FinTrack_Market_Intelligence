@@ -202,7 +202,8 @@ def build_agent_plan(
     risk_request = _contains(lowered, (
         "risk", "benchmark", "beta", "correlation", "drawdown", "tracking error",
         "historical var", "value at risk",
-        "relative return", "outperform", "underperform",
+        "relative return", "outperform", "underperform", "broad market",
+        "market comparison", "behaved versus",
     )) or " var " in f" {lowered} "
 
     # Every market-agent response is anchored to the selected symbol and model

@@ -97,7 +97,7 @@ PEER_REGION_SUFFIXES = (
 RISK_QUERY_TERMS = (
     "risk", "benchmark", "beta", "correlation", "drawdown", "tracking error",
     "historical var", "value at risk", "relative return", "outperform", "underperform",
-    "volatility",
+    "volatility", "broad market", "market comparison", "behaved versus",
 )
 
 CATALYST_QUERY_TERMS = (
@@ -4123,6 +4123,29 @@ def _verified_tool_answer(
             + "\n".join(risk_lines)
             + "\n- Ye trailing historical statistics hain; future loss limit ya recommendation nahi."
         )
+        risk_only_question = not any(term in lowered for term in (
+            "outlook", "prediction", "forecast", "probability", "rsi", "expected range",
+            "news", "headline", "fundamental", "earnings", "document", "report",
+        ))
+        if risk_only_question:
+            relative_return = comparison.get("relativeReturnPoints")
+            relative_meaning = (
+                f"Selected period me {prediction['name']} benchmark se "
+                f"{abs(float(relative_return)):.2f} percentage points "
+                f"{'peeche' if float(relative_return) < 0 else 'aage'} raha."
+                if relative_return is not None else
+                "Is listing ke liye relative-return comparison available nahi hai."
+            )
+            return (
+                f"{prediction['name']} ko broad market se compare karne ka matlab hai: stock ka return aur risk "
+                f"usi period ke {benchmark.get('name') or 'selected benchmark'} ke saamne dekhna.\n\n"
+                + risk_section.strip()
+                + "\n\nIska simple meaning\n- "
+                + relative_meaning
+                + f" Beta {comparison.get('beta')} market sensitivity batata hai; correlation "
+                f"{comparison.get('correlation')} dono ke saath chalne ki strength batata hai.\n"
+                + "- Historical numbers future performance ki guarantee nahi hain."
+            )
     catalyst_section = ""
     if _requests_catalyst_analysis(lowered):
         catalysts = (company_profile or {}).get("catalysts") or {}
@@ -4588,8 +4611,11 @@ def _llm_grounding_issue(
 ) -> Optional[str]:
     normalized_answer = answer.lower()
     lowered = message.lower()
-    if len(answer.strip()) < 220:
-        return "answer too short for a complete analysis"
+    # A short answer can be the correct response when the user only asks what
+    # one visible metric means. Reject only effectively empty/non-explanatory
+    # provider output; the metric-specific checks below still enforce evidence.
+    if len(answer.strip()) < 80:
+        return "answer too short to explain the requested evidence"
     factor_keywords = {
         "gold": "GC=F", "crude": "CL=F", "oil": "CL=F", "rupee": "INR=X",
         "dollar": "INR=X", "yield": "^TNX", "vix": "^VIX", "bitcoin": "BTC-USD",
@@ -5260,7 +5286,9 @@ async def market_agent(request: FastApiRequest):
     system_prompt = (
         "You are FinTrack's evidence-grounded market research analyst. Use only the supplied tool results; never "
         "invent prices, dates, news or calculations. Match the user's Hindi, Hinglish or English. Keep the answer "
-        "under 160 words unless the user explicitly asks for detail. Start directly with the answer and never print "
+        "under 140 words unless the user explicitly asks for detail. If the user asks what a displayed metric means, "
+        "first explain what it measures, then interpret the supplied value, then give one important limitation. Do not "
+        "repeat unrelated dashboard figures. Start directly with the answer and never print "
         "a 'Seedha jawab' heading. Use only the relevant compact sections from: Verified figures, Calculation, "
         "Scenario/estimate, Assumptions and confidence, Final assessment. Do not repeat a figure in multiple sections. Show arithmetic explicitly using the "
         "derived calculations. For a requested historical date, clearly say whether it is the exact session or "
@@ -5281,7 +5309,7 @@ async def market_agent(request: FastApiRequest):
         "When profitabilityReturnsAndEfficiency is supplied, report margins separately from average-balance ROA/ROE and any approximate industrial ROIC. Explain the average beginning/ending balance method, do not present ratios as a score or moat rating, and do not invent industrial ROIC for a supplied financial-sector caution. "
         "changePct is daily price change, not trading volume. RSI above 70 is overbought, below 30 is oversold. "
         "If balancedAccuracy is below 53, explicitly state that the model has no reliable directional edge. "
-        "Keep the response readable and normally within about 550 words."
+        "Keep the response readable and normally between 60 and 140 words."
     )
     recent = []
     for item in payload.recent_messages[-6:]:

@@ -9,6 +9,15 @@ from market_intelligence import market_agent
 
 
 class AgentOrchestratorTests(unittest.TestCase):
+    def test_broad_market_explanation_routes_to_risk_context(self):
+        plan = build_agent_plan(
+            "How has 7269.T behaved versus the broad market? iska kya matlab hai",
+            "7269.T",
+        )
+
+        self.assertIn("risk_and_benchmark_analysis", plan["intents"])
+        self.assertNotIn("general_market_research", plan["intents"])
+
     def test_document_question_routes_to_cited_rag_without_unrelated_global_tools(self):
         plan = build_agent_plan(
             "Reliance annual report me debt ke baare me kya kaha gaya?",

@@ -157,6 +157,21 @@ class AgentAnalysisTests(unittest.TestCase):
         self.assertEqual("missing requested beta evidence", issue)
         self.assertIsNone(accepted)
 
+    def test_concise_metric_explanation_can_pass_grounding(self):
+        answer = (
+            "Annualized volatility 18.25% batati hai ki historical returns kitne fluctuate hue. "
+            "Nifty 50 benchmark ke saamne ise dekhein; weak model ka reliable directional edge nahi hai."
+        )
+
+        issue = _llm_grounding_issue(
+            answer,
+            "Benchmark volatility ka simple meaning kya hai?",
+            self.prediction,
+            {"factors": []},
+        )
+
+        self.assertIsNone(issue)
+
     def test_catalyst_fallback_labels_external_target_and_earnings_date(self):
         company = {
             "catalysts": {
