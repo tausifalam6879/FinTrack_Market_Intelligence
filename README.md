@@ -326,7 +326,7 @@ The active Blueprint now also contains an independently deployable free Spring g
 
 Run the read-only release check with `python scripts/production_smoke_test.py`; add `--gateway https://fintrack-market-gateway.onrender.com` after the gateway is live and `--require-postgres` only after durable PostgreSQL is deliberately connected.
 
-Interview handoff: [system architecture](docs/system-architecture.md) and [complete interview/viva preparation](docs/interview-preparation.md).
+Technical architecture: [system architecture](docs/system-architecture.md).
 
 GitHub Pages publishes the frontend from `.github/workflows/deploy-pages.yml`. The bundled verified snapshot renders immediately, then the page replaces it with the newest Render response in the background.
 
