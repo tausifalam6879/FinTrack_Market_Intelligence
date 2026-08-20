@@ -188,6 +188,22 @@ class AgentAnalysisTests(unittest.TestCase):
 
         self.assertIsNone(issue)
 
+    def test_historical_metric_context_validates_only_requested_period_return(self):
+        period_return = self.prediction["riskBenchmark"]["asset"]["periodReturnPercent"]
+        answer = (
+            f"Period return {period_return}% selected historical window ka total price change batata hai. "
+            "Positive value gain dikhati hai; weak model ka reliable directional edge nahi hai aur past return future guarantee nahi hai."
+        )
+
+        issue = _llm_grounding_issue(
+            answer,
+            "Period return ka meaning samjhao. Historical metric context.",
+            self.prediction,
+            {"factors": []},
+        )
+
+        self.assertIsNone(issue)
+
     def test_catalyst_fallback_labels_external_target_and_earnings_date(self):
         company = {
             "catalysts": {

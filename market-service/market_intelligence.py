@@ -97,7 +97,7 @@ PEER_REGION_SUFFIXES = (
 RISK_QUERY_TERMS = (
     "risk", "benchmark", "beta", "correlation", "drawdown", "tracking error",
     "historical var", "value at risk", "relative return", "outperform", "underperform",
-    "volatility", "broad market", "market comparison", "behaved versus",
+    "volatility", "broad market", "market comparison", "behaved versus", "historical metric",
 )
 
 CATALYST_QUERY_TERMS = (
@@ -4641,6 +4641,8 @@ def _llm_grounding_issue(
         comparison = risk_payload.get("comparison") or {}
         benchmark = risk_payload.get("benchmark") or {}
         required_metrics = []
+        if "period return" in lowered and asset_risk.get("periodReturnPercent") is not None:
+            required_metrics.append(("period return", asset_risk["periodReturnPercent"]))
         if any(term in lowered for term in ("risk", "volatility")) and asset_risk.get("annualizedVolatilityPercent") is not None:
             required_metrics.append(("historical volatility", asset_risk["annualizedVolatilityPercent"]))
         if "beta" in lowered and comparison.get("beta") is not None:

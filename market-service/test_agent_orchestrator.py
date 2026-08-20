@@ -18,6 +18,15 @@ class AgentOrchestratorTests(unittest.TestCase):
         self.assertIn("risk_and_benchmark_analysis", plan["intents"])
         self.assertNotIn("general_market_research", plan["intents"])
 
+    def test_historical_metric_marker_routes_without_general_research_tools(self):
+        plan = build_agent_plan(
+            "Period return ka simple meaning batao. Historical metric context.",
+            "7269.T",
+        )
+
+        self.assertIn("risk_and_benchmark_analysis", plan["intents"])
+        self.assertNotIn("general_market_research", plan["intents"])
+
     def test_document_question_routes_to_cited_rag_without_unrelated_global_tools(self):
         plan = build_agent_plan(
             "Reliance annual report me debt ke baare me kya kaha gaya?",

@@ -294,7 +294,7 @@ export default function IntelligenceDesk({ initialSymbol = "^NSEI" }) {
     catch { setRagError("Document retrieval is temporarily unavailable. Market analytics above remain independent."); }
     finally { setRagLoading(false); }
   };
-  const send = async (value = question) => {
+  const send = async (value = question, viewOverride = activeView, recentOverride = messages.slice(-6)) => {
     const clean = value.trim();
     if (!clean || asking) return;
     const userMessage = { role: "user", content: clean };
@@ -305,8 +305,8 @@ export default function IntelligenceDesk({ initialSymbol = "^NSEI" }) {
         company: "Section: company evidence. Explain only the company data the user asks about, what it measures, and its main limitation.",
         documents: "Section: reports and RAG. Answer only from indexed company reports; do not invent missing document facts.",
         mlops: "Section: model and MLOps. Explain only the model or monitoring data the user asks about, what it measures, and its main limitation."
-      }[activeView];
-      const response = await marketApi.agent({ message: `${sectionInstruction} User question: ${clean}`, symbol, recentMessages: messages.slice(-6) });
+      }[viewOverride];
+      const response = await marketApi.agent({ message: `${sectionInstruction} User question: ${clean}`, symbol, recentMessages: recentOverride });
       setMessages((current) => [...current, { role: "assistant", content: response.answer, meta: response }]);
     } catch {
       setMessages((current) => [...current, { role: "assistant", content: "The research agent is temporarily unavailable. Price analytics above remain independent of the AI response.", meta: { llmStatus: "offline" } }]);
@@ -324,6 +324,16 @@ export default function IntelligenceDesk({ initialSymbol = "^NSEI" }) {
     setMessages([]);
     setQuestion("");
     setAgentOpen(true);
+  };
+
+  const explainMetric = (label, value, hint = "", view = "overview") => {
+    const displayedValue = value === null || value === undefined || value === "" ? "unavailable" : value;
+    const prompt = `${label} ki displayed value ${displayedValue} hai${hint ? ` (${hint})` : ""}. Ye metric kya measure karta hai, is exact value ka simple meaning kya hai, aur iski ek important limitation Hinglish me 100 words ke andar samjhao.`;
+    setActiveView(view);
+    setMessages([]);
+    setQuestion("");
+    setAgentOpen(true);
+    void send(prompt, view, []);
   };
 
   return (
@@ -362,10 +372,10 @@ export default function IntelligenceDesk({ initialSymbol = "^NSEI" }) {
           <div className={`outlook outlook-${String(analysis.outlook).toLowerCase()}`}><small>Experimental outlook</small><strong>{analysis.outlook}</strong></div>
         </div>
         <div className="metric-grid">
-          <Metric label="Probability up" value={`${analysis.probabilityUp}%`} hint={`${analysis.probabilityDown}% probability down`} />
-          <Metric label="Expected range" value={`${formatNumber(analysis.expectedRange?.low)} – ${formatNumber(analysis.expectedRange?.high)}`} hint={analysis.expectedRange?.currency} />
-          <Metric label="RSI (14)" value={formatNumber(analysis.technicalIndicators?.rsi14)} hint="Below 30 oversold · above 70 overbought" />
-          <Metric label="Walk-forward score" value={`${analysis.model?.balancedAccuracy ?? analysis.model?.backtestAccuracy}%`} hint={`${analysis.model?.walkForwardFolds || 1} time-ordered folds · ${analysis.model?.quality} quality`} />
+          <Metric label="Probability up" value={`${analysis.probabilityUp}%`} hint={`${analysis.probabilityDown}% probability down`} onExplain={explainMetric} />
+          <Metric label="Expected range" value={`${formatNumber(analysis.expectedRange?.low)} – ${formatNumber(analysis.expectedRange?.high)}`} hint={analysis.expectedRange?.currency} onExplain={explainMetric} />
+          <Metric label="RSI (14)" value={formatNumber(analysis.technicalIndicators?.rsi14)} hint="Below 30 oversold · above 70 overbought" onExplain={explainMetric} />
+          <Metric label="Walk-forward score" value={`${analysis.model?.balancedAccuracy ?? analysis.model?.backtestAccuracy}%`} hint={`${analysis.model?.walkForwardFolds || 1} time-ordered folds · ${analysis.model?.quality} quality`} onExplain={explainMetric} />
         </div>
         <nav className="intelligence-view-tabs" aria-label="Intelligence detail views">
           {[
@@ -380,7 +390,7 @@ export default function IntelligenceDesk({ initialSymbol = "^NSEI" }) {
         </div>
         {activeView === "company" && !analysis.symbol.startsWith("^") && <CompanyFundamentalsPanel data={companyResearch} loading={companyResearchLoading} error={companyResearchError} />}
         {activeView === "company" && !analysis.symbol.startsWith("^") && <SectorPeerPanel data={peerComparison} loading={peerComparisonLoading} error={peerComparisonError} />}
-        {activeView === "overview" && analysis.riskBenchmark && <RiskBenchmarkPanel data={analysis.riskBenchmark} symbol={analysis.symbol} />}
+        {activeView === "overview" && analysis.riskBenchmark && <RiskBenchmarkPanel data={analysis.riskBenchmark} symbol={analysis.symbol} onExplain={explainMetric} />}
         {activeView === "overview" && localExplanation && <PredictionExplanation explanation={localExplanation} outlook={analysis.outlook} />}
         {activeView === "mlops" && <ModelRegistryPanel status={modelStatus} loading={modelStatusLoading} error={modelStatusError} activeModel={analysis.model} />}
         {activeView === "mlops" && <ExperimentTrackingPanel data={experiments} loading={experimentsLoading} error={experimentsError} />}
@@ -442,7 +452,7 @@ export default function IntelligenceDesk({ initialSymbol = "^NSEI" }) {
   );
 }
 
-function Metric({ label, value, hint }) { return <article className="metric-card"><small>{label}</small><strong>{value}</strong><span>{hint}</span></article>; }
+function Metric({ label, value, hint, onExplain }) { return <article className="metric-card"><div className="explainable-metric-heading"><small>{label}</small>{onExplain && <button type="button" className="metric-explain-button" onClick={() => onExplain(label, value, hint)} aria-label={`Explain ${label}`}>? Explain</button>}</div><strong>{value}</strong><span>{hint}</span></article>; }
 
 function CompanyFundamentalsPanel({ data, loading, error }) {
   if (loading) return <section className="fundamentals-panel fundamentals-state" aria-live="polite">
@@ -1228,7 +1238,7 @@ function CompanyAnalystEstimatePanel({ data, currency }) {
   </section>;
 }
 
-function RiskBenchmarkPanel({ data, symbol }) {
+function RiskBenchmarkPanel({ data, symbol, onExplain }) {
   if (!data || data.status === "unavailable") return <section className="risk-benchmark-panel risk-unavailable">
     <div className="risk-heading"><div><p className="eyebrow">RISK & BENCHMARK INTELLIGENCE</p><h3>Historical risk evidence unavailable</h3></div><span>Provider unavailable</span></div>
     <p className="risk-caveat">{data?.message || "The prediction above remains separate from this optional historical comparison."}</p>
@@ -1237,6 +1247,7 @@ function RiskBenchmarkPanel({ data, symbol }) {
   const comparison = data.comparison;
   const benchmark = data.benchmark;
   const signed = (value) => value === null || value === undefined ? "—" : `${Number(value) > 0 ? "+" : ""}${Number(value).toFixed(2)} pp`;
+  const explainRiskMetric = (label, value, hint) => onExplain(label, value, `${hint}. Historical metric context for ${symbol}; reference index ${benchmark?.name || "unavailable"}`);
   return <section className="risk-benchmark-panel" aria-labelledby="risk-benchmark-title">
     <div className="risk-heading">
       <div><p className="eyebrow">RISK & BENCHMARK INTELLIGENCE</p><h3 id="risk-benchmark-title">How has {symbol} behaved versus the broad market?</h3><p>{data.period} · close-to-close evidence</p></div>
@@ -1244,16 +1255,16 @@ function RiskBenchmarkPanel({ data, symbol }) {
     </div>
     <div className="risk-layout">
       <div className="risk-chart-card">
-        <div className="risk-chart-title"><strong>Normalized performance</strong><small>Period start = 100</small></div>
+        <div className="risk-chart-title"><strong>Normalized performance</strong><button type="button" className="metric-explain-button" onClick={() => onExplain("Normalized performance", "Period start = 100", `Historical metric context for ${symbol}; reference index ${benchmark?.name || "unavailable"}`)}>? Explain</button></div>
         <BenchmarkChart history={data.normalizedHistory || []} symbol={symbol} benchmark={benchmark} />
       </div>
       <div className="risk-metric-grid">
-        <RiskMetric label="Period return" value={formatPercent(asset.periodReturnPercent)} hint={`${asset.observations || 0} daily returns`} />
-        <RiskMetric label="Annualized volatility" value={formatPercent(asset.annualizedVolatilityPercent)} hint="Dispersion, not direction" />
-        <RiskMetric label="Maximum drawdown" value={formatPercent(asset.maxDrawdownPercent)} hint="Largest peak-to-trough fall" />
-        <RiskMetric label="95% historical VaR" value={formatPercent(asset.historicalVar95Percent)} hint="Observed one-day loss threshold" />
-        <RiskMetric label={benchmark ? `Beta vs ${benchmark.symbol}` : "Beta"} value={comparison?.beta ?? "—"} hint={benchmark ? `Correlation ${comparison?.correlation ?? "—"}` : "No self-comparison for an index"} />
-        <RiskMetric label="Relative return" value={signed(comparison?.relativeReturnPoints)} hint={comparison ? `${comparison.relativePerformance} vs ${benchmark?.name}` : "Broad benchmark not applicable"} />
+        <RiskMetric label="Period return" value={formatPercent(asset.periodReturnPercent)} hint={`${asset.observations || 0} daily returns`} onExplain={explainRiskMetric} />
+        <RiskMetric label="Annualized volatility" value={formatPercent(asset.annualizedVolatilityPercent)} hint="Dispersion, not direction" onExplain={explainRiskMetric} />
+        <RiskMetric label="Maximum drawdown" value={formatPercent(asset.maxDrawdownPercent)} hint="Largest peak-to-trough fall" onExplain={explainRiskMetric} />
+        <RiskMetric label="95% historical VaR" value={formatPercent(asset.historicalVar95Percent)} hint="Observed one-day loss threshold" onExplain={explainRiskMetric} />
+        <RiskMetric label={benchmark ? `Beta vs ${benchmark.symbol}` : "Beta"} value={comparison?.beta ?? "—"} hint={benchmark ? `Correlation ${comparison?.correlation ?? "—"}` : "No self-comparison for an index"} onExplain={explainRiskMetric} />
+        <RiskMetric label="Relative return" value={signed(comparison?.relativeReturnPoints)} hint={comparison ? `${comparison.relativePerformance} vs ${benchmark?.name}` : "Broad benchmark not applicable"} onExplain={explainRiskMetric} />
       </div>
     </div>
     <div className="risk-evidence-strip">
@@ -1266,8 +1277,8 @@ function RiskBenchmarkPanel({ data, symbol }) {
   </section>;
 }
 
-function RiskMetric({ label, value, hint }) {
-  return <article><small>{label}</small><strong>{value}</strong><span>{hint}</span></article>;
+function RiskMetric({ label, value, hint, onExplain }) {
+  return <article><div className="explainable-metric-heading"><small>{label}</small><button type="button" className="metric-explain-button" onClick={() => onExplain(label, value, hint)} aria-label={`Explain ${label}`}>?</button></div><strong>{value}</strong><span>{hint}</span></article>;
 }
 
 function SectorPeerPanel({ data, loading, error }) {

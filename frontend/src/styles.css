@@ -287,6 +287,10 @@ main { width: min(1500px, calc(100% - 40px)); margin: 0 auto; }
 .metric-card small, .metric-card span { display: block; color: var(--muted); }
 .metric-card strong { display: block; margin: 10px 0 6px; font: 800 22px "Manrope", sans-serif; }
 .metric-card span { font-size: 11px; line-height: 1.4; }
+.explainable-metric-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; }
+.explainable-metric-heading > small { min-width: 0; }
+.metric-explain-button { flex: 0 0 auto; padding: 5px 8px; border: 1px solid #b9d8df; border-radius: 999px; color: #08747b; background: #f4fbfb; font-size: 8px; font-weight: 900; line-height: 1; cursor: pointer; }
+.metric-explain-button:hover, .metric-explain-button:focus-visible { color: #fff; border-color: #0b7f87; background: linear-gradient(110deg,#087d83,#376fd0); outline: none; }
 .fundamentals-panel { margin: 16px 0; padding: 22px; overflow: hidden; border: 1px solid #b7d8cf; border-radius: 19px; background: linear-gradient(135deg,#f7fcfa,#f5fafc 60%,#fbfaf5); }
 .fundamentals-panel.fundamentals-state { min-height: 112px; display: flex; align-items: flex-start; justify-content: space-between; gap: 20px; }
 .fundamentals-panel.fundamentals-unavailable { border-style: dashed; }
@@ -774,6 +778,7 @@ main { width: min(1500px, calc(100% - 40px)); margin: 0 auto; }
 .risk-chart-title { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
 .risk-chart-title strong { font-size: 12px; }
 .risk-chart-title small { color: var(--muted); font-size: 9px; }
+.risk-chart-title .metric-explain-button { color: #08747b; }
 .benchmark-chart svg { width: 100%; height: 138px; margin-top: 8px; overflow: visible; }
 .benchmark-chart polyline { fill: none; vector-effect: non-scaling-stroke; stroke-linecap: round; stroke-linejoin: round; }
 .benchmark-chart .asset-line { stroke: #087d8c; stroke-width: 2.2; }

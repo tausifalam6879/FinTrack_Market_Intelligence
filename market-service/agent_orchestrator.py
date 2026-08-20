@@ -203,7 +203,7 @@ def build_agent_plan(
         "risk", "benchmark", "beta", "correlation", "drawdown", "tracking error",
         "historical var", "value at risk",
         "relative return", "outperform", "underperform", "broad market",
-        "market comparison", "behaved versus",
+        "market comparison", "behaved versus", "historical metric",
     )) or " var " in f" {lowered} "
 
     # Every market-agent response is anchored to the selected symbol and model
