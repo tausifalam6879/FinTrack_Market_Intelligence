@@ -32,8 +32,10 @@ A focused public financial-information dashboard extracted as a new, independent
 - per-prediction local counterfactual explainability showing current feature values, training references and directional probability impacts;
 - dynamic exchange-aware risk and benchmark intelligence with normalized performance, volatility, maximum drawdown, historical VaR, beta, correlation and tracking error;
 - dynamic same-sector and same-market peer comparison using comparable market-cap scale and provider medians;
+- a browser-local saved research list, one-request 2-4 symbol comparison and print/PDF research report;
 - a hybrid agentic research backend grounded in read-only market, ML, historical, company, macro and document-RAG tools;
-- a public Spring Boot API gateway with route allowlisting, validation, correlation IDs, metrics and downstream resilience;
+- a public Spring Boot API gateway with route allowlisting, validation, correlation IDs, bounded parallel comparison, caching, metrics and downstream resilience;
+- visible aggregate API latency/error and Gemini grounding/fallback telemetry without storing questions, symbols, IP addresses or personal data;
 - company-document RAG with PDF page citations and official-source links.
 
 > Market quotes can be delayed by the upstream exchange/provider. Every screen displays its data timestamp and never presents cached values as live.
@@ -131,7 +133,7 @@ This remains an educational next-session probability experiment, not a guarantee
 
 `gateway-service/` is the Java/Spring Boot boundary in front of the Python data and ML service. It intentionally has no registration, login, JWT, portfolio or user database because FinTrack Market Intelligence is an open public research dashboard. It stores no personal data.
 
-The gateway keeps a fixed FastAPI upstream and proxies only an explicit allowlist of read-only research routes. It validates arbitrary market symbols without restricting users to a fixed company list, rejects unknown query/body fields, caps request bodies at 64 KB, adds a correlation ID, exposes aggregate Micrometer metrics and reports whether the Python service is ready. A timeout and small circuit breaker prevent repeated requests from overwhelming a sleeping or unavailable upstream. Public requests cannot upload an arbitrary document URL, train a model or approve an artifact.
+The gateway keeps a fixed FastAPI upstream and proxies only an explicit allowlist of read-only research routes. It validates arbitrary market symbols without restricting users to a fixed company list, rejects unknown query/body fields, caps request bodies at 64 KB, adds a correlation ID, exposes aggregate Micrometer metrics and reports whether the Python service is ready. `POST /market/compare` validates and deduplicates 2-4 symbols, performs bounded parallel WebClient analysis calls, preserves input order, returns available rows on partial provider failure and caches the combined result for five minutes. A timeout, one transient GET retry and small circuit breaker prevent repeated requests from overwhelming a sleeping or unavailable upstream. Public requests cannot upload an arbitrary document URL, train a model or approve an artifact.
 
 Local React traffic uses `http://localhost:8081` so the complete development path is:
 
@@ -154,6 +156,7 @@ frontend/        React + Vite public website
 gateway-service/ Java 21 + Spring Boot public API boundary
 market-service/  FastAPI API, persistence, data ingestion and offline ML training
 scripts/         Release-snapshot maintenance utility
+docs/            Architecture, production database and interview handoff
 ```
 
 ## Run locally
@@ -208,9 +211,10 @@ Render now uses `/health/ready` as its deployment health check.
 2. creates the complete schema against a real PostgreSQL 17 service and verifies readiness;
 3. builds and tests the Java 21 Spring Boot gateway, validation and circuit-breaker policy;
 4. installs frontend dependencies from `package-lock.json` and produces a Vite production build;
-5. builds both API containers, starts FastAPI, checks liveness/readiness and verifies that it runs as the non-root `fintrack` user.
+5. installs Playwright Chromium and runs saved-comparison, PDF, grounded-agent, observability and overflow flows on desktop and mobile;
+6. builds both API containers, starts FastAPI, checks liveness/readiness and verifies that it runs as the non-root `fintrack` user.
 
-The GitHub Pages deployment workflow uses the current supported major versions of the official checkout/setup actions rather than nonexistent `v7` tags. In repository branch protection, make `backend-tests`, `gateway-tests`, `frontend-build` and `api-container` required checks before merging to `main`.
+The GitHub Pages deployment workflow uses the current supported major versions of the official checkout/setup actions rather than nonexistent `v7` tags. In repository branch protection, make `backend-tests`, `gateway-tests`, `frontend-build`, `frontend-e2e` and `api-container` required checks before merging to `main`.
 
 Open `http://localhost:5173`. Local frontend requests use the Spring gateway on port `8081`; the gateway forwards validated requests to FastAPI on port `8002`.
 
@@ -304,7 +308,7 @@ $env:DATABASE_URL = "postgresql://USER:PASSWORD@HOST:5432/DATABASE?sslmode=requi
 python database_maintenance.py migrate --confirm-empty-target --manifest-path ../backups/postgres-cutover.json
 ```
 
-See [Production PostgreSQL](docs/production-postgres.md) before connecting Render and GitHub Actions to a shared database. The current free demo is intentionally not changed to a paid resource automatically.
+See [Production PostgreSQL](docs/production-postgres.md) and the explicit opt-in [Render database example](docs/render-postgres-opt-in.example.yaml) before connecting Render and GitHub Actions to a shared database. The current free demo is intentionally not changed to a paid resource automatically.
 
 The persistence schema contains public-company metadata, OHLCV bars, ingestion audits, model runs, prediction outcomes, served-feature snapshots and model-drift history. It does not store user accounts or personal financial data.
 
@@ -318,7 +322,11 @@ The zero-cost public frontend workflow currently builds directly against the exi
 https://fintrack-market-intelligence-api.onrender.com
 ```
 
-This avoids provisioning a second always-on cloud service without the user's approval. The Spring gateway is exercised locally, in Docker Compose and in CI; it can be deployed as a separate container later by pointing `FINTRACK_GATEWAY_UPSTREAM_BASE_URL` at the private FastAPI service and changing `VITE_MARKET_API_BASE_URL` to the gateway URL.
+The active Blueprint now also contains an independently deployable free Spring gateway service pointed at FastAPI. Keep GitHub Pages on the direct FastAPI URL until `https://fintrack-market-gateway.onrender.com/health/ready` passes; then change `VITE_MARKET_API_BASE_URL` to the gateway URL. The same `/market/compare` contract works in direct FastAPI compatibility mode and full Spring orchestration mode.
+
+Run the read-only release check with `python scripts/production_smoke_test.py`; add `--gateway https://fintrack-market-gateway.onrender.com` after the gateway is live and `--require-postgres` only after durable PostgreSQL is deliberately connected.
+
+Interview handoff: [system architecture](docs/system-architecture.md) and [complete interview/viva preparation](docs/interview-preparation.md).
 
 GitHub Pages publishes the frontend from `.github/workflows/deploy-pages.yml`. The bundled verified snapshot renders immediately, then the page replaces it with the newest Render response in the background.
 

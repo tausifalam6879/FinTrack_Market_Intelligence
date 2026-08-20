@@ -41,6 +41,7 @@ from agent_orchestrator import build_agent_plan, tool_trace
 from data_pipeline import bars_from_frame
 from model_registry import approved_model, record_prediction as record_persistent_prediction
 from persistence import Database
+from runtime_metrics import record_llm
 
 
 router = APIRouter(prefix="/market", tags=["Global Market Intelligence"])
@@ -346,6 +347,11 @@ class MarketAgentRequest(BaseModel):
     message: str = Field(min_length=2, max_length=3000)
     symbol: Optional[str] = Field(default=None, max_length=20)
     recent_messages: List[Dict[str, Any]] = Field(default_factory=list)
+
+
+class MarketComparisonRequest(BaseModel):
+    symbols: List[str] = Field(min_length=2, max_length=4)
+    refresh: bool = False
 
 
 def _cache_get(key: str, ttl_seconds: int = CACHE_TTL_SECONDS) -> Optional[Any]:
@@ -4923,6 +4929,45 @@ def get_market_analysis(symbol: str = "^NSEI", refresh: bool = False):
         raise HTTPException(status_code=503, detail=f"Market data provider is unavailable: {error}") from error
 
 
+@router.post("/compare")
+def compare_market_analyses(request: MarketComparisonRequest):
+    """One network request for 2-4 symbols; cached analyses run concurrently and may partially succeed."""
+    started = time.monotonic()
+    normalized = []
+    for value in request.symbols:
+        symbol = _sanitize_symbol(value)
+        if symbol not in normalized:
+            normalized.append(symbol)
+    if len(normalized) < 2:
+        raise HTTPException(status_code=422, detail="At least two unique market symbols are required.")
+    if request.refresh:
+        clear_market_cache()
+
+    rows: Dict[str, Dict[str, Any]] = {}
+    errors: Dict[str, str] = {}
+    with ThreadPoolExecutor(max_workers=min(4, len(normalized))) as executor:
+        pending = {executor.submit(market_prediction, symbol): symbol for symbol in normalized}
+        for future in as_completed(pending):
+            symbol = pending[future]
+            try:
+                rows[symbol] = future.result()
+            except Exception:
+                logger.warning("Batch comparison failed for %s", symbol, exc_info=True)
+                errors[symbol] = "Verified analysis is temporarily unavailable."
+
+    if not rows:
+        raise HTTPException(status_code=503, detail="Comparison data is temporarily unavailable.")
+    return {
+        "symbols": normalized,
+        "items": [rows[symbol] for symbol in normalized if symbol in rows],
+        "errors": [{"symbol": symbol, "message": errors[symbol]} for symbol in normalized if symbol in errors],
+        "partial": bool(errors),
+        "execution": "parallel-fastapi-fallback",
+        "durationMs": round((time.monotonic() - started) * 1000, 2),
+        "generatedAt": datetime.now(timezone.utc).isoformat(),
+    }
+
+
 @router.get("/predictions")
 def get_prediction_audit(symbol: str = "^NSEI", limit: int = 12):
     """Expose the model's session-by-session prediction audit without invoking Gemini."""
@@ -5431,6 +5476,7 @@ async def market_agent(request: FastApiRequest):
             "evidenceCount": 1,
         })
 
+    record_llm(llm_status, llm_answer_accepted)
     return {
         "answer": answer,
         "symbol": symbol,

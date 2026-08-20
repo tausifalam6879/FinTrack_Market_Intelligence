@@ -1,4 +1,5 @@
 from contextlib import asynccontextmanager
+import time
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -9,6 +10,7 @@ from document_rag import router as document_rag_router
 from market_intelligence import router as market_router
 from model_monitoring import router as model_monitoring_router
 from runtime_health import initialize_runtime, liveness_report, readiness_report
+from runtime_metrics import record_request
 
 
 @asynccontextmanager
@@ -29,8 +31,24 @@ app.add_middleware(
     allow_origins=["*"],
     allow_credentials=False,
     allow_methods=["GET", "POST", "OPTIONS"],
-    allow_headers=["Content-Type"],
+    allow_headers=["Content-Type", "X-Request-Id"],
+    expose_headers=["X-Response-Time-Ms"],
 )
+
+
+@app.middleware("http")
+async def aggregate_request_metrics(request, call_next):
+    started = time.monotonic()
+    status_code = 500
+    try:
+        response = await call_next(request)
+        status_code = response.status_code
+        return response
+    finally:
+        elapsed_ms = round((time.monotonic() - started) * 1000, 2)
+        record_request(request.url.path, status_code, elapsed_ms)
+        if "response" in locals():
+            response.headers["X-Response-Time-Ms"] = str(elapsed_ms)
 
 app.include_router(market_router)
 app.include_router(company_catalog_router)

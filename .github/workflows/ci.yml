@@ -106,6 +106,40 @@ jobs:
           VITE_MARKET_API_BASE_URL: https://fintrack-market-intelligence-api.onrender.com
         run: npm run build
 
+  frontend-e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install locked frontend dependencies
+        working-directory: frontend
+        run: npm ci
+
+      - name: Install Playwright Chromium
+        working-directory: frontend
+        run: npx playwright install --with-deps chromium
+
+      - name: Run desktop and mobile end-to-end tests
+        working-directory: frontend
+        run: npm run test:e2e
+
+      - name: Upload Playwright report on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: frontend/playwright-report
+          retention-days: 7
+
   gateway-tests:
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -130,7 +164,7 @@ jobs:
   api-container:
     runs-on: ubuntu-latest
     timeout-minutes: 20
-    needs: [backend-tests, frontend-build, gateway-tests]
+    needs: [backend-tests, frontend-build, frontend-e2e, gateway-tests]
     steps:
       - name: Checkout repository
         uses: actions/checkout@v6

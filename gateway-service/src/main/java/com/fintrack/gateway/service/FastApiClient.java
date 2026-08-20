@@ -12,10 +12,12 @@ import org.springframework.http.HttpStatusCode;
 import org.springframework.http.MediaType;
 import org.springframework.stereotype.Service;
 import org.springframework.util.MultiValueMap;
+import org.springframework.util.LinkedMultiValueMap;
 import org.springframework.web.reactive.function.BodyInserters;
 import org.springframework.web.reactive.function.client.WebClient;
 import org.springframework.web.reactive.function.client.WebClientRequestException;
 import reactor.core.publisher.Mono;
+import reactor.util.retry.Retry;
 
 @Service
 public class FastApiClient {
@@ -76,6 +78,13 @@ public class FastApiClient {
                                     responseBody));
                         }))
                 .timeout(properties.requestTimeout())
+                .retryWhen(Retry.fixedDelay(1, Duration.ofMillis(350))
+                        .filter(error -> HttpMethod.GET.equals(method) && (
+                                error instanceof TimeoutException
+                                        || error instanceof WebClientRequestException
+                                        || error instanceof UpstreamUnavailableException))
+                        .doBeforeRetry(ignored -> meterRegistry.counter(
+                                "fintrack.gateway.retries", "route", path).increment()))
                 .doOnNext(ignored -> circuitBreaker.recordSuccess())
                 .doOnError(ignored -> circuitBreaker.recordFailure())
                 .onErrorMap(TimeoutException.class, ignored -> new UpstreamUnavailableException(
@@ -97,6 +106,13 @@ public class FastApiClient {
                 .exchangeToMono(response -> Mono.just(response.statusCode().is2xxSuccessful()))
                 .timeout(timeout)
                 .onErrorReturn(false);
+    }
+
+    public Mono<UpstreamResponse> analysis(String symbol, boolean refresh, String requestId) {
+        MultiValueMap<String, String> query = new LinkedMultiValueMap<>();
+        query.add("symbol", symbol);
+        query.add("refresh", Boolean.toString(refresh));
+        return forward(HttpMethod.GET, "/market/analysis", query, new byte[0], requestId);
     }
 
     public record UpstreamResponse(HttpStatusCode status, MediaType contentType, byte[] body) { }

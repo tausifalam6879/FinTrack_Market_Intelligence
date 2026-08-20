@@ -36,6 +36,7 @@ public class GatewayRequestValidator {
             Map.entry("/market/model-drift", Set.of("symbol")),
             Map.entry("/market/data-operations", Set.of("symbol")),
             Map.entry("/market/database-status", Set.of()),
+            Map.entry("/market/operations-status", Set.of()),
             Map.entry("/market/experiments", Set.of("symbol", "limit")),
             Map.entry("/market/documents", Set.of("symbol")),
             Map.entry("/market/documents/discover", Set.of("symbol")));

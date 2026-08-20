@@ -6,6 +6,8 @@ from data_pipeline import normalize_symbol
 from data_operations import database_storage_snapshot, data_operations_snapshot
 from experiment_tracking import experiment_comparison
 from model_registry import monitoring_snapshot
+from runtime_health import readiness_report
+from runtime_metrics import telemetry_snapshot
 
 
 router = APIRouter(prefix="/market", tags=["Model Monitoring"])
@@ -56,6 +58,19 @@ def get_database_status():
         return database_storage_snapshot()
     except Exception as error:
         raise HTTPException(status_code=503, detail=f"Database status is unavailable: {error}") from error
+
+
+@router.get("/operations-status")
+def get_operations_status():
+    """Expose privacy-safe aggregate API/LLM telemetry plus sanitized dependency readiness."""
+    readiness = readiness_report()
+    return {
+        "status": readiness["status"],
+        "telemetry": telemetry_snapshot(),
+        "dependencies": readiness["checks"],
+        "build": readiness["build"],
+        "checkedAt": readiness["checkedAt"],
+    }
 
 
 @router.get("/experiments")

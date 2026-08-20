@@ -47,35 +47,48 @@ const seedResult = (name) => {
   };
 };
 
-const request = async (path, { method = "GET", body, timeout = 30000 } = {}) => {
-  const controller = new AbortController();
-  const timer = window.setTimeout(() => controller.abort(), timeout);
-  try {
-    const response = await fetch(`${API_BASE}${path}`, {
-      method,
-      headers: { "Content-Type": "application/json" },
-      body: body ? JSON.stringify(body) : undefined,
-      signal: controller.signal
-    });
-    if (!response.ok) {
-      const detail = await response.text();
-      throw new Error(detail || `Request failed with status ${response.status}`);
+const request = async (path, { method = "GET", body, timeout = 30000, retry = method === "GET" } = {}) => {
+  const attempts = retry ? 2 : 1;
+  let lastError;
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    const controller = new AbortController();
+    const timer = window.setTimeout(() => controller.abort(), timeout);
+    try {
+      const response = await fetch(`${API_BASE}${path}`, {
+        method,
+        headers: { "Content-Type": "application/json" },
+        body: body ? JSON.stringify(body) : undefined,
+        signal: controller.signal
+      });
+      if (!response.ok) {
+        const detail = await response.text();
+        const error = new Error(detail || `Request failed with status ${response.status}`);
+        error.status = response.status;
+        throw error;
+      }
+      const payload = await response.json();
+      const gateway = response.headers.get("X-FinTrack-Gateway");
+      if (gateway && payload && typeof payload === "object" && !Array.isArray(payload)) {
+        return {
+          ...payload,
+          _delivery: {
+            gateway,
+            requestId: response.headers.get("X-Request-Id") || null,
+            responseTimeMs: response.headers.get("X-Response-Time-Ms") || null
+          }
+        };
+      }
+      return payload;
+    } catch (error) {
+      lastError = error;
+      const retryable = error.name === "AbortError" || !error.status || [502, 503, 504].includes(error.status);
+      if (attempt + 1 >= attempts || !retryable) throw error;
+      await new Promise((resolve) => window.setTimeout(resolve, 350 * (attempt + 1)));
+    } finally {
+      window.clearTimeout(timer);
     }
-    const payload = await response.json();
-    const gateway = response.headers.get("X-FinTrack-Gateway");
-    if (gateway && payload && typeof payload === "object" && !Array.isArray(payload)) {
-      return {
-        ...payload,
-        _delivery: {
-          gateway,
-          requestId: response.headers.get("X-Request-Id") || null
-        }
-      };
-    }
-    return payload;
-  } finally {
-    window.clearTimeout(timer);
   }
+  throw lastError;
 };
 
 const withCache = async (name, loader) => {
@@ -109,9 +122,11 @@ export const marketApi = {
   newsFeed: (refresh = false, limit = 20) => withCache("news-feed", () => request(`/market/news-feed${query({ refresh, limit })}`, { timeout: 45000 })),
   currencies: (refresh = false) => withCache("currencies", () => request(`/market/currencies${query({ refresh })}`, { timeout: 45000 })),
   analysis: (symbol, refresh = false) => withCache(`analysis.${symbol}`, () => request(`/market/analysis${query({ symbol, refresh })}`, { timeout: 60000 })),
+  compare: (symbols, refresh = false) => request("/market/compare", { method: "POST", body: { symbols, refresh }, timeout: 90000, retry: true }),
   modelStatus: (symbol) => request(`/market/model-status${query({ symbol })}`, { timeout: 15000 }),
   dataOperations: (symbol) => request(`/market/data-operations${query({ symbol })}`, { timeout: 15000 }),
   databaseStatus: () => request("/market/database-status", { timeout: 15000 }),
+  operationsStatus: () => request("/market/operations-status", { timeout: 15000 }),
   experiments: (symbol, limit = 8) => request(`/market/experiments${query({ symbol, limit })}`, { timeout: 15000 }),
   documents: (symbol) => request(`/market/documents${query({ symbol })}`, { timeout: 15000 }),
   discoverDocuments: (symbol) => request(`/market/documents/discover${query({ symbol })}`, { timeout: 45000 }),

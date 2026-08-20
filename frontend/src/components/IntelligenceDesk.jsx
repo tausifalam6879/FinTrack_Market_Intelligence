@@ -95,6 +95,8 @@ export default function IntelligenceDesk({ initialSymbol = "^NSEI" }) {
   const [comparisonLoading, setComparisonLoading] = useState(false);
   const [comparisonError, setComparisonError] = useState("");
   const [comparisonOpen, setComparisonOpen] = useState(false);
+  const [operationsStatus, setOperationsStatus] = useState(null);
+  const [operationsStatusError, setOperationsStatusError] = useState("");
   const loadSequenceRef = useRef(0);
 
   useEffect(() => { setSymbol(initialSymbol); setDraftSymbol(initialSymbol); }, [initialSymbol]);
@@ -113,15 +115,24 @@ export default function IntelligenceDesk({ initialSymbol = "^NSEI" }) {
     let active = true;
     setComparisonLoading(true);
     setComparisonError("");
-    Promise.all(comparisonSymbols.map(async (item) => {
-      const response = await marketApi.analysis(item.symbol, false);
-      return response?.data || response;
-    }))
-      .then((rows) => { if (active) setComparisonRows(rows.filter(Boolean)); })
+    marketApi.compare(comparisonSymbols.map((item) => item.symbol), false)
+      .then((response) => {
+        if (!active) return;
+        setComparisonRows(response.items || []);
+        if (response.partial) setComparisonError(`${response.errors?.length || 1} symbol ka data temporarily unavailable hai; available comparison dikhaya gaya hai.`);
+      })
       .catch(() => { if (active) setComparisonError("Comparison data is temporarily unavailable. Please retry."); })
       .finally(() => { if (active) setComparisonLoading(false); });
     return () => { active = false; };
   }, [comparisonOpen, comparisonSymbols]);
+
+  useEffect(() => {
+    let active = true;
+    marketApi.operationsStatus()
+      .then((response) => { if (active) { setOperationsStatus(response); setOperationsStatusError(""); } })
+      .catch(() => { if (active) setOperationsStatusError("Aggregate operations telemetry is temporarily unavailable."); });
+    return () => { active = false; };
+  }, []);
 
   useEffect(() => {
     if (symbol.startsWith("^") && ["company", "documents"].includes(activeView)) setActiveView("overview");
@@ -486,7 +497,7 @@ export default function IntelligenceDesk({ initialSymbol = "^NSEI" }) {
         {activeView === "company" && !analysis.symbol.startsWith("^") && <SectorPeerPanel data={peerComparison} loading={peerComparisonLoading} error={peerComparisonError} />}
         {activeView === "overview" && analysis.riskBenchmark && <RiskBenchmarkPanel data={analysis.riskBenchmark} symbol={analysis.symbol} onExplain={explainMetric} />}
         {activeView === "overview" && localExplanation && <PredictionExplanation explanation={localExplanation} outlook={analysis.outlook} />}
-        {activeView === "mlops" && <ModelRegistryPanel status={modelStatus} loading={modelStatusLoading} error={modelStatusError} activeModel={analysis.model} />}
+        {activeView === "mlops" && <ModelRegistryPanel status={modelStatus} loading={modelStatusLoading} error={modelStatusError} activeModel={analysis.model} operationsStatus={operationsStatus} operationsError={operationsStatusError} />}
         {activeView === "mlops" && <ExperimentTrackingPanel data={experiments} loading={experimentsLoading} error={experimentsError} />}
         {activeView === "documents" && !symbol.startsWith("^") && <DocumentRagPanel
           symbol={symbol}
@@ -1601,7 +1612,7 @@ function PredictionExplanation({ explanation, outlook }) {
   </section>;
 }
 
-function ModelRegistryPanel({ status, loading, error, activeModel }) {
+function ModelRegistryPanel({ status, loading, error, activeModel, operationsStatus, operationsError }) {
   const approved = status?.approvedModel;
   const latest = status?.latestModelRun;
   const monitoring = status?.predictionMonitoring;
@@ -1693,6 +1704,36 @@ function ModelRegistryPanel({ status, loading, error, activeModel }) {
         <span>Public search remains unrestricted. The background universe grows from companies actually researched, not from a fixed five-company list.</span>
       </div>
     </div>}
+    <RuntimeOperationsPanel data={operationsStatus} error={operationsError} />
+  </section>;
+}
+
+function RuntimeOperationsPanel({ data, error }) {
+  if (error) return <div className="runtime-operations runtime-operations-error"><strong>Runtime telemetry unavailable</strong><span>{error}</span></div>;
+  if (!data) return <div className="runtime-operations"><strong>Loading aggregate API telemetry…</strong></div>;
+  const api = data.telemetry?.api || {};
+  const llm = data.telemetry?.languageModel || {};
+  const database = data.dependencies?.database || {};
+  const languageModel = data.dependencies?.languageModel || {};
+  return <section className="runtime-operations" aria-labelledby="runtime-operations-title">
+    <div className="runtime-operations-heading">
+      <div><span className="monitoring-kicker">LIVE SERVICE OBSERVABILITY</span><strong id="runtime-operations-title">Latency, failures and Gemini fallback evidence</strong></div>
+      <span>{data.status} · aggregate only</span>
+    </div>
+    <div className="monitoring-policy-grid">
+      <ValidationStat label="API requests" value={api.totalRequests ?? 0} />
+      <ValidationStat label="Server error rate" value={`${api.errorRatePercent ?? 0}%`} />
+      <ValidationStat label="Average latency" value={api.averageLatencyMs === null || api.averageLatencyMs === undefined ? "Collecting" : `${api.averageLatencyMs} ms`} />
+      <ValidationStat label="P95 latency" value={api.p95LatencyMs === null || api.p95LatencyMs === undefined ? "Collecting" : `${api.p95LatencyMs} ms`} />
+      <ValidationStat label="Gemini accepted" value={llm.acceptedRatePercent === null || llm.acceptedRatePercent === undefined ? "No calls yet" : `${llm.acceptedRatePercent}%`} />
+      <ValidationStat label="Gemini fallback" value={llm.fallbackRatePercent === null || llm.fallbackRatePercent === undefined ? "No calls yet" : `${llm.fallbackRatePercent}%`} />
+      <ValidationStat label="Database" value={`${database.backend || "checking"} · ${database.status || "checking"}`} />
+      <ValidationStat label="LLM provider" value={`${languageModel.provider || "none"} · ${languageModel.status || "fallback"}`} />
+    </div>
+    {(api.routes || []).length > 0 && <div className="runtime-route-list">{api.routes.slice(0, 5).map((route) => <span key={route.route}>
+      <strong>{route.route}</strong><small>{route.requests} calls · {route.averageLatencyMs ?? "—"} ms avg · {route.errors} server errors</small>
+    </span>)}</div>}
+    <p>{data.telemetry?.privacy}</p>
   </section>;
 }
 

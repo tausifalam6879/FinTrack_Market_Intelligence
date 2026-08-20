@@ -26,3 +26,20 @@ services:
         value: "25000"
       - key: MARKET_OVERVIEW_CACHE_TTL_SECONDS
         value: "900"
+
+  - type: web
+    name: fintrack-market-gateway
+    runtime: docker
+    dockerfilePath: ./gateway-service/Dockerfile
+    dockerContext: ./gateway-service
+    plan: free
+    healthCheckPath: /health/ready
+    envVars:
+      - key: FINTRACK_GATEWAY_UPSTREAM_BASE_URL
+        value: https://fintrack-market-intelligence-api.onrender.com
+      - key: FINTRACK_GATEWAY_REQUEST_TIMEOUT
+        value: 90s
+      - key: FINTRACK_GATEWAY_FAILURE_THRESHOLD
+        value: "3"
+      - key: FINTRACK_GATEWAY_OPEN_DURATION
+        value: 20s
