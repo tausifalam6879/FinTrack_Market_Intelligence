@@ -82,3 +82,22 @@ test("operations observability is visible in MLOps without page overflow", async
   const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
   expect(overflow).toBeLessThanOrEqual(1);
 });
+
+test("hero video stays inside its frame with picture-in-picture disabled", async ({ page }) => {
+  const frame = page.locator(".hero-visual");
+  const video = page.locator(".hero-video");
+
+  await expect(frame).toBeVisible();
+  await expect(video).toBeVisible();
+  await expect.poll(() => video.evaluate((element) => element.disablePictureInPicture)).toBe(true);
+
+  const frameBox = await frame.boundingBox();
+  const videoBox = await video.boundingBox();
+  expect(frameBox).not.toBeNull();
+  expect(videoBox).not.toBeNull();
+  expect(Math.abs(videoBox.x - frameBox.x)).toBeLessThanOrEqual(1);
+  expect(Math.abs(videoBox.y - frameBox.y)).toBeLessThanOrEqual(1);
+  expect(Math.abs(videoBox.width - frameBox.width)).toBeLessThanOrEqual(2);
+  expect(Math.abs(videoBox.height - frameBox.height)).toBeLessThanOrEqual(2);
+  expect(await page.evaluate(() => document.pictureInPictureElement)).toBeNull();
+});

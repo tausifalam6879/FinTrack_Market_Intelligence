@@ -49,8 +49,8 @@ main { width: min(1500px, calc(100% - 40px)); margin: 0 auto; }
 .hero-copy { max-width: 680px; margin-bottom: 24px; color: var(--muted); font-size: clamp(16px, 1.4vw, 20px); line-height: 1.65; }
 .hero-pills { display: flex; flex-wrap: wrap; gap: 9px; }
 .hero-pills span { padding: 8px 11px; border: 1px solid #cfdee2; border-radius: 999px; background: rgba(255,255,255,.74); color: #3e5266; font-size: 12px; font-weight: 700; }
-.hero-visual { height: clamp(270px,24vw,330px); overflow: hidden; position: relative; display: grid; place-items: center; border: 1px solid rgba(105,155,173,.36); border-radius: 24px; background: #0d4256; box-shadow: 0 18px 40px rgba(18,58,89,.18), 0 0 0 8px rgba(255,255,255,.42); }
-.hero-video { width: 100%; height: 100%; object-fit: cover; position: absolute; inset: 0; opacity: 1; }
+.hero-visual { height: clamp(270px,24vw,330px); overflow: hidden; position: relative; isolation: isolate; contain: paint; display: grid; place-items: center; border: 1px solid rgba(105,155,173,.36); border-radius: 24px; background: #0d4256; box-shadow: 0 18px 40px rgba(18,58,89,.18), 0 0 0 8px rgba(255,255,255,.42); }
+.hero-video { width: 100%; min-width: 100%; max-width: none; height: 100%; min-height: 100%; display: block; object-fit: cover; object-position: center; position: absolute; inset: 0; z-index: 0; opacity: 1; pointer-events: none; background: #0d4256; }
 .hero-video-shade { position: absolute; inset: 0; background: linear-gradient(120deg, rgba(7,31,51,.16), rgba(5,66,82,.62)); }
 .visual-card { width: min(340px, 92%); padding: 28px; border: 1px solid rgba(255,255,255,.5); border-radius: 24px; color: white; background: linear-gradient(145deg, rgba(13,65,89,.92), rgba(18,131,139,.84)); box-shadow: 0 24px 50px rgba(18,58,89,.24); transform: rotate(2deg); position: relative; z-index: 2; backdrop-filter: blur(5px); }
 .visual-card small, .visual-card span { display: block; color: #bce9e5; }

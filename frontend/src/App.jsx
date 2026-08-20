@@ -61,15 +61,31 @@ export default function App() {
       video.currentTime = start;
       video.play().catch(() => undefined);
     };
+    const keepVideoInline = () => {
+      if (document.pictureInPictureElement === video && document.exitPictureInPicture) {
+        document.exitPictureInPicture().catch(() => undefined);
+      }
+      if (
+        video.webkitPresentationMode
+        && video.webkitPresentationMode !== "inline"
+        && video.webkitSetPresentationMode
+      ) {
+        video.webkitSetPresentationMode("inline");
+      }
+    };
     video.addEventListener("loadedmetadata", begin, { once: true });
     video.addEventListener("timeupdate", restartClip);
     video.addEventListener("ended", restartVideo);
+    video.addEventListener("enterpictureinpicture", keepVideoInline);
+    video.addEventListener("webkitpresentationmodechanged", keepVideoInline);
     video.load();
     if (video.readyState >= 1) begin();
     return () => {
       video.removeEventListener("loadedmetadata", begin);
       video.removeEventListener("timeupdate", restartClip);
       video.removeEventListener("ended", restartVideo);
+      video.removeEventListener("enterpictureinpicture", keepVideoInline);
+      video.removeEventListener("webkitpresentationmodechanged", keepVideoInline);
     };
   }, [activeSection]);
 
@@ -146,7 +162,21 @@ export default function App() {
           <div className="hero-pills">{activeSection.facts.map((fact) => <span key={fact}>{fact}</span>)}</div>
         </div>
         <div className="hero-visual">
-          <video ref={visualVideoRef} key={activeTab} className="hero-video" src={activeSection.video} muted playsInline preload="auto" loop={!activeSection.clipEnd} aria-label={`${tabs[activeIndex].label} visual preview`} />
+          <video
+            ref={visualVideoRef}
+            key={activeTab}
+            className="hero-video"
+            src={activeSection.video}
+            autoPlay
+            muted
+            playsInline
+            disablePictureInPicture
+            disableRemotePlayback
+            controlsList="nodownload noremoteplayback nopictureinpicture"
+            preload="auto"
+            loop={!activeSection.clipEnd}
+            aria-label={`${tabs[activeIndex].label} visual preview`}
+          />
         </div>
       </section>
 
