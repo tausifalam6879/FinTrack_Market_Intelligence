@@ -31,6 +31,19 @@ const formatCompactMoney = (value, currency) => {
   }
 };
 
+const SAVED_RESEARCH_KEY = "fintrack.saved-research.v1";
+const MAX_SAVED_RESEARCH = 12;
+const MAX_COMPARISON = 4;
+
+const readSavedResearch = () => {
+  try {
+    const parsed = JSON.parse(window.localStorage.getItem(SAVED_RESEARCH_KEY) || "[]");
+    return Array.isArray(parsed) ? parsed.slice(0, MAX_SAVED_RESEARCH) : [];
+  } catch {
+    return [];
+  }
+};
+
 const cleanAgentAnswer = (value = "") => String(value)
   .replace(/^\s*#{0,3}\s*Seedha jawab\s*$/gim, "")
   .replace(/^\s*#{1,3}\s*/gm, "")
@@ -76,9 +89,39 @@ export default function IntelligenceDesk({ initialSymbol = "^NSEI" }) {
   const [asking, setAsking] = useState(false);
   const [agentOpen, setAgentOpen] = useState(false);
   const [activeView, setActiveView] = useState("overview");
+  const [savedResearch, setSavedResearch] = useState(readSavedResearch);
+  const [comparisonSymbols, setComparisonSymbols] = useState([]);
+  const [comparisonRows, setComparisonRows] = useState([]);
+  const [comparisonLoading, setComparisonLoading] = useState(false);
+  const [comparisonError, setComparisonError] = useState("");
+  const [comparisonOpen, setComparisonOpen] = useState(false);
   const loadSequenceRef = useRef(0);
 
   useEffect(() => { setSymbol(initialSymbol); setDraftSymbol(initialSymbol); }, [initialSymbol]);
+
+  useEffect(() => {
+    try { window.localStorage.setItem(SAVED_RESEARCH_KEY, JSON.stringify(savedResearch)); }
+    catch { /* Private browsing must not break public research. */ }
+  }, [savedResearch]);
+
+  useEffect(() => {
+    if (!comparisonOpen || comparisonSymbols.length < 2) {
+      setComparisonRows([]);
+      setComparisonError("");
+      return undefined;
+    }
+    let active = true;
+    setComparisonLoading(true);
+    setComparisonError("");
+    Promise.all(comparisonSymbols.map(async (item) => {
+      const response = await marketApi.analysis(item.symbol, false);
+      return response?.data || response;
+    }))
+      .then((rows) => { if (active) setComparisonRows(rows.filter(Boolean)); })
+      .catch(() => { if (active) setComparisonError("Comparison data is temporarily unavailable. Please retry."); })
+      .finally(() => { if (active) setComparisonLoading(false); });
+    return () => { active = false; };
+  }, [comparisonOpen, comparisonSymbols]);
 
   useEffect(() => {
     if (symbol.startsWith("^") && ["company", "documents"].includes(activeView)) setActiveView("overview");
@@ -336,6 +379,37 @@ export default function IntelligenceDesk({ initialSymbol = "^NSEI" }) {
     void send(prompt, view, []);
   };
 
+  const saveCurrentResearch = () => {
+    if (!analysis) return;
+    const entry = {
+      symbol: analysis.symbol,
+      name: resolvedCompany?.symbol === analysis.symbol ? resolvedCompany.name : analysis.name,
+      savedAt: new Date().toISOString()
+    };
+    setSavedResearch((current) => [entry, ...current.filter((item) => item.symbol !== entry.symbol)].slice(0, MAX_SAVED_RESEARCH));
+  };
+
+  const removeSavedResearch = (savedSymbol) => {
+    setSavedResearch((current) => current.filter((item) => item.symbol !== savedSymbol));
+    setComparisonSymbols((current) => current.filter((item) => item.symbol !== savedSymbol));
+  };
+
+  const toggleComparison = (item) => {
+    setComparisonSymbols((current) => {
+      if (current.some((selected) => selected.symbol === item.symbol)) return current.filter((selected) => selected.symbol !== item.symbol);
+      if (current.length >= MAX_COMPARISON) return current;
+      return [...current, item];
+    });
+  };
+
+  const printResearchReport = () => {
+    if (!analysis) return;
+    const previousTitle = document.title;
+    document.title = `FinTrack ${analysis.symbol} research report`;
+    window.print();
+    window.setTimeout(() => { document.title = previousTitle; }, 500);
+  };
+
   return (
     <section className="page-section intelligence-page" aria-labelledby="research-title">
       <div className="intelligence-main">
@@ -371,12 +445,32 @@ export default function IntelligenceDesk({ initialSymbol = "^NSEI" }) {
           <div><span className="asset-label">{analysis.symbol}</span><h3>{resolvedCompany?.symbol === analysis.symbol ? resolvedCompany.name : analysis.name}</h3><p>Evidence as of {new Date(analysis.dataAsOf).toLocaleString("en-IN")}</p></div>
           <div className={`outlook outlook-${String(analysis.outlook).toLowerCase()}`}><small>Experimental outlook</small><strong>{analysis.outlook}</strong></div>
         </div>
+        <div className="research-actions" aria-label="Research actions">
+          <button type="button" onClick={saveCurrentResearch} disabled={savedResearch.some((item) => item.symbol === analysis.symbol)}>
+            {savedResearch.some((item) => item.symbol === analysis.symbol) ? "✓ Saved for comparison" : "+ Save company"}
+          </button>
+          <button type="button" onClick={() => setComparisonOpen((current) => !current)}>
+            Compare saved ({savedResearch.length}) {comparisonOpen ? "↑" : "↓"}
+          </button>
+          <button type="button" onClick={printResearchReport}>Print / Save PDF</button>
+        </div>
+        {comparisonOpen && <SavedResearchPanel
+          items={savedResearch}
+          selected={comparisonSymbols}
+          rows={comparisonRows}
+          loading={comparisonLoading}
+          error={comparisonError}
+          toggle={toggleComparison}
+          remove={removeSavedResearch}
+          openResearch={(item) => { setResolvedCompany(item); load(item.symbol); }}
+        />}
         <div className="metric-grid">
           <Metric label="Probability up" value={`${analysis.probabilityUp}%`} hint={`${analysis.probabilityDown}% probability down`} onExplain={explainMetric} />
           <Metric label="Expected range" value={`${formatNumber(analysis.expectedRange?.low)} – ${formatNumber(analysis.expectedRange?.high)}`} hint={analysis.expectedRange?.currency} onExplain={explainMetric} />
           <Metric label="RSI (14)" value={formatNumber(analysis.technicalIndicators?.rsi14)} hint="Below 30 oversold · above 70 overbought" onExplain={explainMetric} />
           <Metric label="Walk-forward score" value={`${analysis.model?.balancedAccuracy ?? analysis.model?.backtestAccuracy}%`} hint={`${analysis.model?.walkForwardFolds || 1} time-ordered folds · ${analysis.model?.quality} quality`} onExplain={explainMetric} />
         </div>
+        <PredictionOutcomeSummary status={modelStatus} loading={modelStatusLoading} onOpen={() => setActiveView("mlops")} />
         <nav className="intelligence-view-tabs" aria-label="Intelligence detail views">
           {[
             ["overview", "Overview"],
@@ -450,6 +544,60 @@ export default function IntelligenceDesk({ initialSymbol = "^NSEI" }) {
       </article>
     </section>
   );
+}
+
+function SavedResearchPanel({ items, selected, rows, loading, error, toggle, remove, openResearch }) {
+  const selectedSymbols = new Set(selected.map((item) => item.symbol));
+  return <section className="saved-research-panel" aria-labelledby="saved-research-title">
+    <div className="saved-research-heading">
+      <div><p className="eyebrow">PERSONAL BROWSER WATCHLIST</p><h3 id="saved-research-title">Compare any saved companies</h3><p>Saved only in this browser. Select 2–4 symbols; no login or personal finance data is required.</p></div>
+      <span>{selected.length}/{MAX_COMPARISON} selected</span>
+    </div>
+    {items.length === 0 && <div className="saved-research-empty">Open any company or index and choose “Save company”. Your list will stay dynamic—not limited to fixed presets.</div>}
+    {items.length > 0 && <div className="saved-symbol-list">
+      {items.map((item) => <article key={item.symbol} className={selectedSymbols.has(item.symbol) ? "selected" : ""}>
+        <button type="button" className="saved-symbol-main" onClick={() => openResearch(item)}><strong>{item.name || item.symbol}</strong><span>{item.symbol}</span></button>
+        <button type="button" className="saved-compare-toggle" disabled={!selectedSymbols.has(item.symbol) && selected.length >= MAX_COMPARISON} onClick={() => toggle(item)}>
+          {selectedSymbols.has(item.symbol) ? "✓ Comparing" : "Compare"}
+        </button>
+        <button type="button" className="saved-remove" onClick={() => remove(item.symbol)} aria-label={`Remove ${item.symbol}`}>×</button>
+      </article>)}
+    </div>}
+    {selected.length === 1 && <p className="comparison-guidance">Select one more saved symbol to start the side-by-side comparison.</p>}
+    {loading && <p className="comparison-guidance">Loading verified comparison evidence…</p>}
+    {error && <div className="notice error">{error}</div>}
+    {!loading && rows.length >= 2 && <div className="comparison-table-wrap">
+      <table className="comparison-table">
+        <thead><tr><th>Company</th><th>Outlook</th><th>Probability up</th><th>Expected range</th><th>RSI (14)</th><th>Walk-forward</th><th>1-year return</th><th>Volatility</th></tr></thead>
+        <tbody>{rows.map((row) => <tr key={row.symbol}>
+          <th><strong>{row.name || row.symbol}</strong><span>{row.symbol}</span></th>
+          <td><b className={`comparison-outlook outlook-${String(row.outlook).toLowerCase()}`}>{row.outlook}</b></td>
+          <td>{formatPercent(row.probabilityUp)}</td>
+          <td>{formatNumber(row.expectedRange?.low)} – {formatNumber(row.expectedRange?.high)} <small>{row.expectedRange?.currency}</small></td>
+          <td>{formatNumber(row.technicalIndicators?.rsi14)}</td>
+          <td>{formatPercent(row.model?.balancedAccuracy ?? row.model?.backtestAccuracy)}</td>
+          <td>{formatPercent(row.riskBenchmark?.asset?.periodReturnPercent)}</td>
+          <td>{formatPercent(row.riskBenchmark?.asset?.annualizedVolatilityPercent)}</td>
+        </tr>)}</tbody>
+      </table>
+    </div>}
+    <p className="comparison-footnote">Comparison is descriptive evidence, not a ranking or buy/sell recommendation. Different currencies and exchanges are shown as reported.</p>
+  </section>;
+}
+
+function PredictionOutcomeSummary({ status, loading, onOpen }) {
+  const monitoring = status?.predictionMonitoring;
+  const evaluated = monitoring?.evaluated ?? monitoring?.rollingQuality?.evaluatedTotal ?? 0;
+  const pending = Math.max(0, (monitoring?.totalStored ?? 0) - evaluated);
+  return <aside className="prediction-outcome-summary" aria-label="Prediction outcome tracking">
+    <div><span>PREDICTION OUTCOME TRACKING</span><strong>{loading ? "Checking stored predictions…" : `${monitoring?.totalStored ?? 0} predictions stored`}</strong></div>
+    <dl>
+      <div><dt>Evaluated</dt><dd>{loading ? "—" : evaluated}</dd></div>
+      <div><dt>Awaiting session</dt><dd>{loading ? "—" : pending}</dd></div>
+      <div><dt>Observed accuracy</dt><dd>{loading || monitoring?.observedAccuracy === null || monitoring?.observedAccuracy === undefined ? "Awaiting outcomes" : `${monitoring.observedAccuracy}%`}</dd></div>
+    </dl>
+    <button type="button" onClick={onOpen}>Open audit & MLOps →</button>
+  </aside>;
 }
 
 function Metric({ label, value, hint, onExplain }) { return <article className="metric-card"><div className="explainable-metric-heading"><small>{label}</small>{onExplain && <button type="button" className="metric-explain-button" onClick={() => onExplain(label, value, hint)} aria-label={`Explain ${label}`}>? Explain</button>}</div><strong>{value}</strong><span>{hint}</span></article>; }
