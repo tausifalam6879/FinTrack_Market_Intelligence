@@ -5,16 +5,25 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
 
 def request_json(url: str, body: dict | None = None, timeout: int = 120) -> dict:
     encoded = json.dumps(body).encode("utf-8") if body is not None else None
-    request = Request(url, data=encoded, headers={"Content-Type": "application/json"}, method="POST" if body else "GET")
-    with urlopen(request, timeout=timeout) as response:
-        if response.status < 200 or response.status >= 300:
-            raise RuntimeError(f"{url} returned HTTP {response.status}")
-        return json.loads(response.read().decode("utf-8"))
+    request = Request(
+        url,
+        data=encoded,
+        headers={"Content-Type": "application/json", "User-Agent": "FinTrack-Production-Smoke/1.0"},
+        method="POST" if body else "GET",
+    )
+    try:
+        with urlopen(request, timeout=timeout) as response:
+            if response.status < 200 or response.status >= 300:
+                raise RuntimeError(f"{url} returned HTTP {response.status}")
+            return json.loads(response.read().decode("utf-8"))
+    except HTTPError as error:
+        raise RuntimeError(f"{url} returned HTTP {error.code}") from error
 
 
 def main() -> int:
