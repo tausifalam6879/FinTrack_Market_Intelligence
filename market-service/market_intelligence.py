@@ -981,6 +981,17 @@ def _normalize_news_item(item: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     click_url = content.get("clickThroughUrl") if isinstance(content.get("clickThroughUrl"), dict) else {}
     canonical_url = content.get("canonicalUrl") if isinstance(content.get("canonicalUrl"), dict) else {}
     published = content.get("pubDate") or item.get("providerPublishTime")
+    thumbnail = content.get("thumbnail") if isinstance(content.get("thumbnail"), dict) else item.get("thumbnail")
+    resolutions = thumbnail.get("resolutions") if isinstance(thumbnail, dict) else []
+    image_url = next(
+        (
+            resolution.get("url")
+            for resolution in (resolutions or [])
+            if isinstance(resolution, dict)
+            and str(resolution.get("url") or "").startswith(("https://", "http://"))
+        ),
+        None,
+    )
     if isinstance(published, (int, float)):
         published = datetime.fromtimestamp(published, tz=timezone.utc).isoformat()
     words = re.findall(r"[a-z]+", title.lower())
@@ -992,6 +1003,7 @@ def _normalize_news_item(item: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         "title": title,
         "publisher": provider.get("displayName") or item.get("publisher") or "Unknown",
         "url": item.get("link") or click_url.get("url") or canonical_url.get("url"),
+        "imageUrl": image_url,
         "publishedAt": published,
         "sentiment": _round(sentiment, 3),
         "sentimentLabel": _sentiment_label(sentiment),
@@ -4491,7 +4503,6 @@ def _verified_tool_answer(
                 "- Provider ne aligned annual income-statement aur balance-sheet rows return nahi kiye; missing margins, ROA, ROE ya ROIC invent nahi kiye gaye."
             )
     return (
-        "Seedha jawab\n"
         f"{prediction['name']} ke liye model ka current scenario {prediction['outlook']} hai, lekin ise guaranteed "
         "direction ya trading call nahi samajhna chahiye.\n\n"
         "Verified figures\n"
@@ -4539,7 +4550,6 @@ def _verified_document_answer(
     """Return citation-first evidence when a document question is asked offline."""
     if not document_matches:
         return (
-            "Seedha jawab\n"
             f"{symbol} ke indexed documents me is question ka retrievable evidence available nahi hai. "
             "Main annual report ya filing ka answer invent nahi kar raha hoon.\n\n"
             "Evidence boundary\n"
@@ -4555,7 +4565,6 @@ def _verified_document_answer(
             f"(Source: {match['title']})"
         )
     return (
-        "Seedha jawab\n"
         "Neeche ka answer sirf retrieved company-document evidence dikhata hai; missing details infer nahi ki gayi hain.\n\n"
         "Indexed evidence\n"
         + "\n".join(lines)
@@ -5250,9 +5259,10 @@ async def market_agent(request: FastApiRequest):
 
     system_prompt = (
         "You are FinTrack's evidence-grounded market research analyst. Use only the supplied tool results; never "
-        "invent prices, dates, news or calculations. Match the user's Hindi, Hinglish or English. Give a useful, "
-        "detailed answer with these compact sections when relevant: Seedha jawab, Verified figures, Calculation, "
-        "Scenario/estimate, Assumptions and confidence, Final assessment. Show arithmetic explicitly using the "
+        "invent prices, dates, news or calculations. Match the user's Hindi, Hinglish or English. Keep the answer "
+        "under 160 words unless the user explicitly asks for detail. Start directly with the answer and never print "
+        "a 'Seedha jawab' heading. Use only the relevant compact sections from: Verified figures, Calculation, "
+        "Scenario/estimate, Assumptions and confidence, Final assessment. Do not repeat a figure in multiple sections. Show arithmetic explicitly using the "
         "derived calculations. For a requested historical date, clearly say whether it is the exact session or "
         "nearest trading session and use its OHLC/change; do not answer it with today's data. Distinguish verified "
         "facts from model estimates. Explain downside, neutral and upside cases instead of pretending one outcome "

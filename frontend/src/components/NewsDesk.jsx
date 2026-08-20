@@ -38,7 +38,11 @@ export default function NewsDesk({ onResearch }) {
     }
   };
 
-  useEffect(() => { load(false, true); }, []);
+  useEffect(() => {
+    load(false, true);
+    const refreshTimer = window.setInterval(() => load(true, true), 5 * 60 * 1000);
+    return () => window.clearInterval(refreshTimer);
+  }, []);
 
   const articles = useMemo(() => {
     const query = search.trim().toLowerCase();
@@ -79,8 +83,16 @@ export default function NewsDesk({ onResearch }) {
           {articles.map((article, index) => {
             const symbol = article.relatedSymbol || "^NSEI";
             const label = sentimentLabel(article.sentiment);
+            const category = categoryFor(symbol);
             return <article className="news-card" key={`${article.title}-${index}`}>
-              <div className="news-card-meta"><span>{categoryFor(symbol)}</span><span className={`sentiment sentiment-${label.toLowerCase()}`}>{label}</span></div>
+              <div
+                className={`news-visual news-visual-${category.toLowerCase().replaceAll(" ", "-")}${article.imageUrl ? " has-image" : ""}`}
+                style={article.imageUrl ? { backgroundImage: `linear-gradient(180deg, rgba(8,30,48,.08), rgba(8,30,48,.78)), url("${article.imageUrl}")` } : undefined}
+                aria-hidden="true"
+              >
+                <span>{relatedLabel(symbol)}</span><b>{label}</b>
+              </div>
+              <div className="news-card-meta"><span>{category}</span><span className={`sentiment sentiment-${label.toLowerCase()}`}>{label}</span></div>
               <h3>{article.title}</h3>
               <div className="news-source"><strong>{article.publisher || "Unknown publisher"}</strong><span>{article.publishedAt ? new Date(article.publishedAt).toLocaleString("en-IN") : "Publication time unavailable"}</span></div>
               <div className="news-card-actions">

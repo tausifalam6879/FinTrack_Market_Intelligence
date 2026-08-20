@@ -31,6 +31,13 @@ const formatCompactMoney = (value, currency) => {
   }
 };
 
+const cleanAgentAnswer = (value = "") => String(value)
+  .replace(/^\s*#{0,3}\s*Seedha jawab\s*$/gim, "")
+  .replace(/^\s*#{1,3}\s*/gm, "")
+  .replace(/\*\*/g, "")
+  .replace(/\n{3,}/g, "\n\n")
+  .trim();
+
 export default function IntelligenceDesk({ initialSymbol = "^NSEI" }) {
   const [symbol, setSymbol] = useState(initialSymbol);
   const [draftSymbol, setDraftSymbol] = useState(initialSymbol);
@@ -67,9 +74,15 @@ export default function IntelligenceDesk({ initialSymbol = "^NSEI" }) {
   const [messages, setMessages] = useState([]);
   const [question, setQuestion] = useState("");
   const [asking, setAsking] = useState(false);
+  const [agentOpen, setAgentOpen] = useState(false);
+  const [activeView, setActiveView] = useState("overview");
   const loadSequenceRef = useRef(0);
 
   useEffect(() => { setSymbol(initialSymbol); setDraftSymbol(initialSymbol); }, [initialSymbol]);
+
+  useEffect(() => {
+    if (symbol.startsWith("^") && ["company", "documents"].includes(activeView)) setActiveView("overview");
+  }, [symbol, activeView]);
 
   useEffect(() => {
     const clean = draftSymbol.trim();
@@ -287,15 +300,35 @@ export default function IntelligenceDesk({ initialSymbol = "^NSEI" }) {
     const userMessage = { role: "user", content: clean };
     setMessages((current) => [...current, userMessage]); setQuestion(""); setAsking(true);
     try {
-      const response = await marketApi.agent({ message: clean, symbol, recentMessages: messages.slice(-8) });
+      const sectionInstruction = {
+        overview: "Focus only on the visible overview, price, outlook, risk and technical metrics.",
+        company: "Focus only on the visible company fundamentals, performance, catalysts, estimates and peer evidence.",
+        documents: "Focus only on indexed company reports and RAG evidence; do not invent missing document facts.",
+        mlops: "Focus only on the visible model, validation, experiment, monitoring and MLOps evidence."
+      }[activeView];
+      const response = await marketApi.agent({ message: `${sectionInstruction} User question: ${clean}`, symbol, recentMessages: messages.slice(-6) });
       setMessages((current) => [...current, { role: "assistant", content: response.answer, meta: response }]);
     } catch {
       setMessages((current) => [...current, { role: "assistant", content: "The research agent is temporarily unavailable. Price analytics above remain independent of the AI response.", meta: { llmStatus: "offline" } }]);
     } finally { setAsking(false); }
   };
 
+  const suggestedQuestions = {
+    overview: [`${symbol} outlook ka simple meaning kya hai?`, "Probability, RSI aur expected range ko aasaan language me samjhao"],
+    company: [`${symbol} ke fundamentals me sabse important baat kya hai?`, "Performance, catalysts aur analyst estimates ko simple language me samjhao"],
+    documents: [`${symbol} ke available reports ka short summary do`, "Document evidence me risk ya debt ke baare me kya likha hai?"],
+    mlops: ["Model score reliable hai ya nahi, simple language me batao", "Experiment, drift aur serving model ka difference samjhao"]
+  }[activeView];
+
+  const openContextAgent = () => {
+    setMessages([]);
+    setQuestion("");
+    setAgentOpen(true);
+  };
+
   return (
-    <section className="page-section" aria-labelledby="research-title">
+    <section className="page-section intelligence-page" aria-labelledby="research-title">
+      <div className="intelligence-main">
       <div className="section-heading split-heading">
         <div><p className="eyebrow">OPEN MARKET INTELLIGENCE</p><h2 id="research-title">Research an index or company</h2><p>Technical evidence, macro drivers and AI explanations remain inside this website.</p></div>
         {result && <StatusBadge mode={result.mode} />}
@@ -334,13 +367,24 @@ export default function IntelligenceDesk({ initialSymbol = "^NSEI" }) {
           <Metric label="RSI (14)" value={formatNumber(analysis.technicalIndicators?.rsi14)} hint="Below 30 oversold · above 70 overbought" />
           <Metric label="Walk-forward score" value={`${analysis.model?.balancedAccuracy ?? analysis.model?.backtestAccuracy}%`} hint={`${analysis.model?.walkForwardFolds || 1} time-ordered folds · ${analysis.model?.quality} quality`} />
         </div>
-        {!analysis.symbol.startsWith("^") && <CompanyFundamentalsPanel data={companyResearch} loading={companyResearchLoading} error={companyResearchError} />}
-        {!analysis.symbol.startsWith("^") && <SectorPeerPanel data={peerComparison} loading={peerComparisonLoading} error={peerComparisonError} />}
-        {analysis.riskBenchmark && <RiskBenchmarkPanel data={analysis.riskBenchmark} symbol={analysis.symbol} />}
-        {localExplanation && <PredictionExplanation explanation={localExplanation} outlook={analysis.outlook} />}
-        <ModelRegistryPanel status={modelStatus} loading={modelStatusLoading} error={modelStatusError} activeModel={analysis.model} />
-        <ExperimentTrackingPanel data={experiments} loading={experimentsLoading} error={experimentsError} />
-        {!symbol.startsWith("^") && <DocumentRagPanel
+        <nav className="intelligence-view-tabs" aria-label="Intelligence detail views">
+          {[
+            ["overview", "Overview"],
+            ...(!analysis.symbol.startsWith("^") ? [["company", "Company evidence"], ["documents", "Reports & RAG"]] : []),
+            ["mlops", "Model & MLOps"]
+          ].map(([value, label]) => <button type="button" key={value} className={activeView === value ? "active" : ""} onClick={() => setActiveView(value)}>{label}</button>)}
+        </nav>
+        <div className="context-agent-bar">
+          <div><strong>Need help with this section?</strong><span>Grounded Gemini will answer only from the visible {activeView} evidence.</span></div>
+          <button type="button" onClick={openContextAgent}>✦ Ask Grounded Gemini</button>
+        </div>
+        {activeView === "company" && !analysis.symbol.startsWith("^") && <CompanyFundamentalsPanel data={companyResearch} loading={companyResearchLoading} error={companyResearchError} />}
+        {activeView === "company" && !analysis.symbol.startsWith("^") && <SectorPeerPanel data={peerComparison} loading={peerComparisonLoading} error={peerComparisonError} />}
+        {activeView === "overview" && analysis.riskBenchmark && <RiskBenchmarkPanel data={analysis.riskBenchmark} symbol={analysis.symbol} />}
+        {activeView === "overview" && localExplanation && <PredictionExplanation explanation={localExplanation} outlook={analysis.outlook} />}
+        {activeView === "mlops" && <ModelRegistryPanel status={modelStatus} loading={modelStatusLoading} error={modelStatusError} activeModel={analysis.model} />}
+        {activeView === "mlops" && <ExperimentTrackingPanel data={experiments} loading={experimentsLoading} error={experimentsError} />}
+        {activeView === "documents" && !symbol.startsWith("^") && <DocumentRagPanel
           symbol={symbol}
           documents={documents}
           documentsLoading={documentsLoading}
@@ -355,7 +399,7 @@ export default function IntelligenceDesk({ initialSymbol = "^NSEI" }) {
           error={ragError}
           ask={askDocuments}
         />}
-        <div className="research-grid">
+        {activeView === "overview" && <div className="research-grid">
           <article className="chart-panel"><div className="panel-title"><h3>One-year evidence</h3><span>Daily close</span></div><Sparkline history={history} /></article>
           <article className="drivers-panel"><div className="panel-title"><h3>Technical and macro inputs</h3><span>Transparent factors</span></div>
             <dl>
@@ -367,8 +411,8 @@ export default function IntelligenceDesk({ initialSymbol = "^NSEI" }) {
               <div><dt>Model</dt><dd>{analysis.model?.type}</dd></div>
             </dl>
           </article>
-        </div>
-        {modelComparisons.length > 0 && <ModelEvidence
+        </div>}
+        {activeView === "mlops" && modelComparisons.length > 0 && <ModelEvidence
           model={analysis.model}
           comparisons={modelComparisons}
           importance={featureImportance}
@@ -377,19 +421,16 @@ export default function IntelligenceDesk({ initialSymbol = "^NSEI" }) {
         <div className="notice warning"><strong>Research limitation:</strong> {analysis.disclaimer}</div>
       </>}
 
-      <article className="agent-panel">
-        <div className="panel-title"><div><p className="eyebrow">GROUNDED RESEARCH AGENT</p><h3>Ask using verified market evidence</h3></div><span>Verified data + calculations + probabilistic scenarios</span></div>
+      </div>
+      <button type="button" className="agent-launcher" onClick={openContextAgent}>✦ Ask Grounded Gemini</button>
+      <article className={`agent-panel agent-drawer${agentOpen ? " open" : ""}`}>
+        <div className="panel-title"><div><p className="eyebrow">GROUNDED GEMINI · {activeView.toUpperCase()}</p><h3>Ask about this section</h3></div><button type="button" className="agent-close" onClick={() => setAgentOpen(false)} aria-label="Close research agent">×</button></div>
         <div className="suggested-row">
-          {[
-            "Aaj ke data se Nifty ka next-session scenario aur calculation samjhao",
-            "15 July 2026 ko Nifty ka behaviour kya tha?",
-            "Top gainers, losers aur market risk samjhao",
-            `Why is ${symbol} outlook ${analysis?.outlook || "neutral"}?`
-          ].map((item) => <button key={item} onClick={() => send(item)}>{item}</button>)}
+          {suggestedQuestions.map((item) => <button key={item} onClick={() => send(item)}>{item}</button>)}
         </div>
         <div className="chat-log">
           {messages.length === 0 && <div className="agent-empty">Ask about prices, factors, market breadth, model weakness or current headlines.</div>}
-          {messages.map((message, index) => <div key={index} className={`chat-message ${message.role}`}><p>{message.content}</p>{message.meta && <>
+          {messages.map((message, index) => <div key={index} className={`chat-message ${message.role}`}><p>{message.role === "assistant" ? cleanAgentAnswer(message.content) : message.content}</p>{message.meta && <>
             <small>{message.meta.llmStatus === "connected" && message.meta.llmAnswerAccepted ? "Gemini grounded" : message.meta.llmStatus === "grounding_fallback" ? "LLM checked · verified tool answer used" : "Verified tool fallback"}</small>
             {message.role === "assistant" && <AgentEvidenceTrace meta={message.meta} />}
           </>}</div>)}
@@ -509,6 +550,7 @@ function CompanyCorporateActionPanel({ data, currency }) {
     if (raw === null || raw === undefined || !Number.isFinite(numeric)) return "—";
     return numeric.toLocaleString("en-IN", { maximumFractionDigits: digits });
   };
+
   const perShare = (raw) => raw === null || raw === undefined ? "—" : `${value(raw, 6)} ${localCurrency || "local currency"}`;
   const percent = (raw, signed = false) => {
     const numeric = Number(raw);

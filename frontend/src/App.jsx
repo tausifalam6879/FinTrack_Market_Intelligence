@@ -1,4 +1,4 @@
-import { useLayoutEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import MarketPulse from "./components/MarketPulse";
 import CurrencyDesk from "./components/CurrencyDesk";
 import IntelligenceDesk from "./components/IntelligenceDesk";
@@ -11,6 +11,29 @@ const tabs = [
   { id: "intelligence", label: "Intelligence & MLOps", icon: "✦" }
 ];
 
+const tabDetails = {
+  markets: {
+    video: "./media/market-pulse.mp4", eyebrow: "LIVE MARKET PULSE", title: "See the market before you react.",
+    copy: "A moving snapshot of indices, companies and sector momentum — built for observation, not impulsive calls.",
+    facts: ["Live watchlist", "Sector movement", "Price alerts"]
+  },
+  currency: {
+    video: "./media/currency-and-mlops.mp4", clipStart: 0, clipEnd: 5, eyebrow: "INR CURRENCY DESK", title: "Global currency moves, in rupees.",
+    copy: "Compare global currencies with INR and understand the rate behind an international price.",
+    facts: ["160+ currencies", "INR conversion", "Searchable directory"]
+  },
+  news: {
+    video: "./media/market-news.mp4", eyebrow: "MARKET NEWS DESK", title: "Headlines with context, not noise.",
+    copy: "Browse current market stories, see their themes and open the original source when it matters.",
+    facts: ["Current headlines", "Topic filters", "Source links"]
+  },
+  intelligence: {
+    video: "./media/currency-and-mlops.mp4", clipStart: 5, clipEnd: 10, eyebrow: "OPEN INTELLIGENCE", title: "Research a company with evidence.",
+    copy: "Combine market data, transparent model signals, company evidence and concise AI explanations.",
+    facts: ["ML monitoring", "Company research", "Evidence-first answers"]
+  }
+};
+
 export default function App() {
   const [activeTab, setActiveTab] = useState("markets");
   const [researchSymbol, setResearchSymbol] = useState("^NSEI");
@@ -19,8 +42,36 @@ export default function App() {
   const tabbarRef = useRef(null);
   const tabRefs = useRef([]);
   const dragRef = useRef(null);
+  const visualVideoRef = useRef(null);
 
   const activeIndex = Math.max(0, tabs.findIndex((tab) => tab.id === activeTab));
+  const activeSection = tabDetails[activeTab];
+
+  useEffect(() => {
+    const video = visualVideoRef.current;
+    if (!video) return undefined;
+    const start = activeSection.clipStart || 0;
+    const end = activeSection.clipEnd;
+    const begin = () => {
+      video.currentTime = start;
+      video.play().catch(() => undefined);
+    };
+    const restartClip = () => { if (end && video.currentTime >= end) video.currentTime = start; };
+    const restartVideo = () => {
+      video.currentTime = start;
+      video.play().catch(() => undefined);
+    };
+    video.addEventListener("loadedmetadata", begin, { once: true });
+    video.addEventListener("timeupdate", restartClip);
+    video.addEventListener("ended", restartVideo);
+    video.load();
+    if (video.readyState >= 1) begin();
+    return () => {
+      video.removeEventListener("loadedmetadata", begin);
+      video.removeEventListener("timeupdate", restartClip);
+      video.removeEventListener("ended", restartVideo);
+    };
+  }, [activeSection]);
 
   useLayoutEffect(() => {
     const positionSlider = () => {
@@ -90,11 +141,13 @@ export default function App() {
       <section className="hero">
         <div>
           <p className="eyebrow">NO LOGIN · NO PERSONAL DATA</p>
-          <h1>Markets and currencies,<br/><span>explained with evidence.</span></h1>
-          <p className="hero-copy">A focused public dashboard for global indices, company quotes, INR exchange rates, market news and grounded AI research.</p>
-          <div className="hero-pills"><span>24 market instruments</span><span>160+ currencies</span><span>Current headlines</span><span>Timestamped evidence</span></div>
+          <h1>{activeSection.title}</h1>
+          <p className="hero-copy">{activeSection.copy}</p>
+          <div className="hero-pills">{activeSection.facts.map((fact) => <span key={fact}>{fact}</span>)}</div>
         </div>
-        <div className="hero-visual" aria-hidden="true"><div className="orb orb-one"/><div className="orb orb-two"/><div className="visual-card"><small>Research principle</small><strong>Verify the source.<br/>Read the timestamp.<br/>Understand uncertainty.</strong><span>Never a guaranteed buy/sell call.</span></div></div>
+        <div className="hero-visual">
+          <video ref={visualVideoRef} key={activeTab} className="hero-video" src={activeSection.video} muted playsInline preload="auto" loop={!activeSection.clipEnd} aria-label={`${tabs[activeIndex].label} visual preview`} />
+        </div>
       </section>
 
       <nav ref={tabbarRef} className={`tabbar${draggingTab ? " dragging" : ""}`} aria-label="Dashboard sections" role="tablist">

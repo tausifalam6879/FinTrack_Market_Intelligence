@@ -110,13 +110,13 @@ class AgentAnalysisTests(unittest.TestCase):
         )
 
         for heading in (
-            "Seedha jawab",
             "Verified figures",
             "Calculation aur scenario",
             "Assumptions aur confidence",
             "Final assessment",
         ):
             self.assertIn(heading, answer)
+        self.assertNotIn("Seedha jawab", answer)
         self.assertIn("reliable directional edge nahi", answer)
         self.assertIn("53.3%", answer)
         self.assertIn("personalized buy/sell advice", answer)
