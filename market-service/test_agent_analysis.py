@@ -172,6 +172,22 @@ class AgentAnalysisTests(unittest.TestCase):
 
         self.assertIsNone(issue)
 
+    def test_broad_market_explanation_requires_comparison_not_unasked_volatility(self):
+        relative_return = self.prediction["riskBenchmark"]["comparison"]["relativeReturnPoints"]
+        answer = (
+            f"Nifty 50 broad-market benchmark ke comparison mein relative return {relative_return} percentage points hai. "
+            "Iska matlab selected asset benchmark se peeche raha; weak model ka reliable directional edge nahi hai."
+        )
+
+        issue = _llm_grounding_issue(
+            answer,
+            "How has this behaved versus the broad market?",
+            self.prediction,
+            {"factors": []},
+        )
+
+        self.assertIsNone(issue)
+
     def test_catalyst_fallback_labels_external_target_and_earnings_date(self):
         company = {
             "catalysts": {

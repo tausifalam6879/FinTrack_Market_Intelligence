@@ -4636,14 +4636,13 @@ def _llm_grounding_issue(
             return "missing weak-model warning"
     risk_requested = _requests_risk_analysis(lowered)
     asset_risk = (prediction.get("riskBenchmark") or {}).get("asset") or {}
-    if risk_requested and asset_risk.get("annualizedVolatilityPercent") is not None:
-        expected_volatility = f"{abs(float(asset_risk['annualizedVolatilityPercent'])):.2f}".rstrip("0").rstrip(".")
-        if expected_volatility not in normalized_answer:
-            return "missing historical risk evidence"
+    if risk_requested:
         risk_payload = prediction.get("riskBenchmark") or {}
         comparison = risk_payload.get("comparison") or {}
         benchmark = risk_payload.get("benchmark") or {}
         required_metrics = []
+        if any(term in lowered for term in ("risk", "volatility")) and asset_risk.get("annualizedVolatilityPercent") is not None:
+            required_metrics.append(("historical volatility", asset_risk["annualizedVolatilityPercent"]))
         if "beta" in lowered and comparison.get("beta") is not None:
             required_metrics.append(("beta", comparison["beta"]))
         if "drawdown" in lowered and asset_risk.get("maxDrawdownPercent") is not None:
@@ -4652,12 +4651,19 @@ def _llm_grounding_issue(
             required_metrics.append(("historical VaR", asset_risk["historicalVar95Percent"]))
         if "tracking error" in lowered and comparison.get("trackingErrorPercent") is not None:
             required_metrics.append(("tracking error", comparison["trackingErrorPercent"]))
+        relative_comparison_requested = any(term in lowered for term in (
+            "broad market", "market comparison", "behaved versus",
+            "relative return", "outperform", "underperform",
+        ))
+        if relative_comparison_requested and comparison.get("relativeReturnPoints") is not None:
+            required_metrics.append(("relative return", comparison["relativeReturnPoints"]))
         for label, value in required_metrics:
             expected_value = f"{abs(float(value)):.2f}".rstrip("0").rstrip(".")
             if expected_value not in normalized_answer:
                 return f"missing requested {label} evidence"
         benchmark_name = str(benchmark.get("name") or "").lower()
-        if "benchmark" in lowered and benchmark_name and benchmark_name not in normalized_answer:
+        benchmark_identity_requested = "benchmark" in lowered or relative_comparison_requested
+        if benchmark_identity_requested and benchmark_name and benchmark_name not in normalized_answer:
             return "missing requested benchmark identity"
     if historical:
         session_date = date.fromisoformat(historical["sessionDate"])
