@@ -248,7 +248,7 @@ class AgentOrchestratorTests(unittest.TestCase):
             patch("market_intelligence.market_prediction", return_value=prediction),
             patch("market_intelligence.company_research", return_value=company),
             patch("document_rag.retrieve_chunks", return_value=retrieval),
-            patch("market_intelligence._provider_chat", side_effect=RuntimeError("offline")),
+            patch("market_intelligence._provider_chat", side_effect=RuntimeError("offline")) as provider_chat,
         ):
             payload = {
                 "symbol": "RELIANCE.NS",
@@ -264,6 +264,7 @@ class AgentOrchestratorTests(unittest.TestCase):
             body = asyncio.run(market_agent(FakeRequest()))
 
         self.assertEqual("deterministic-read-only-v1", body["agentPlan"]["planner"])
+        self.assertEqual(2, provider_chat.call_count)
         self.assertIn("company_document_rag", body["toolsUsed"])
         self.assertEqual("S1", body["citations"][0]["citation"])
         self.assertIn("[S1 p.98]", body["answer"])

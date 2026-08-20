@@ -5367,7 +5367,17 @@ async def market_agent(request: FastApiRequest):
         )
 
     try:
-        answer, llm_provider = _provider_chat(messages)
+        try:
+            answer, llm_provider = _provider_chat(messages)
+        except RuntimeError as first_error:
+            first_failure = _llm_failure_code(first_error)
+            if first_failure not in {"provider_timeout", "provider_unavailable", "provider_error"}:
+                raise
+            # One immediate retry absorbs transient Gemini/network failures.
+            # Authentication, quota, invalid-request and model errors are not
+            # retried, preventing duplicate paid calls for permanent failures.
+            logger.warning("Transient market LLM failure (%s); retrying once", first_failure)
+            answer, llm_provider = _provider_chat(messages)
         if not answer:
             raise RuntimeError("The configured LLM returned an empty answer.")
         grounding_issue = _llm_grounding_issue(
