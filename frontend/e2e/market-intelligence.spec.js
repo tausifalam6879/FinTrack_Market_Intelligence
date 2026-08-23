@@ -83,6 +83,26 @@ test("operations observability is visible in MLOps without page overflow", async
   expect(overflow).toBeLessThanOrEqual(1);
 });
 
+test("laptop intelligence labels remain readable without horizontal overflow", async ({ page, isMobile }) => {
+  test.skip(isMobile, "Desktop-only typography rule; mobile sizing is intentionally unchanged.");
+  await page.getByRole("tab", { name: /Intelligence & MLOps/i }).click();
+
+  const fontSizes = await page.locator(".intelligence-main").evaluate((root) => {
+    const read = (selector) => Number.parseFloat(getComputedStyle(root.querySelector(selector)).fontSize);
+    return {
+      operationsKicker: read(".operations-summary-kicker"),
+      metricAction: read(".metric-explain-button"),
+      outcomeLabel: read(".prediction-outcome-summary dt")
+    };
+  });
+
+  expect(fontSizes.operationsKicker).toBeGreaterThanOrEqual(12);
+  expect(fontSizes.metricAction).toBeGreaterThanOrEqual(12);
+  expect(fontSizes.outcomeLabel).toBeGreaterThanOrEqual(11);
+  const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
+  expect(overflow).toBeLessThanOrEqual(1);
+});
+
 test("hero video stays inside its frame with picture-in-picture disabled", async ({ page }) => {
   const frame = page.locator(".hero-visual");
   const video = page.locator(".hero-video");

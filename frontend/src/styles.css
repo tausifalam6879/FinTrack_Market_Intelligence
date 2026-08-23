@@ -1074,6 +1074,54 @@ main { width: min(1500px, calc(100% - 40px)); margin: 0 auto; }
 .chat-form input { min-height: 47px; padding: 0 14px; border-radius: 12px; }
 .chat-form button { min-width: 90px; border: 0; border-radius: 12px; color: white; background: #76559b; font-weight: 800; }
 
+/* Laptop and desktop readability: dense research evidence must not render as micro text. */
+@media (min-width: 821px) {
+  .quote-rail-heading { font-size: 13px; }
+  .quote-rail-heading small,
+  .threshold-control > div,
+  .alert-disclaimer { font-size: 12px; line-height: 1.5; }
+  .news-visual b { font-size: 10px; }
+  .news-card-meta { font-size: 12px; }
+  .news-source,
+  .news-card-actions a,
+  .news-footer-note { font-size: 13px; line-height: 1.5; }
+
+  .intelligence-main .eyebrow { font-size: 13px; }
+  .intelligence-main p { font-size: 13px; line-height: 1.55; }
+  .intelligence-main span { font-size: 12px; line-height: 1.4; }
+  .intelligence-main small,
+  .intelligence-main dt,
+  .intelligence-main th { font-size: 11px; line-height: 1.45; }
+  .intelligence-main dd,
+  .intelligence-main td { font-size: 12px; line-height: 1.45; }
+  .intelligence-main .prediction-outcome-summary > div span { font-size: 12px; }
+  .intelligence-main h4 { font-size: 16px; line-height: 1.35; }
+  .intelligence-view-tabs button { font-size: 13px; }
+  .operations-summary-copy strong { font-size: 17px; }
+  .operations-summary-link,
+  .research-actions button,
+  .metric-explain-button,
+  .prediction-outcome-summary button,
+  .saved-compare-toggle,
+  .saved-remove,
+  .context-agent-bar button { min-height: 34px; font-size: 12px; line-height: 1.2; }
+  .company-summary,
+  .method-note,
+  .fundamentals-method,
+  [class$="-method"],
+  [class$="-caution"],
+  [class$="-warning"] { font-size: 12px; line-height: 1.55; }
+
+  .agent-drawer .suggested-row button { font-size: 12px; }
+  .agent-drawer .chat-message p { font-size: 13px; line-height: 1.55; }
+  .agent-drawer .agent-evidence-trace summary,
+  .agent-drawer .agent-evidence-trace li strong { font-size: 12px; }
+  .agent-drawer .agent-evidence-trace li small,
+  .agent-drawer .agent-evidence-trace li em,
+  .agent-drawer .agent-citation-list a,
+  .agent-drawer .agent-evidence-trace > p { font-size: 11px; line-height: 1.45; }
+}
+
 @media (min-width: 1201px) {
   .intelligence-page { display: block; }
   .intelligence-page .intelligence-main { width: 100%; min-width: 0; }
