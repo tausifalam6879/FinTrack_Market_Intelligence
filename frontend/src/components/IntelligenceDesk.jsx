@@ -371,7 +371,11 @@ export default function IntelligenceDesk({ initialSymbol = "^NSEI" }) {
       const response = await marketApi.agent({ message: `${sectionInstruction} User question: ${clean}`, symbol, recentMessages: recentOverride });
       setMessages((current) => [...current, { role: "assistant", content: response.answer, meta: response }]);
     } catch {
-      setMessages((current) => [...current, { role: "assistant", content: "The research agent is temporarily unavailable. Price analytics above remain independent of the AI response.", meta: { llmStatus: "offline" } }]);
+      const localApi = /(?:localhost|127\.0\.0\.1)/i.test(marketApi.baseUrl);
+      const offlineHelp = !window.navigator.onLine && !localApi
+        ? "Offline Ollama cannot be reached from the hosted website. Run start-local.ps1 and open http://127.0.0.1:5173, then ask again."
+        : "The local research backend is unavailable. Start the FinTrack local services and retry; the displayed price analytics remain independent.";
+      setMessages((current) => [...current, { role: "assistant", content: offlineHelp, meta: { llmStatus: "offline" } }]);
     } finally { setAsking(false); }
   };
 

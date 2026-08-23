@@ -1,4 +1,5 @@
 import os
+import json
 import time
 import unittest
 from unittest.mock import patch
@@ -51,6 +52,34 @@ class HybridLlmTests(unittest.TestCase):
         with patch.dict(os.environ, {"LLM_PROVIDER": "hybrid"}, clear=False):
             with self.assertRaisesRegex(RuntimeError, "Hybrid LLM providers are unavailable"):
                 market._provider_chat(MESSAGES)
+
+    @patch("market_intelligence.urlopen")
+    def test_ollama_receives_compact_question_with_requested_model_metrics(self, urlopen):
+        urlopen.return_value.__enter__.return_value.read.return_value = json.dumps({
+            "message": {"content": "RSI is neutral."}
+        }).encode("utf-8")
+        evidence = {
+            "asset": {"symbol": "^NSEI", "price": 24252},
+            "model": {"probabilityUp": 48.7, "rsi14": 45.2, "outlook": "NEUTRAL"},
+            "derivedCalculations": {"rangeWidth": 358.4},
+            "drivers": [[f"factor-{index}", index] for index in range(20)],
+            "largeUnusedSection": "x" * 7000,
+        }
+        messages = [
+            {"role": "system", "content": "long hosted model policy " * 500},
+            {"role": "user", "content": f"Question: RSI samjhao\nEvidence: {json.dumps(evidence)}"},
+        ]
+
+        answer = market._ollama_chat(messages)
+
+        request = urlopen.call_args.args[0]
+        body = json.loads(request.data.decode("utf-8"))
+        compact_prompt = body["messages"][-1]["content"]
+        self.assertEqual("RSI is neutral.", answer)
+        self.assertIn('"rsi14": 45.2', compact_prompt)
+        self.assertIn('"probabilityUp": 48.7', compact_prompt)
+        self.assertNotIn("long hosted model policy", body["messages"][0]["content"])
+        self.assertLessEqual(len(compact_prompt), 2700)
 
 
 if __name__ == "__main__":

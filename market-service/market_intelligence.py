@@ -402,11 +402,53 @@ def _history(symbol: str, period: str) -> pd.DataFrame:
     cached = _cache_get(key)
     if cached is not None:
         return cached.copy()
-    frame = yf.Ticker(symbol).history(period=period, interval="1d", auto_adjust=False)
+    try:
+        frame = yf.Ticker(symbol).history(period=period, interval="1d", auto_adjust=False)
+    except Exception as error:
+        logger.info("Live history unavailable for %s; checking persistent offline bars: %s", symbol, type(error).__name__)
+        frame = None
+    if frame is None or frame.empty or "Close" not in frame:
+        frame = _persisted_history(symbol, period)
     if frame is None or frame.empty or "Close" not in frame:
         raise ValueError(f"Market data is unavailable for {symbol}.")
     frame = frame.dropna(subset=["Close"]).copy()
     return _cache_put(key, frame).copy()
+
+
+def _persisted_history(symbol: str, period: str) -> pd.DataFrame:
+    """Load previously validated OHLCV bars when the public provider is offline."""
+    try:
+        repository = Database()
+        repository.initialize_schema()
+        rows = repository.load_market_bars(symbol)
+    except Exception as error:
+        logger.info("Persistent offline history unavailable for %s: %s", symbol, type(error).__name__)
+        return pd.DataFrame()
+    if not rows:
+        return pd.DataFrame()
+
+    frame = pd.DataFrame(rows).rename(columns={
+        "open": "Open",
+        "high": "High",
+        "low": "Low",
+        "close": "Close",
+        "adjusted_close": "Adj Close",
+        "volume": "Volume",
+    })
+    frame.index = pd.to_datetime(frame.pop("session_date"), utc=True, errors="coerce")
+    frame = frame.loc[~frame.index.isna()].sort_index()
+
+    normalized_period = str(period or "max").strip().lower()
+    match = re.fullmatch(r"(\d+)(d|mo|y)", normalized_period)
+    if match:
+        amount, unit = int(match.group(1)), match.group(2)
+        sessions = amount if unit == "d" else amount * 23 if unit == "mo" else amount * 253
+        frame = frame.tail(max(1, sessions))
+    elif normalized_period == "ytd" and not frame.empty:
+        frame = frame.loc[frame.index.year == frame.index[-1].year]
+
+    frame.attrs["fintrack_source"] = "FinTrack persistent validated history (offline)"
+    return frame
 
 
 def _persist_research_history(symbol: str, name: str, frame: pd.DataFrame) -> int:
@@ -511,7 +553,7 @@ def _historical_session(symbol: str, requested_date: date) -> Dict[str, Any]:
         "intradayRange": _round(float(row.get("High", close)) - float(row.get("Low", close))),
         "volume": _round(row.get("Volume"), 0),
         "nextSession": next_session,
-        "source": "Yahoo Finance via yfinance",
+        "source": frame.attrs.get("fintrack_source", "Yahoo Finance via yfinance"),
     }
 
 
@@ -605,7 +647,7 @@ def _snapshot_from_frame(
         "change": _round(change),
         "changePercent": _round((change / previous_close) * 100 if previous_close else 0),
         "dataAsOf": frame.index[-1].isoformat(),
-        "source": "Yahoo Finance via yfinance",
+        "source": frame.attrs.get("fintrack_source", "Yahoo Finance via yfinance"),
         "quoteMode": quote_mode,
         "status": "available",
     }
@@ -3819,12 +3861,53 @@ def _ollama_chat(messages: List[Dict[str, str]]) -> str:
     base_url = os.getenv("OLLAMA_BASE_URL", "http://127.0.0.1:11434").rstrip("/")
     model = os.getenv("OLLAMA_MODEL", "").strip() or os.getenv("LLM_MODEL", "").strip() or "llama3.2:latest"
     timeout = max(5, int(os.getenv("OLLAMA_TIMEOUT_MS", os.getenv("LLM_TIMEOUT_MS", "15000"))) // 1000)
+    compact_messages = []
+    for item in messages:
+        role = item.get("role")
+        content = str(item.get("content") or "")
+        if role == "system":
+            content = (
+                "You are FinTrack's local offline evidence explainer. Use only the supplied Evidence. "
+                "Answer in the user's language in at most three short bullet lines and 35 words; no greeting. "
+                "Explain the requested metric, "
+                "interpret its displayed value and state one limitation. Never invent live data, guarantee a "
+                "prediction or give personalized buy/sell advice."
+            )
+        elif role == "user" and "\nEvidence: " in content:
+            question_text, _, evidence_text = content.partition("\nEvidence: ")
+            try:
+                evidence = json.loads(evidence_text)
+                ordered_evidence = {
+                    key: evidence[key]
+                    for key in ("asset", "model", "derivedCalculations")
+                    if key in evidence
+                }
+                ordered_evidence.update({
+                    key: value for key, value in evidence.items()
+                    if key not in ordered_evidence and key != "drivers"
+                })
+                if evidence.get("drivers"):
+                    ordered_evidence["drivers"] = evidence["drivers"][:4]
+                compact_evidence = json.dumps(ordered_evidence, default=str)
+                content = f"{question_text}\nEvidence: {compact_evidence[:2600]}"
+            except (TypeError, ValueError, json.JSONDecodeError):
+                if len(content) > 1500:
+                    content = f"{content[:450]}\n[compact evidence]\n{content[-900:]}"
+        elif role == "user" and len(content) > 1500:
+            content = f"{content[:450]}\n[compact evidence]\n{content[-900:]}"
+        elif role == "assistant":
+            content = content[-300:]
+        compact_messages.append({"role": role, "content": content})
     body = json.dumps({
         "model": model,
-        "messages": messages,
+        "messages": compact_messages,
         "stream": False,
         "keep_alive": os.getenv("OLLAMA_KEEP_ALIVE", "30m"),
-        "options": {"temperature": 0.1, "num_predict": 700},
+        "options": {
+            "temperature": 0.1,
+            "num_ctx": 4096,
+            "num_predict": max(50, int(os.getenv("OLLAMA_NUM_PREDICT", "60"))),
+        },
     }).encode("utf-8")
     request = UrlRequest(
         f"{base_url}/api/chat",
@@ -5453,7 +5536,10 @@ async def market_agent(request: FastApiRequest):
             answer, llm_provider = _provider_chat(messages)
         except RuntimeError as first_error:
             first_failure = _llm_failure_code(first_error)
-            if first_failure not in {"provider_timeout", "provider_unavailable", "provider_error"}:
+            configured_provider = os.getenv("LLM_PROVIDER", "").strip().lower()
+            if configured_provider in {"hybrid", "auto"} or first_failure not in {
+                "provider_timeout", "provider_unavailable", "provider_error"
+            }:
                 raise
             # One immediate retry absorbs transient Gemini/network failures.
             # Authentication, quota, invalid-request and model errors are not

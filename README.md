@@ -245,10 +245,13 @@ GEMINI_CIRCUIT_COOLDOWN_SECONDS=10
 OLLAMA_MODEL=llama3.2:latest
 OLLAMA_BASE_URL=http://127.0.0.1:11434
 OLLAMA_KEEP_ALIVE=30m
-OLLAMA_TIMEOUT_MS=20000
+OLLAMA_TIMEOUT_MS=45000
+OLLAMA_NUM_PREDICT=60
 ```
 
 Download the Ollama model before going offline (`ollama pull llama3.2`). When FastAPI runs inside Docker Desktop on Windows, use `OLLAMA_BASE_URL=http://host.docker.internal:11434`. Render cannot call Ollama on a user's laptop, so the hosted service remains Gemini with deterministic verified fallback; hybrid Ollama failover is for the local/offline stack.
+
+When a live market provider is unreachable, the local API reads previously validated OHLCV bars from its database. Offline price research therefore works for symbols already persisted on that computer; a never-seen symbol needs one online ingestion before its evidence can be used offline.
 
 Never place API keys in the React app or commit them to Git.
 

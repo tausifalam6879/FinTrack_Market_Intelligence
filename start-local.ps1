@@ -1,3 +1,5 @@
+param([switch]$InstallDependencies)
+
 $ErrorActionPreference = "Stop"
 $projectRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $serviceRoot = Join-Path $projectRoot "market-service"
@@ -14,10 +16,26 @@ try {
     Write-Warning "Ollama is installed but its local service is not reachable. Start Ollama before asking offline questions."
 }
 
-$apiCommand = "Set-Location '$serviceRoot'; `$env:LLM_PROVIDER='hybrid'; `$env:GEMINI_TIMEOUT_MS='8000'; `$env:GEMINI_CIRCUIT_COOLDOWN_SECONDS='10'; `$env:OLLAMA_MODEL='llama3.2:latest'; `$env:OLLAMA_BASE_URL='http://127.0.0.1:11434'; `$env:OLLAMA_TIMEOUT_MS='30000'; `$env:OLLAMA_KEEP_ALIVE='30m'; if (-not (Test-Path .venv)) { python -m venv .venv }; .\.venv\Scripts\python.exe -m pip install -r requirements.txt; .\.venv\Scripts\python.exe -m uvicorn app:app --reload --port 8002"
+$venvPython = Join-Path $serviceRoot ".venv\Scripts\python.exe"
+if ($InstallDependencies) {
+    if (-not (Test-Path $venvPython)) { python -m venv (Join-Path $serviceRoot ".venv") }
+    & $venvPython -m pip install -r (Join-Path $serviceRoot "requirements.txt")
+}
+$pythonExe = if (Test-Path $venvPython) { $venvPython } else { (Get-Command python).Source }
+& $pythonExe -c "import fastapi, uvicorn, pandas, sklearn" 2>$null
+if ($LASTEXITCODE -ne 0) { throw "Python dependencies are missing. Connect once and run: .\start-local.ps1 -InstallDependencies" }
+if (-not (Test-Path (Join-Path $frontendRoot "node_modules"))) {
+    throw "Frontend dependencies are missing. Connect once, run npm install inside frontend, then retry."
+}
+$gatewayJar = Get-ChildItem (Join-Path $gatewayRoot "target\*.jar") -ErrorAction SilentlyContinue | Select-Object -First 1
+if (-not $gatewayJar) {
+    throw "Spring gateway JAR is missing. Connect once and run .\mvnw.cmd package inside gateway-service."
+}
+
+$apiCommand = "Set-Location '$serviceRoot'; `$env:LLM_PROVIDER='hybrid'; `$env:GEMINI_TIMEOUT_MS='8000'; `$env:GEMINI_CIRCUIT_COOLDOWN_SECONDS='10'; `$env:OLLAMA_MODEL='llama3.2:latest'; `$env:OLLAMA_BASE_URL='http://127.0.0.1:11434'; `$env:OLLAMA_TIMEOUT_MS='45000'; `$env:OLLAMA_KEEP_ALIVE='30m'; `$env:OLLAMA_NUM_PREDICT='60'; & '$pythonExe' -m uvicorn app:app --port 8002"
 Start-Process powershell -WindowStyle Hidden -ArgumentList "-NoExit", "-Command", $apiCommand
-Start-Process powershell -WindowStyle Hidden -ArgumentList "-NoExit", "-Command", "Set-Location '$gatewayRoot'; .\mvnw.cmd spring-boot:run"
-Start-Process powershell -WindowStyle Hidden -ArgumentList "-NoExit", "-Command", "Set-Location '$frontendRoot'; `$env:VITE_MARKET_API_BASE_URL='http://localhost:8081'; if (-not (Test-Path node_modules)) { npm install }; npm run dev"
+Start-Process powershell -WindowStyle Hidden -ArgumentList "-NoExit", "-Command", "java -jar '$($gatewayJar.FullName)'"
+Start-Process powershell -WindowStyle Hidden -ArgumentList "-NoExit", "-Command", "Set-Location '$frontendRoot'; `$env:VITE_MARKET_API_BASE_URL='http://localhost:8081'; npm run dev"
 
 Write-Host "FinTrack Market Intelligence is starting."
 Write-Host "Frontend: http://localhost:5173"
