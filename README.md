@@ -234,13 +234,21 @@ pip install -r requirements.txt
 uvicorn app:app --reload --port 8002
 ```
 
-Gemini is optional. Without it, the research agent returns a deterministic answer based on the same verified tools.
+Gemini and Ollama are optional. Local hybrid mode gives Gemini an eight-second response budget, then switches to Ollama for a ten-second Gemini cooldown. If both providers are unavailable or an answer fails grounding validation, the research agent returns a deterministic answer based on the same verified tools.
 
 ```env
-LLM_PROVIDER=gemini
-LLM_MODEL=gemini-3.5-flash-lite
+LLM_PROVIDER=hybrid
+GEMINI_MODEL=gemini-3.5-flash-lite
 GEMINI_API_KEY=your-new-server-side-key
+GEMINI_TIMEOUT_MS=8000
+GEMINI_CIRCUIT_COOLDOWN_SECONDS=10
+OLLAMA_MODEL=llama3.2:latest
+OLLAMA_BASE_URL=http://127.0.0.1:11434
+OLLAMA_KEEP_ALIVE=30m
+OLLAMA_TIMEOUT_MS=20000
 ```
+
+Download the Ollama model before going offline (`ollama pull llama3.2`). When FastAPI runs inside Docker Desktop on Windows, use `OLLAMA_BASE_URL=http://host.docker.internal:11434`. Render cannot call Ollama on a user's laptop, so the hosted service remains Gemini with deterministic verified fallback; hybrid Ollama failover is for the local/offline stack.
 
 Never place API keys in the React app or commit them to Git.
 

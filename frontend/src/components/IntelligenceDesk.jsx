@@ -51,6 +51,14 @@ const cleanAgentAnswer = (value = "") => String(value)
   .replace(/\n{3,}/g, "\n\n")
   .trim();
 
+const groundedProviderLabel = (meta = {}) => {
+  const provider = String(meta.llmProvider || "").toLowerCase();
+  const providerName = provider === "ollama" ? "Ollama local" : provider === "gemini" ? "Gemini" : "LLM";
+  if (meta.llmStatus === "connected" && meta.llmAnswerAccepted) return `${providerName} grounded`;
+  if (meta.llmStatus === "grounding_fallback") return `${providerName} checked · verified tool answer used`;
+  return "Verified tool fallback";
+};
+
 export default function IntelligenceDesk({ initialSymbol = "^NSEI" }) {
   const [symbol, setSymbol] = useState(initialSymbol);
   const [draftSymbol, setDraftSymbol] = useState(initialSymbol);
@@ -490,8 +498,8 @@ export default function IntelligenceDesk({ initialSymbol = "^NSEI" }) {
           ].map(([value, label]) => <button type="button" key={value} className={activeView === value ? "active" : ""} onClick={() => setActiveView(value)}>{label}</button>)}
         </nav>
         <div className="context-agent-bar">
-          <div><strong>Need help with this section?</strong><span>Grounded Gemini will answer only from the visible {activeView} evidence.</span></div>
-          <button type="button" onClick={openContextAgent}>✦ Ask Grounded Gemini</button>
+          <div><strong>Need help with this section?</strong><span>Grounded AI will answer only from the visible {activeView} evidence.</span></div>
+          <button type="button" onClick={openContextAgent}>✦ Ask Grounded AI</button>
         </div>
         {activeView === "company" && !analysis.symbol.startsWith("^") && <CompanyFundamentalsPanel data={companyResearch} loading={companyResearchLoading} error={companyResearchError} />}
         {activeView === "company" && !analysis.symbol.startsWith("^") && <SectorPeerPanel data={peerComparison} loading={peerComparisonLoading} error={peerComparisonError} />}
@@ -537,16 +545,16 @@ export default function IntelligenceDesk({ initialSymbol = "^NSEI" }) {
       </>}
 
       </div>
-      <button type="button" className="agent-launcher" onClick={openContextAgent}>✦ Ask Grounded Gemini</button>
+      <button type="button" className="agent-launcher" onClick={openContextAgent}>✦ Ask Grounded AI</button>
       <article className={`agent-panel agent-drawer${agentOpen ? " open" : ""}`}>
-        <div className="panel-title"><div><p className="eyebrow">GROUNDED GEMINI · {activeView.toUpperCase()}</p><h3>Ask about this section</h3></div><button type="button" className="agent-close" onClick={() => setAgentOpen(false)} aria-label="Close research agent">×</button></div>
+        <div className="panel-title"><div><p className="eyebrow">GROUNDED AI · {activeView.toUpperCase()}</p><h3>Ask about this section</h3></div><button type="button" className="agent-close" onClick={() => setAgentOpen(false)} aria-label="Close research agent">×</button></div>
         <div className="suggested-row">
           {suggestedQuestions.map((item) => <button key={item} onClick={() => send(item)}>{item}</button>)}
         </div>
         <div className="chat-log">
           {messages.length === 0 && <div className="agent-empty">Ask about prices, factors, market breadth, model weakness or current headlines.</div>}
           {messages.map((message, index) => <div key={index} className={`chat-message ${message.role}`}><p>{message.role === "assistant" ? cleanAgentAnswer(message.content) : message.content}</p>{message.meta && <>
-            <small>{message.meta.llmStatus === "connected" && message.meta.llmAnswerAccepted ? "Gemini grounded" : message.meta.llmStatus === "grounding_fallback" ? "LLM checked · verified tool answer used" : "Verified tool fallback"}</small>
+            <small>{groundedProviderLabel(message.meta)}</small>
             {message.role === "assistant" && <AgentEvidenceTrace meta={message.meta} />}
           </>}</div>)}
           {asking && <div className="chat-message assistant"><p>Checking verified market evidence, calculations and model scenarios...</p></div>}
@@ -1717,7 +1725,7 @@ function RuntimeOperationsPanel({ data, error }) {
   const languageModel = data.dependencies?.languageModel || {};
   return <section className="runtime-operations" aria-labelledby="runtime-operations-title">
     <div className="runtime-operations-heading">
-      <div><span className="monitoring-kicker">LIVE SERVICE OBSERVABILITY</span><strong id="runtime-operations-title">Latency, failures and Gemini fallback evidence</strong></div>
+      <div><span className="monitoring-kicker">LIVE SERVICE OBSERVABILITY</span><strong id="runtime-operations-title">Latency, failures and AI fallback evidence</strong></div>
       <span>{data.status} · aggregate only</span>
     </div>
     <div className="monitoring-policy-grid">
@@ -1725,8 +1733,8 @@ function RuntimeOperationsPanel({ data, error }) {
       <ValidationStat label="Server error rate" value={`${api.errorRatePercent ?? 0}%`} />
       <ValidationStat label="Average latency" value={api.averageLatencyMs === null || api.averageLatencyMs === undefined ? "Collecting" : `${api.averageLatencyMs} ms`} />
       <ValidationStat label="P95 latency" value={api.p95LatencyMs === null || api.p95LatencyMs === undefined ? "Collecting" : `${api.p95LatencyMs} ms`} />
-      <ValidationStat label="Gemini accepted" value={llm.acceptedRatePercent === null || llm.acceptedRatePercent === undefined ? "No calls yet" : `${llm.acceptedRatePercent}%`} />
-      <ValidationStat label="Gemini fallback" value={llm.fallbackRatePercent === null || llm.fallbackRatePercent === undefined ? "No calls yet" : `${llm.fallbackRatePercent}%`} />
+      <ValidationStat label="AI answer accepted" value={llm.acceptedRatePercent === null || llm.acceptedRatePercent === undefined ? "No calls yet" : `${llm.acceptedRatePercent}%`} />
+      <ValidationStat label="Verified fallback" value={llm.fallbackRatePercent === null || llm.fallbackRatePercent === undefined ? "No calls yet" : `${llm.fallbackRatePercent}%`} />
       <ValidationStat label="Database" value={`${database.backend || "checking"} · ${database.status || "checking"}`} />
       <ValidationStat label="LLM provider" value={`${languageModel.provider || "none"} · ${languageModel.status || "fallback"}`} />
     </div>

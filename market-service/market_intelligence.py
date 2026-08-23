@@ -341,6 +341,8 @@ _cache: Dict[str, Dict[str, Any]] = {}
 _overview_lock = Lock()
 _prediction_audit: Dict[str, List[Dict[str, Any]]] = {}
 _prediction_audit_lock = Lock()
+_llm_circuit_lock = Lock()
+_gemini_circuit_open_until = 0.0
 
 
 class MarketAgentRequest(BaseModel):
@@ -3815,13 +3817,13 @@ def market_prediction(symbol: str) -> Dict[str, Any]:
 
 def _ollama_chat(messages: List[Dict[str, str]]) -> str:
     base_url = os.getenv("OLLAMA_BASE_URL", "http://127.0.0.1:11434").rstrip("/")
-    model = os.getenv("LLM_MODEL", "llama3.2:3b")
-    timeout = max(5, int(os.getenv("LLM_TIMEOUT_MS", "15000")) // 1000)
+    model = os.getenv("OLLAMA_MODEL", "").strip() or os.getenv("LLM_MODEL", "").strip() or "llama3.2:latest"
+    timeout = max(5, int(os.getenv("OLLAMA_TIMEOUT_MS", os.getenv("LLM_TIMEOUT_MS", "15000"))) // 1000)
     body = json.dumps({
         "model": model,
         "messages": messages,
         "stream": False,
-        "keep_alive": "10m",
+        "keep_alive": os.getenv("OLLAMA_KEEP_ALIVE", "30m"),
         "options": {"temperature": 0.1, "num_predict": 700},
     }).encode("utf-8")
     request = UrlRequest(
@@ -3852,8 +3854,8 @@ def _gemini_chat(messages: List[Dict[str, str]]) -> str:
     api_key = os.getenv("GEMINI_API_KEY", "").strip()
     if not api_key:
         raise RuntimeError("Gemini is not configured. Set GEMINI_API_KEY on the Python backend.")
-    configured_model = os.getenv("LLM_MODEL", "gemini-3.5-flash-lite").strip()
-    timeout = max(5.0, int(os.getenv("LLM_TIMEOUT_MS", "15000")) / 1000)
+    configured_model = os.getenv("GEMINI_MODEL", "").strip() or os.getenv("LLM_MODEL", "").strip() or "gemini-3.5-flash-lite"
+    timeout = max(1.0, int(os.getenv("GEMINI_TIMEOUT_MS", "8000")) / 1000)
     deadline = time.monotonic() + timeout
     system_text = "\n".join(item["content"] for item in messages if item.get("role") == "system")
     contents = []
@@ -3948,9 +3950,42 @@ def _provider_chat(messages: List[Dict[str, str]]) -> tuple[str, str]:
         return _ollama_chat(messages), "ollama"
     if provider == "gemini":
         return _gemini_chat(messages), "gemini"
+    if provider in {"hybrid", "auto"}:
+        return _hybrid_chat(messages)
     if provider in {"openai", "openai-compatible"}:
         return _openai_compatible_chat(messages, provider), provider
     raise RuntimeError(f"Unsupported LLM_PROVIDER: {provider}")
+
+
+def _hybrid_chat(messages: List[Dict[str, str]]) -> tuple[str, str]:
+    """Prefer Gemini, then use local Ollama during a short Gemini cooldown."""
+    global _gemini_circuit_open_until
+
+    now = time.monotonic()
+    with _llm_circuit_lock:
+        try_gemini = now >= _gemini_circuit_open_until
+
+    if try_gemini:
+        try:
+            answer = _gemini_chat(messages)
+            with _llm_circuit_lock:
+                _gemini_circuit_open_until = 0.0
+            return answer, "gemini"
+        except RuntimeError as error:
+            cooldown = max(1.0, float(os.getenv("GEMINI_CIRCUIT_COOLDOWN_SECONDS", "10")))
+            with _llm_circuit_lock:
+                _gemini_circuit_open_until = time.monotonic() + cooldown
+            logger.warning(
+                "Gemini hybrid provider unavailable; using local Ollama for %.1f seconds: %s",
+                cooldown,
+                _llm_failure_code(error),
+            )
+
+    try:
+        return _ollama_chat(messages), "ollama"
+    except RuntimeError as error:
+        logger.warning("Local Ollama hybrid fallback unavailable: %s", _llm_failure_code(error))
+        raise RuntimeError("Hybrid LLM providers are unavailable.") from error
 
 
 def _llm_failure_code(error: RuntimeError) -> str:

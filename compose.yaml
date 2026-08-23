@@ -42,15 +42,23 @@ services:
       DATABASE_BACKUP_POLICY: ${DATABASE_BACKUP_POLICY:-local-development}
       MLFLOW_TRACKING_URI: http://mlflow:5000
       MLFLOW_EXPERIMENT_NAME: fintrack-market-models
-      LLM_PROVIDER: ${LLM_PROVIDER:-}
-      LLM_MODEL: ${LLM_MODEL:-}
+      LLM_PROVIDER: ${LLM_PROVIDER:-hybrid}
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      GEMINI_MODEL: ${GEMINI_MODEL:-gemini-3.5-flash-lite}
+      GEMINI_TIMEOUT_MS: ${GEMINI_TIMEOUT_MS:-8000}
+      GEMINI_CIRCUIT_COOLDOWN_SECONDS: ${GEMINI_CIRCUIT_COOLDOWN_SECONDS:-10}
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-llama3.2:latest}
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
+      OLLAMA_TIMEOUT_MS: ${OLLAMA_TIMEOUT_MS:-30000}
+      OLLAMA_KEEP_ALIVE: ${OLLAMA_KEEP_ALIVE:-30m}
       SEC_USER_AGENT: ${SEC_USER_AGENT:-FinTrack Market Intelligence local@example.com}
     ports:
       - "127.0.0.1:${API_PORT:-8002}:8000"
     volumes:
       - api_data:/app/data
       - model_artifacts:/app/artifacts
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     depends_on:
       postgres:
         condition: service_healthy

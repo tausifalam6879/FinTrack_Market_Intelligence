@@ -18,12 +18,13 @@ services:
         value: not_configured
       - key: LLM_PROVIDER
         value: gemini
-      - key: LLM_MODEL
+      # Render cannot reach Ollama running on a user's laptop; hosted mode stays Gemini-first.
+      - key: GEMINI_MODEL
         value: gemini-3.5-flash-lite
       - key: GEMINI_API_KEY
         sync: false
-      - key: LLM_TIMEOUT_MS
-        value: "25000"
+      - key: GEMINI_TIMEOUT_MS
+        value: "8000"
       - key: MARKET_OVERVIEW_CACHE_TTL_SECONDS
         value: "900"
 

@@ -34,7 +34,7 @@ async function mockMarketApi(page) {
     if (path.endsWith("/market/experiments")) return json({ runs: [], count: 0, configuration: { experimentName: "FinTrack", backend: "MLflow" } });
     if (path.endsWith("/market/agent")) return json({
       answer: "Probability up model ke available evidence mein agle session ke upward scenario ka estimate hai. Yeh guarantee nahi hai.",
-      llmStatus: "connected", llmAnswerAccepted: true, agentPlan: { intents: ["model_and_technical_analysis"] }, toolTrace: [], citations: []
+      llmStatus: "connected", llmAnswerAccepted: true, llmProvider: "gemini", agentPlan: { intents: ["model_and_technical_analysis"] }, toolTrace: [], citations: []
     });
     if (path.endsWith("/market/companies")) return json({ items: [] });
     if (path.endsWith("/market/documents")) return json({ items: [], preparation: { supported: false } });
@@ -78,7 +78,7 @@ test("metric explanation is grounded and concise", async ({ page }) => {
 test("operations observability is visible in MLOps without page overflow", async ({ page }) => {
   await page.getByRole("tab", { name: /Intelligence & MLOps/i }).click();
   await page.getByRole("button", { name: "Model & MLOps" }).click();
-  await expect(page.getByText("Latency, failures and Gemini fallback evidence")).toBeVisible();
+  await expect(page.getByText("Latency, failures and AI fallback evidence")).toBeVisible();
   const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
   expect(overflow).toBeLessThanOrEqual(1);
 });

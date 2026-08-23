@@ -65,6 +65,28 @@ class RuntimeHealthTests(unittest.TestCase):
         self.assertEqual("not-required", report["authentication"])
         self.assertGreaterEqual(report["uptimeSeconds"], 0)
 
+    def test_hybrid_llm_policy_is_reported_without_exposing_secrets_or_urls(self):
+        secret = "private-test-key"
+        local_url = "http://127.0.0.1:11434"
+        with patch.dict(os.environ, {
+            "LLM_PROVIDER": "hybrid",
+            "GEMINI_API_KEY": secret,
+            "GEMINI_TIMEOUT_MS": "8000",
+            "GEMINI_CIRCUIT_COOLDOWN_SECONDS": "10",
+            "OLLAMA_BASE_URL": local_url,
+        }, clear=False):
+            report = readiness_report()
+
+        language_model = report["checks"]["languageModel"]
+        serialized = json.dumps(language_model)
+        self.assertEqual("hybrid", language_model["provider"])
+        self.assertEqual("gemini", language_model["primaryProvider"])
+        self.assertEqual("ollama", language_model["fallbackProvider"])
+        self.assertEqual(8000, language_model["geminiTimeoutMs"])
+        self.assertEqual(10, language_model["circuitCooldownSeconds"])
+        self.assertNotIn(secret, serialized)
+        self.assertNotIn(local_url, serialized)
+
 
 if __name__ == "__main__":
     unittest.main()
