@@ -3857,6 +3857,63 @@ def market_prediction(symbol: str) -> Dict[str, Any]:
     return _cache_put(cache_key, payload)
 
 
+def _ollama_evidence_for_question(question: str, evidence: Dict[str, Any]) -> Dict[str, Any]:
+    """Give a small local model only the fields needed for the user's metric."""
+    lowered = question.lower()
+    asset = evidence.get("asset") or {}
+    model = evidence.get("model") or {}
+    reliability = {
+        key: model.get(key)
+        for key in ("balancedAccuracy", "quality")
+        if model.get(key) is not None
+    }
+    if "rsi" in lowered:
+        return {
+            "asset": {key: asset.get(key) for key in ("symbol", "name", "asOf")},
+            "requestedMetric": {
+                "name": "RSI 14",
+                "rsi14": model.get("rsi14"),
+                "interpretationRule": "above 70 overbought; below 30 oversold; 30-70 neutral zone",
+            },
+            "modelReliability": reliability,
+        }
+    if any(term in lowered for term in ("outlook", "prediction", "forecast", "probability")):
+        return {
+            "asset": {key: asset.get(key) for key in ("symbol", "name", "price", "changePct", "asOf")},
+            "requestedMetric": {
+                "outlook": model.get("outlook"),
+                "probabilityUp": model.get("probabilityUp"),
+                "probabilityDown": (
+                    round(100 - float(model["probabilityUp"]), 1)
+                    if model.get("probabilityUp") is not None else None
+                ),
+                "meaning": "probabilityUp is the model's next-session upward probability, not a macro probability",
+            },
+            "modelReliability": reliability,
+        }
+    if "range" in lowered:
+        return {
+            "asset": {key: asset.get(key) for key in ("symbol", "name", "price", "asOf")},
+            "requestedMetric": {
+                "expectedRange": model.get("range"),
+                "meaning": "model-estimated next-session range, not guaranteed high and low",
+            },
+            "modelReliability": reliability,
+        }
+    ordered = {
+        key: evidence[key]
+        for key in ("asset", "model", "derivedCalculations")
+        if key in evidence
+    }
+    ordered.update({
+        key: value for key, value in evidence.items()
+        if key not in ordered and key != "drivers"
+    })
+    if evidence.get("drivers"):
+        ordered["drivers"] = evidence["drivers"][:4]
+    return ordered
+
+
 def _ollama_chat(messages: List[Dict[str, str]]) -> str:
     base_url = os.getenv("OLLAMA_BASE_URL", "http://127.0.0.1:11434").rstrip("/")
     model = os.getenv("OLLAMA_MODEL", "").strip() or os.getenv("LLM_MODEL", "").strip() or "llama3.2:1b"
@@ -3877,17 +3934,7 @@ def _ollama_chat(messages: List[Dict[str, str]]) -> str:
             question_text, _, evidence_text = content.partition("\nEvidence: ")
             try:
                 evidence = json.loads(evidence_text)
-                ordered_evidence = {
-                    key: evidence[key]
-                    for key in ("asset", "model", "derivedCalculations")
-                    if key in evidence
-                }
-                ordered_evidence.update({
-                    key: value for key, value in evidence.items()
-                    if key not in ordered_evidence and key != "drivers"
-                })
-                if evidence.get("drivers"):
-                    ordered_evidence["drivers"] = evidence["drivers"][:4]
+                ordered_evidence = _ollama_evidence_for_question(question_text, evidence)
                 compact_evidence = json.dumps(ordered_evidence, default=str)
                 content = f"{question_text}\nEvidence: {compact_evidence[:1800]}"
             except (TypeError, ValueError, json.JSONDecodeError):

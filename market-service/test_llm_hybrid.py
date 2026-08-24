@@ -77,9 +77,11 @@ class HybridLlmTests(unittest.TestCase):
         compact_prompt = body["messages"][-1]["content"]
         self.assertEqual("RSI is neutral.", answer)
         self.assertIn('"rsi14": 45.2', compact_prompt)
-        self.assertIn('"probabilityUp": 48.7', compact_prompt)
+        self.assertNotIn('"probabilityUp": 48.7', compact_prompt)
+        self.assertIn("above 70 overbought", compact_prompt)
         self.assertNotIn("long hosted model policy", body["messages"][0]["content"])
-        self.assertLessEqual(len(compact_prompt), 2700)
+        self.assertLessEqual(len(compact_prompt), 900)
+        self.assertEqual(2048, body["options"]["num_ctx"])
 
 
 if __name__ == "__main__":
