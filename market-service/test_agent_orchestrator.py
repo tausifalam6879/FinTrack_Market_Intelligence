@@ -273,7 +273,7 @@ class AgentOrchestratorTests(unittest.TestCase):
             body = asyncio.run(market_agent(FakeRequest()))
 
         self.assertEqual("deterministic-read-only-v1", body["agentPlan"]["planner"])
-        self.assertEqual(2, provider_chat.call_count)
+        self.assertEqual(1, provider_chat.call_count)
         self.assertIn("company_document_rag", body["toolsUsed"])
         self.assertEqual("S1", body["citations"][0]["citation"])
         self.assertIn("[S1 p.98]", body["answer"])

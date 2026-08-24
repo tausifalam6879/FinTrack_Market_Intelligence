@@ -54,7 +54,7 @@ const cleanAgentAnswer = (value = "") => String(value)
 const groundedProviderLabel = (meta = {}) => {
   const provider = String(meta.llmProvider || "").toLowerCase();
   const providerName = provider === "ollama" ? "Ollama local" : provider === "gemini" ? "Gemini" : "LLM";
-  if (meta.llmStatus === "connected" && meta.llmAnswerAccepted) return `${providerName} grounded`;
+  if (["connected", "connected_repaired"].includes(meta.llmStatus) && meta.llmAnswerAccepted) return `${providerName} grounded`;
   if (meta.llmStatus === "grounding_fallback") return `${providerName} checked · verified tool answer used`;
   return "Verified tool fallback";
 };

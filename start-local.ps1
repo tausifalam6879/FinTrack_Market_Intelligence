@@ -10,7 +10,7 @@ $ollamaReady = $false
 try {
     $null = Invoke-RestMethod -Uri "http://127.0.0.1:11434/api/tags" -TimeoutSec 3
     $ollamaReady = $true
-    $warmBody = @{ model = "llama3.2:latest"; prompt = ""; stream = $false; keep_alive = "30m" } | ConvertTo-Json -Compress
+    $warmBody = @{ model = "llama3.2:1b"; prompt = ""; stream = $false; keep_alive = "30m" } | ConvertTo-Json -Compress
     Start-Process powershell -WindowStyle Hidden -ArgumentList "-Command", "Invoke-RestMethod -Uri 'http://127.0.0.1:11434/api/generate' -Method Post -ContentType 'application/json' -Body '$warmBody' -TimeoutSec 90 | Out-Null"
 } catch {
     Write-Warning "Ollama is installed but its local service is not reachable. Start Ollama before asking offline questions."
@@ -32,7 +32,7 @@ if (-not $gatewayJar) {
     throw "Spring gateway JAR is missing. Connect once and run .\mvnw.cmd package inside gateway-service."
 }
 
-$apiCommand = "Set-Location '$serviceRoot'; `$env:LLM_PROVIDER='hybrid'; `$env:GEMINI_TIMEOUT_MS='15000'; `$env:GEMINI_CIRCUIT_COOLDOWN_SECONDS='10'; `$env:OLLAMA_MODEL='llama3.2:latest'; `$env:OLLAMA_BASE_URL='http://127.0.0.1:11434'; `$env:OLLAMA_TIMEOUT_MS='45000'; `$env:OLLAMA_KEEP_ALIVE='30m'; `$env:OLLAMA_NUM_PREDICT='60'; & '$pythonExe' -m uvicorn app:app --port 8002"
+$apiCommand = "Set-Location '$serviceRoot'; `$env:LLM_PROVIDER='hybrid'; `$env:GEMINI_TIMEOUT_MS='15000'; `$env:GEMINI_CIRCUIT_COOLDOWN_SECONDS='10'; `$env:OLLAMA_MODEL='llama3.2:1b'; `$env:OLLAMA_BASE_URL='http://127.0.0.1:11434'; `$env:OLLAMA_TIMEOUT_MS='45000'; `$env:OLLAMA_KEEP_ALIVE='30m'; `$env:OLLAMA_NUM_CTX='2048'; `$env:OLLAMA_NUM_PREDICT='50'; & '$pythonExe' -m uvicorn app:app --port 8002"
 Start-Process powershell -WindowStyle Hidden -ArgumentList "-NoExit", "-Command", $apiCommand
 Start-Process powershell -WindowStyle Hidden -ArgumentList "-NoExit", "-Command", "java -jar '$($gatewayJar.FullName)'"
 Start-Process powershell -WindowStyle Hidden -ArgumentList "-NoExit", "-Command", "Set-Location '$frontendRoot'; `$env:VITE_MARKET_API_BASE_URL='http://localhost:8081'; npm run dev"
@@ -41,5 +41,5 @@ Write-Host "FinTrack Market Intelligence is starting."
 Write-Host "Frontend: http://localhost:5173"
 Write-Host "Spring gateway: http://localhost:8081/health/ready"
 Write-Host "FastAPI ML/data service: http://localhost:8002/docs"
-Write-Host "AI policy: Gemini (15s maximum) -> Ollama llama3.2 -> verified deterministic fallback"
+Write-Host "AI policy: Gemini (15s maximum) -> Ollama llama3.2:1b -> verified deterministic fallback"
 if ($ollamaReady) { Write-Host "Ollama: ready" }

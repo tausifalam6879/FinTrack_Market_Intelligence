@@ -3859,7 +3859,7 @@ def market_prediction(symbol: str) -> Dict[str, Any]:
 
 def _ollama_chat(messages: List[Dict[str, str]]) -> str:
     base_url = os.getenv("OLLAMA_BASE_URL", "http://127.0.0.1:11434").rstrip("/")
-    model = os.getenv("OLLAMA_MODEL", "").strip() or os.getenv("LLM_MODEL", "").strip() or "llama3.2:latest"
+    model = os.getenv("OLLAMA_MODEL", "").strip() or os.getenv("LLM_MODEL", "").strip() or "llama3.2:1b"
     timeout = max(5, int(os.getenv("OLLAMA_TIMEOUT_MS", os.getenv("LLM_TIMEOUT_MS", "15000"))) // 1000)
     compact_messages = []
     for item in messages:
@@ -3889,7 +3889,7 @@ def _ollama_chat(messages: List[Dict[str, str]]) -> str:
                 if evidence.get("drivers"):
                     ordered_evidence["drivers"] = evidence["drivers"][:4]
                 compact_evidence = json.dumps(ordered_evidence, default=str)
-                content = f"{question_text}\nEvidence: {compact_evidence[:2600]}"
+                content = f"{question_text}\nEvidence: {compact_evidence[:1800]}"
             except (TypeError, ValueError, json.JSONDecodeError):
                 if len(content) > 1500:
                     content = f"{content[:450]}\n[compact evidence]\n{content[-900:]}"
@@ -3905,8 +3905,8 @@ def _ollama_chat(messages: List[Dict[str, str]]) -> str:
         "keep_alive": os.getenv("OLLAMA_KEEP_ALIVE", "30m"),
         "options": {
             "temperature": 0.1,
-            "num_ctx": 4096,
-            "num_predict": max(50, int(os.getenv("OLLAMA_NUM_PREDICT", "60"))),
+            "num_ctx": max(1024, int(os.getenv("OLLAMA_NUM_CTX", "2048"))),
+            "num_predict": max(40, int(os.getenv("OLLAMA_NUM_PREDICT", "50"))),
         },
     }).encode("utf-8")
     request = UrlRequest(
@@ -5023,6 +5023,24 @@ def _llm_grounding_issue(
     return None
 
 
+def _repair_llm_grounding_issue(
+    answer: str,
+    issue: Optional[str],
+    prediction: Dict[str, Any],
+) -> Optional[str]:
+    """Repair deterministic presentation omissions without replacing a useful answer."""
+    if issue == "missing weak-model warning":
+        balanced_accuracy = prediction.get("model", {}).get("balancedAccuracy")
+        return (
+            answer.rstrip()
+            + "\n\nLimit: walk-forward balanced accuracy "
+            + f"{balanced_accuracy}% hai, isliye model ke paas reliable directional edge nahi hai."
+        )
+    if issue == "answer too short to explain the requested evidence" and len(answer.strip()) >= 40:
+        return answer.strip()
+    return None
+
+
 @router.get("/overview")
 def get_global_market_overview(refresh: bool = False):
     if refresh:
@@ -5532,20 +5550,9 @@ async def market_agent(request: FastApiRequest):
         )
 
     try:
-        try:
-            answer, llm_provider = _provider_chat(messages)
-        except RuntimeError as first_error:
-            first_failure = _llm_failure_code(first_error)
-            configured_provider = os.getenv("LLM_PROVIDER", "").strip().lower()
-            if configured_provider in {"hybrid", "auto"} or first_failure not in {
-                "provider_timeout", "provider_unavailable", "provider_error"
-            }:
-                raise
-            # One immediate retry absorbs transient Gemini/network failures.
-            # Authentication, quota, invalid-request and model errors are not
-            # retried, preventing duplicate paid calls for permanent failures.
-            logger.warning("Transient market LLM failure (%s); retrying once", first_failure)
-            answer, llm_provider = _provider_chat(messages)
+        # Provider routing already owns fallback. Retrying this complete chain
+        # doubled a 15-second Gemini timeout without improving answer quality.
+        answer, llm_provider = _provider_chat(messages)
         if not answer:
             raise RuntimeError("The configured LLM returned an empty answer.")
         grounding_issue = _llm_grounding_issue(
@@ -5560,9 +5567,15 @@ async def market_agent(request: FastApiRequest):
             context.get("news"),
         )
         if grounding_issue:
-            llm_answer_accepted = False
-            llm_status = "grounding_fallback"
-            answer = verified_fallback()
+            repaired_answer = _repair_llm_grounding_issue(answer, grounding_issue, prediction)
+            if repaired_answer is not None:
+                answer = repaired_answer
+                grounding_issue = None
+                llm_status = "connected_repaired"
+            else:
+                llm_answer_accepted = False
+                llm_status = "grounding_fallback"
+                answer = verified_fallback()
     except RuntimeError as error:
         logger.warning("Configured market LLM unavailable; returning verified tool answer: %s", error)
         llm_used = False

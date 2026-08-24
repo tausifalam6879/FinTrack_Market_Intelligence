@@ -10,6 +10,7 @@ from market_intelligence import (
     _historical_session,
     _infer_symbol,
     _llm_grounding_issue,
+    _repair_llm_grounding_issue,
     _verified_tool_answer,
 )
 
@@ -171,6 +172,24 @@ class AgentAnalysisTests(unittest.TestCase):
         )
 
         self.assertIsNone(issue)
+
+    def test_missing_weak_model_warning_repairs_useful_provider_answer(self):
+        answer = (
+            "RSI 45 neutral momentum zone dikhata hai: stock na overbought hai na oversold. "
+            "Yeh ek technical indicator hai, guaranteed direction nahi."
+        )
+
+        issue = _llm_grounding_issue(
+            answer,
+            "RSI ka simple meaning kya hai?",
+            self.prediction,
+            {"factors": []},
+        )
+        repaired = _repair_llm_grounding_issue(answer, issue, self.prediction)
+
+        self.assertEqual("missing weak-model warning", issue)
+        self.assertIn("51.6%", repaired)
+        self.assertIn("reliable directional edge nahi", repaired)
 
     def test_broad_market_explanation_requires_comparison_not_unasked_volatility(self):
         relative_return = self.prediction["riskBenchmark"]["comparison"]["relativeReturnPoints"]
