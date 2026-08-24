@@ -24,7 +24,7 @@ services:
       - key: GEMINI_API_KEY
         sync: false
       - key: GEMINI_TIMEOUT_MS
-        value: "8000"
+        value: "15000"
       - key: MARKET_OVERVIEW_CACHE_TTL_SECONDS
         value: "900"
 

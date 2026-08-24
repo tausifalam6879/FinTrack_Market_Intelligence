@@ -32,7 +32,7 @@ if (-not $gatewayJar) {
     throw "Spring gateway JAR is missing. Connect once and run .\mvnw.cmd package inside gateway-service."
 }
 
-$apiCommand = "Set-Location '$serviceRoot'; `$env:LLM_PROVIDER='hybrid'; `$env:GEMINI_TIMEOUT_MS='8000'; `$env:GEMINI_CIRCUIT_COOLDOWN_SECONDS='10'; `$env:OLLAMA_MODEL='llama3.2:latest'; `$env:OLLAMA_BASE_URL='http://127.0.0.1:11434'; `$env:OLLAMA_TIMEOUT_MS='45000'; `$env:OLLAMA_KEEP_ALIVE='30m'; `$env:OLLAMA_NUM_PREDICT='60'; & '$pythonExe' -m uvicorn app:app --port 8002"
+$apiCommand = "Set-Location '$serviceRoot'; `$env:LLM_PROVIDER='hybrid'; `$env:GEMINI_TIMEOUT_MS='15000'; `$env:GEMINI_CIRCUIT_COOLDOWN_SECONDS='10'; `$env:OLLAMA_MODEL='llama3.2:latest'; `$env:OLLAMA_BASE_URL='http://127.0.0.1:11434'; `$env:OLLAMA_TIMEOUT_MS='45000'; `$env:OLLAMA_KEEP_ALIVE='30m'; `$env:OLLAMA_NUM_PREDICT='60'; & '$pythonExe' -m uvicorn app:app --port 8002"
 Start-Process powershell -WindowStyle Hidden -ArgumentList "-NoExit", "-Command", $apiCommand
 Start-Process powershell -WindowStyle Hidden -ArgumentList "-NoExit", "-Command", "java -jar '$($gatewayJar.FullName)'"
 Start-Process powershell -WindowStyle Hidden -ArgumentList "-NoExit", "-Command", "Set-Location '$frontendRoot'; `$env:VITE_MARKET_API_BASE_URL='http://localhost:8081'; npm run dev"
@@ -41,5 +41,5 @@ Write-Host "FinTrack Market Intelligence is starting."
 Write-Host "Frontend: http://localhost:5173"
 Write-Host "Spring gateway: http://localhost:8081/health/ready"
 Write-Host "FastAPI ML/data service: http://localhost:8002/docs"
-Write-Host "AI policy: Gemini (8s maximum) -> Ollama llama3.2 -> verified deterministic fallback"
+Write-Host "AI policy: Gemini (15s maximum) -> Ollama llama3.2 -> verified deterministic fallback"
 if ($ollamaReady) { Write-Host "Ollama: ready" }

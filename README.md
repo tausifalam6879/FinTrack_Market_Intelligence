@@ -240,7 +240,7 @@ Gemini and Ollama are optional. Local hybrid mode gives Gemini an eight-second r
 LLM_PROVIDER=hybrid
 GEMINI_MODEL=gemini-3.5-flash-lite
 GEMINI_API_KEY=your-new-server-side-key
-GEMINI_TIMEOUT_MS=8000
+GEMINI_TIMEOUT_MS=15000
 GEMINI_CIRCUIT_COOLDOWN_SECONDS=10
 OLLAMA_MODEL=llama3.2:latest
 OLLAMA_BASE_URL=http://127.0.0.1:11434

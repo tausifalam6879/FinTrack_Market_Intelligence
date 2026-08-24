@@ -109,7 +109,7 @@ def readiness_report() -> Dict[str, Any]:
         checks["languageModel"].update({
             "primaryProvider": "gemini",
             "fallbackProvider": "ollama",
-            "geminiTimeoutMs": max(1000, int(os.getenv("GEMINI_TIMEOUT_MS", "8000"))),
+            "geminiTimeoutMs": max(1000, int(os.getenv("GEMINI_TIMEOUT_MS", "15000"))),
             "circuitCooldownSeconds": max(1, int(float(os.getenv("GEMINI_CIRCUIT_COOLDOWN_SECONDS", "10")))),
         })
     checks["trainingToolchain"] = {
