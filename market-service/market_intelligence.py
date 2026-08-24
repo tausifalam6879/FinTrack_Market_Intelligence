@@ -5135,7 +5135,7 @@ def _local_metric_guardrail(message: str, prediction: Dict[str, Any]) -> Optiona
     name = prediction.get("name") or prediction.get("symbol") or "Selected asset"
     balanced_accuracy = prediction.get("model", {}).get("balancedAccuracy")
     reliability = (
-        f"Walk-forward balanced accuracy {balanced_accuracy}% hai, isliye reliable directional edge nahi hai."
+        f"Walk-forward balanced accuracy {balanced_accuracy}% hai, jo 53 se kam hai; isliye reliable directional edge nahi hai."
         if balanced_accuracy is not None and float(balanced_accuracy) < 53 else
         "Model result probabilistic hai; guaranteed direction nahi."
     )
@@ -5660,7 +5660,20 @@ async def market_agent(request: FastApiRequest):
     try:
         # Provider routing already owns fallback. Retrying this complete chain
         # doubled a 15-second Gemini timeout without improving answer quality.
-        answer, llm_provider = _provider_chat(messages)
+        configured_provider = os.getenv("LLM_PROVIDER", "").strip().lower()
+        local_shortcut = (
+            _local_metric_guardrail(payload.message, prediction)
+            if configured_provider in {"hybrid", "auto"}
+            and not os.getenv("GEMINI_API_KEY", "").strip()
+            else None
+        )
+        if local_shortcut is not None:
+            answer = local_shortcut
+            llm_provider = "fintrack-agent"
+            llm_status = "tool_grounded"
+            llm_used = False
+        else:
+            answer, llm_provider = _provider_chat(messages)
         if not answer:
             raise RuntimeError("The configured LLM returned an empty answer.")
         if llm_provider == "ollama":
