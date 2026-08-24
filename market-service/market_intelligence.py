@@ -3956,7 +3956,7 @@ def _gemini_chat(messages: List[Dict[str, str]]) -> str:
         # Gemini 3.x uses its default sampling behavior. Google deprecated
         # temperature/top-p/top-k for current models, so only cap the concise
         # Keep enough room for evidence, arithmetic, scenarios and caveats.
-        "generationConfig": {"maxOutputTokens": 900},
+        "generationConfig": {"maxOutputTokens": 360},
     }).encode("utf-8")
     last_model_error: Optional[HTTPError] = None
     for model in _gemini_model_candidates(configured_model):
@@ -5041,6 +5041,47 @@ def _repair_llm_grounding_issue(
     return None
 
 
+def _compact_agent_system_prompt(context: Dict[str, Any]) -> str:
+    """Build only the grounding rules required by the selected tool evidence."""
+    rules = [
+        "You are FinTrack's evidence-grounded market research analyst.",
+        "Use only supplied evidence; never invent prices, dates, news, calculations or document claims.",
+        "Match the user's Hindi, Hinglish or English and answer directly in 60-140 words without a greeting or 'Seedha jawab' heading.",
+        "For a displayed metric: explain what it measures, interpret the supplied value, then state one limitation.",
+        "Distinguish verified facts from probabilistic estimates; never guarantee direction, profit or return and never give personalized buy/sell instructions.",
+        "Use only figures relevant to the question and do not repeat the same figure.",
+        "changePct is daily price change, not volume. RSI above 70 is overbought and below 30 is oversold.",
+        "If balancedAccuracy is below 53, explicitly say the model has no reliable directional edge.",
+    ]
+    if "historicalSession" in context:
+        rules.append("For the requested date, state exact versus nearest trading session and use only its supplied OHLC/change.")
+    if "indexedDocumentEvidence" in context:
+        rules.append("Every document claim must include its exact [S# p.#] citation; if evidence is unavailable, do not infer a filing answer.")
+    if "headlineEvidence" in context:
+        rules.append("Treat headlines as title-keyword evidence, mention source/date limits, and do not claim full-article verification.")
+    if "sectorPeerComparison" in context:
+        rules.append("Describe peer evidence as above, below or in line; a peer median is not a recommendation.")
+    if "company" in context:
+        company = context["company"]
+        if company.get("catalysts"):
+            rules.append("Keep external analyst opinions and changing catalyst dates separate from FinTrack ML.")
+        if company.get("financialStatementTrends"):
+            rules.append("Separate annual and quarterly statement periods; missing rows are not zero and statements can be restated.")
+        if company.get("ownershipAndInsiderActivity"):
+            rules.append("Ownership data may be delayed; returned top-holder rows are not total ownership and insider activity is not a standalone signal.")
+        if company.get("analystEstimateRevisions"):
+            rules.append("Separate third-party estimate revisions from company guidance and FinTrack ML; preserve period, range and analyst-count context.")
+        if company.get("dividendAndCorporateActions"):
+            rules.append("Separate historical per-share distributions from yield snapshots; a partial year is not zero and splits do not create value.")
+        if company.get("earningsQualityAndCapitalAllocation"):
+            rules.append("Use aligned reported periods and keep cash conversion, dividends, repurchases, issuance and debt flows separate.")
+        if company.get("liquidityAndDebtCapacity"):
+            rules.append("State the liquid-funds basis, keep provider net debt separate, and do not turn ratios into a credit rating.")
+        if company.get("profitabilityReturnsAndEfficiency"):
+            rules.append("Separate margins, average-balance ROA/ROE and approximate industrial ROIC; these are not scores or moat ratings.")
+    return " ".join(rules)
+
+
 @router.get("/overview")
 def get_global_market_overview(refresh: bool = False):
     if refresh:
@@ -5472,34 +5513,7 @@ async def market_agent(request: FastApiRequest):
         ]
         llm_context["documentEvidenceAvailable"] = bool(document_matches)
 
-    system_prompt = (
-        "You are FinTrack's evidence-grounded market research analyst. Use only the supplied tool results; never "
-        "invent prices, dates, news or calculations. Match the user's Hindi, Hinglish or English. Keep the answer "
-        "under 140 words unless the user explicitly asks for detail. If the user asks what a displayed metric means, "
-        "first explain what it measures, then interpret the supplied value, then give one important limitation. Do not "
-        "repeat unrelated dashboard figures. Start directly with the answer and never print "
-        "a 'Seedha jawab' heading. Use only the relevant compact sections from: Verified figures, Calculation, "
-        "Scenario/estimate, Assumptions and confidence, Final assessment. Do not repeat a figure in multiple sections. Show arithmetic explicitly using the "
-        "derived calculations. For a requested historical date, clearly say whether it is the exact session or "
-        "nearest trading session and use its OHLC/change; do not answer it with today's data. Distinguish verified "
-        "facts from model estimates. Explain downside, neutral and upside cases instead of pretending one outcome "
-        "is certain. Never guarantee direction, profit or return and never issue personalized buy/sell instructions. "
-        "When indexedDocumentEvidence is supplied, every document claim must use its exact [S# p.#] citation token. "
-        "If documentEvidenceAvailable is false, say that indexed evidence is unavailable and do not infer a filing answer. "
-        "When sectorPeerComparison is supplied, describe only above/below/in-line evidence and never turn a peer median into a buy/sell verdict. "
-        "Company catalyst dates can change; label analyst consensus and targets as external opinions separate from FinTrack ML. "
-        "When headlineEvidence is supplied, call it title-keyword evidence, report source breadth and dates, and do not imply that headlines prove an event or understand full article context. "
-        "When financialStatementTrends is supplied, distinguish annual from quarterly periods, use the supplied growth and margin calculations, and do not estimate missing statement rows. "
-        "When ownershipAndInsiderActivity is supplied, distinguish provider-reported total ownership from the sum of only returned top-holder rows. State missing holder-table coverage, reporting delays, and that insider activity needs context and is not a standalone trading signal. "
-        "When analystEstimateRevisions is supplied, separate changing third-party analyst estimates from company guidance and FinTrack ML. Report the forecast period, ranges, analyst counts and up/down revision breadth; flag any supplied EPS trend basis mismatch instead of merging incompatible series. "
-        "When dividendAndCorporateActions is supplied, distinguish history-derived per-share distributions from provider yield/payout snapshots. Mark the current calendar year partial, never treat missing payments as zero, and state that historical distributions are not guaranteed and splits do not create economic value by themselves. "
-        "When earningsQualityAndCapitalAllocation is supplied, use only aligned reported periods, call cash-conversion ratios descriptive rather than a quality score, and keep dividends, repurchases, stock issuance and debt flows separate. State that statements can be restated and missing rows are not zero. For a supplied financial-sector caution, explain why bank/financial cash-flow and debt classifications are not directly comparable with industrial companies. "
-        "When liquidityAndDebtCapacity is supplied, identify the disclosed liquid-funds basis, keep provider net debt separate from total debt minus liquid funds, and report any supplied basis mismatch. Treat all ratios as descriptive rather than a credit rating or health score. For a supplied financial-sector caution, do not invent industrial interest-coverage or debt/EBITDA ratios. "
-        "When profitabilityReturnsAndEfficiency is supplied, report margins separately from average-balance ROA/ROE and any approximate industrial ROIC. Explain the average beginning/ending balance method, do not present ratios as a score or moat rating, and do not invent industrial ROIC for a supplied financial-sector caution. "
-        "changePct is daily price change, not trading volume. RSI above 70 is overbought, below 30 is oversold. "
-        "If balancedAccuracy is below 53, explicitly state that the model has no reliable directional edge. "
-        "Keep the response readable and normally between 60 and 140 words."
-    )
+    system_prompt = _compact_agent_system_prompt(llm_context)
     recent = []
     for item in payload.recent_messages[-6:]:
         if not isinstance(item, dict) or item.get("role") not in {"user", "assistant"}:
@@ -5511,7 +5525,10 @@ async def market_agent(request: FastApiRequest):
         *recent,
         {
             "role": "user",
-            "content": f"Question: {payload.message}\nEvidence: {json.dumps(llm_context, default=str)[:8500]}",
+            "content": (
+                f"Question: {payload.message}\nEvidence: "
+                f"{json.dumps(llm_context, default=str, separators=(',', ':'))[:6000]}"
+            ),
         },
     ]
     llm_used = True
