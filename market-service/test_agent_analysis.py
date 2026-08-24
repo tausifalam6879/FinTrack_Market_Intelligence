@@ -10,6 +10,7 @@ from market_intelligence import (
     _historical_session,
     _infer_symbol,
     _llm_grounding_issue,
+    _local_metric_guardrail,
     _repair_llm_grounding_issue,
     _verified_tool_answer,
 )
@@ -190,6 +191,19 @@ class AgentAnalysisTests(unittest.TestCase):
         self.assertEqual("missing weak-model warning", issue)
         self.assertIn("51.6%", repaired)
         self.assertIn("reliable directional edge nahi", repaired)
+
+    def test_local_rsi_guardrail_prevents_small_model_semantic_errors(self):
+        prediction = {
+            **self.prediction,
+            "technicalIndicators": {"rsi14": 23.3},
+        }
+
+        answer = _local_metric_guardrail("RSI ka simple meaning kya hai?", prediction)
+
+        self.assertIn("Relative Strength Index", answer)
+        self.assertIn("23.3", answer)
+        self.assertIn("oversold zone", answer)
+        self.assertNotIn("Rate of Change", answer)
 
     def test_broad_market_explanation_requires_comparison_not_unasked_volatility(self):
         relative_return = self.prediction["riskBenchmark"]["comparison"]["relativeReturnPoints"]

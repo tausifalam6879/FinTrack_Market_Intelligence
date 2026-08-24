@@ -5129,6 +5129,50 @@ def _compact_agent_system_prompt(context: Dict[str, Any]) -> str:
     return " ".join(rules)
 
 
+def _local_metric_guardrail(message: str, prediction: Dict[str, Any]) -> Optional[str]:
+    """Normalize small-model explanations for common visible dashboard metrics."""
+    lowered = message.lower()
+    name = prediction.get("name") or prediction.get("symbol") or "Selected asset"
+    balanced_accuracy = prediction.get("model", {}).get("balancedAccuracy")
+    reliability = (
+        f"Walk-forward balanced accuracy {balanced_accuracy}% hai, isliye reliable directional edge nahi hai."
+        if balanced_accuracy is not None and float(balanced_accuracy) < 53 else
+        "Model result probabilistic hai; guaranteed direction nahi."
+    )
+    if "rsi" in lowered:
+        rsi = prediction.get("technicalIndicators", {}).get("rsi14")
+        if rsi is None:
+            return None
+        zone = "oversold zone" if float(rsi) < 30 else "overbought zone" if float(rsi) > 70 else "neutral zone"
+        return (
+            f"RSI ka full form Relative Strength Index hai; yeh recent price momentum ko 0-100 scale par dikhata hai.\n\n"
+            f"{name} ka displayed RSI (14) {rsi} hai, jo {zone} mein hai. 30 se neeche oversold aur 70 se upar overbought maana jaata hai.\n\n"
+            f"Limit: RSI akela future direction decide nahi karta. {reliability}"
+        )
+    if any(term in lowered for term in ("outlook", "prediction", "probability")):
+        outlook = prediction.get("outlook")
+        probability_up = prediction.get("probabilityUp")
+        probability_down = prediction.get("probabilityDown")
+        if outlook is None or probability_up is None or probability_down is None:
+            return None
+        return (
+            f"{name} ka {outlook} outlook model ka next-session research scenario hai—yeh guaranteed trading call nahi hai.\n\n"
+            f"Displayed probability-up {probability_up}% aur probability-down {probability_down}% hai. 42%-58% ke uncertain band mein output NEUTRAL rehta hai.\n\n"
+            f"Limit: {reliability}"
+        )
+    if "range" in lowered:
+        expected_range = prediction.get("expectedRange") or {}
+        if expected_range.get("low") is None or expected_range.get("high") is None:
+            return None
+        return (
+            f"Expected range model ka next-session estimated price interval hai.\n\n"
+            f"{name} ke liye displayed range {expected_range['low']}–{expected_range['high']} "
+            f"{expected_range.get('currency') or 'local currency'} hai; actual price iske bahar bhi ja sakta hai.\n\n"
+            f"Limit: range historical volatility aur available inputs par based hai. {reliability}"
+        )
+    return None
+
+
 @router.get("/overview")
 def get_global_market_overview(refresh: bool = False):
     if refresh:
@@ -5619,6 +5663,11 @@ async def market_agent(request: FastApiRequest):
         answer, llm_provider = _provider_chat(messages)
         if not answer:
             raise RuntimeError("The configured LLM returned an empty answer.")
+        if llm_provider == "ollama":
+            guarded_answer = _local_metric_guardrail(payload.message, prediction)
+            if guarded_answer is not None:
+                answer = guarded_answer
+                llm_status = "connected_repaired"
         grounding_issue = _llm_grounding_issue(
             answer,
             payload.message,
