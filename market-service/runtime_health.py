@@ -109,8 +109,9 @@ def readiness_report() -> Dict[str, Any]:
         checks["languageModel"].update({
             "primaryProvider": "gemini",
             "fallbackProvider": "ollama",
-            "geminiTimeoutMs": max(1000, int(os.getenv("GEMINI_TIMEOUT_MS", "15000"))),
-            "circuitCooldownSeconds": max(1, int(float(os.getenv("GEMINI_CIRCUIT_COOLDOWN_SECONDS", "10")))),
+            "geminiRequestTimeoutMs": max(10000, int(os.getenv("GEMINI_TIMEOUT_MS", "60000"))),
+            "fallbackPolicy": "actual-failure-or-unusable-answer-only",
+            "geminiTriedForEveryQuestion": True,
         })
     checks["trainingToolchain"] = {
         "status": "installed" if all(

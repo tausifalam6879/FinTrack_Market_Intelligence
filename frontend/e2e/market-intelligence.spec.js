@@ -69,15 +69,15 @@ test("research, browser watchlist, batch comparison and PDF action work together
 
 test("metric explanation is grounded and concise", async ({ page }) => {
   await page.getByRole("tab", { name: /Intelligence & MLOps/i }).click();
-  await page.getByRole("button", { name: "Explain Probability up" }).click();
+  await page.getByRole("button", { name: "Explain Chance of rise" }).click();
   await expect(page.locator(".agent-panel")).toHaveClass(/open/);
-  await expect(page.locator(".chat-message.assistant")).toContainText("upward scenario");
-  await expect(page.locator(".chat-message.assistant small")).toHaveText("Gemini grounded");
+  await expect(page.locator(".chat-message.assistant")).toContainText("Probability up");
+  await expect(page.locator(".chat-message.assistant small")).toHaveText("Gemini · verified data");
 });
 
 test("operations observability is visible in MLOps without page overflow", async ({ page }) => {
   await page.getByRole("tab", { name: /Intelligence & MLOps/i }).click();
-  await page.getByRole("button", { name: "Model & MLOps" }).click();
+  await page.getByRole("button", { name: "Advanced model details" }).click();
   await expect(page.getByText("Latency, failures and AI fallback evidence")).toBeVisible();
   const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
   expect(overflow).toBeLessThanOrEqual(1);
@@ -86,6 +86,7 @@ test("operations observability is visible in MLOps without page overflow", async
 test("laptop intelligence labels remain readable without horizontal overflow", async ({ page, isMobile }) => {
   test.skip(isMobile, "Desktop-only typography rule; mobile sizing is intentionally unchanged.");
   await page.getByRole("tab", { name: /Intelligence & MLOps/i }).click();
+  await page.getByRole("button", { name: "Advanced model details" }).click();
 
   const fontSizes = await page.locator(".intelligence-main").evaluate((root) => {
     const read = (selector) => Number.parseFloat(getComputedStyle(root.querySelector(selector)).fontSize);

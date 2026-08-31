@@ -1,5 +1,17 @@
 # FinTrack Market Intelligence
 
+## Local AI startup (Windows)
+
+If the frontend and gateway are already running, start only the research API from this directory:
+
+```powershell
+.\start-local-api.ps1
+```
+
+Use `.\start-local.ps1` when starting the entire local stack. The API launcher defaults to Gemini-first hybrid routing with `llama3.2:latest` as the local Ollama fallback, preserving explicit environment overrides. Stop an existing API on port 8002 before starting another copy.
+
+Configure `GEMINI_API_KEY` privately in the local process or Windows user environment for local Gemini. Render environment variables do not apply to localhost. The launcher warns when the local key is absent, without printing credentials. Ollama must be running with the configured model installed. A bare `uvicorn app:app` does not apply these local AI defaults and can leave the service in deterministic-only mode.
+
 ## Live Demo
 
 **Open the deployed application:** [https://tausifalam6879.github.io/FinTrack_Market_Intelligence/](https://tausifalam6879.github.io/FinTrack_Market_Intelligence/)

@@ -341,8 +341,6 @@ _cache: Dict[str, Dict[str, Any]] = {}
 _overview_lock = Lock()
 _prediction_audit: Dict[str, List[Dict[str, Any]]] = {}
 _prediction_audit_lock = Lock()
-_llm_circuit_lock = Lock()
-_gemini_circuit_open_until = 0.0
 
 
 class MarketAgentRequest(BaseModel):
@@ -3985,7 +3983,9 @@ def _gemini_chat(messages: List[Dict[str, str]]) -> str:
     if not api_key:
         raise RuntimeError("Gemini is not configured. Set GEMINI_API_KEY on the Python backend.")
     configured_model = os.getenv("GEMINI_MODEL", "").strip() or os.getenv("LLM_MODEL", "").strip() or "gemini-3.5-flash-lite"
-    timeout = max(1.0, int(os.getenv("GEMINI_TIMEOUT_MS", "15000")) / 1000)
+    # This is only a transport safety ceiling. Hybrid routing no longer treats
+    # a short response budget as a reason to skip Gemini on later questions.
+    timeout = max(10.0, int(os.getenv("GEMINI_TIMEOUT_MS", "60000")) / 1000)
     deadline = time.monotonic() + timeout
     system_text = "\n".join(item["content"] for item in messages if item.get("role") == "system")
     contents = []
@@ -4088,28 +4088,14 @@ def _provider_chat(messages: List[Dict[str, str]]) -> tuple[str, str]:
 
 
 def _hybrid_chat(messages: List[Dict[str, str]]) -> tuple[str, str]:
-    """Prefer Gemini, then use local Ollama during a short Gemini cooldown."""
-    global _gemini_circuit_open_until
-
-    now = time.monotonic()
-    with _llm_circuit_lock:
-        try_gemini = now >= _gemini_circuit_open_until
-
-    if try_gemini:
-        try:
-            answer = _gemini_chat(messages)
-            with _llm_circuit_lock:
-                _gemini_circuit_open_until = 0.0
-            return answer, "gemini"
-        except RuntimeError as error:
-            cooldown = max(1.0, float(os.getenv("GEMINI_CIRCUIT_COOLDOWN_SECONDS", "10")))
-            with _llm_circuit_lock:
-                _gemini_circuit_open_until = time.monotonic() + cooldown
-            logger.warning(
-                "Gemini hybrid provider unavailable; using local Ollama for %.1f seconds: %s",
-                cooldown,
-                _llm_failure_code(error),
-            )
+    """Try Gemini for every question; use Ollama only after that call fails."""
+    try:
+        return _gemini_chat(messages), "gemini"
+    except RuntimeError as error:
+        logger.warning(
+            "Gemini hybrid provider failed; trying local Ollama for this request only: %s",
+            _llm_failure_code(error),
+        )
 
     try:
         return _ollama_chat(messages), "ollama"
@@ -4801,7 +4787,10 @@ def _llm_grounding_issue(
         expected_number = f"{abs(float(factor['changePercent'])):.2f}".rstrip("0").rstrip(".")
         if expected_number not in normalized_answer:
             return f"missing live {keyword} move"
-    if float(prediction["model"]["balancedAccuracy"]) < 53:
+    model_reliability_requested = any(term in lowered for term in (
+        "outlook", "prediction", "forecast", "probability", "model", "score", "reliable", "bharosa",
+    ))
+    if model_reliability_requested and float(prediction["model"]["balancedAccuracy"]) < 53:
         weak_markers = ["weak", "no reliable", "reliable nahi", "kamzor", "below 53", "less than 53", "53 se kam"]
         if not any(marker in normalized_answer for marker in weak_markers):
             return "missing weak-model warning"
@@ -5093,12 +5082,16 @@ def _compact_agent_system_prompt(context: Dict[str, Any]) -> str:
     rules = [
         "You are FinTrack's evidence-grounded market research analyst.",
         "Use only supplied evidence; never invent prices, dates, news, calculations or document claims.",
-        "Match the user's Hindi, Hinglish or English and answer directly in 60-140 words without a greeting or 'Seedha jawab' heading.",
-        "For a displayed metric: explain what it measures, interpret the supplied value, then state one limitation.",
+        "Match the user's Hindi, Hinglish or English and answer directly in 45-100 words without a greeting or a formal heading.",
+        "Write for a non-finance user: first give the conclusion in one sentence, then use at most 3 short bullets.",
+        "Define technical words in plain language and explain the practical consequence: why the displayed value matters to the user.",
+        "For a displayed metric: explain what it measures, interpret the supplied value, and state only one useful limitation.",
         "Distinguish verified facts from probabilistic estimates; never guarantee direction, profit or return and never give personalized buy/sell instructions.",
         "Use only figures relevant to the question and do not repeat the same figure.",
         "changePct is daily price change, not volume. RSI above 70 is overbought and below 30 is oversold.",
-        "If balancedAccuracy is below 53, explicitly say the model has no reliable directional edge.",
+        "Mention weak model quality only when the question asks about prediction, outlook, reliability or model score.",
+        "Treat short messages such as 'are you sure', 'why', 'how' or 'explain more' as follow-ups to the immediately previous assistant answer.",
+        "For a follow-up, answer the doubt or correction directly; do not repeat the previous answer verbatim.",
     ]
     if "historicalSession" in context:
         rules.append("For the requested date, state exact versus nearest trading session and use only its supplied OHLC/change.")
@@ -5130,47 +5123,58 @@ def _compact_agent_system_prompt(context: Dict[str, Any]) -> str:
 
 
 def _local_metric_guardrail(message: str, prediction: Dict[str, Any]) -> Optional[str]:
-    """Normalize small-model explanations for common visible dashboard metrics."""
+    """Instantly explain common visible metrics without waiting for an external LLM."""
     lowered = message.lower()
     name = prediction.get("name") or prediction.get("symbol") or "Selected asset"
     balanced_accuracy = prediction.get("model", {}).get("balancedAccuracy")
-    reliability = (
-        f"Walk-forward balanced accuracy {balanced_accuracy}% hai, jo 53 se kam hai; isliye reliable directional edge nahi hai."
-        if balanced_accuracy is not None and float(balanced_accuracy) < 53 else
-        "Model result probabilistic hai; guaranteed direction nahi."
-    )
-    if "rsi" in lowered:
+    wants_rsi = "rsi" in lowered or "momentum" in lowered
+    wants_range = "range" in lowered or "interval" in lowered
+    wants_outlook = any(term in lowered for term in (
+        "outlook", "prediction", "probability", "chance", "result", "rise", "fall", "upar", "neeche",
+    ))
+    if not any((wants_rsi, wants_range, wants_outlook)):
+        return None
+
+    lines: List[str] = []
+    probability_up = prediction.get("probabilityUp")
+    probability_down = prediction.get("probabilityDown")
+    outlook = str(prediction.get("outlook") or "NEUTRAL").upper()
+    if wants_outlook and probability_up is not None and probability_down is not None:
+        direction = (
+            "halki tezi ki possibility zyada" if outlook == "BULLISH" else
+            "halki girawat ki possibility zyada" if outlook == "BEARISH" else
+            "koi clear direction nahi"
+        )
+        lines.append(
+            f"• Outlook: {name} mein model ko {direction} dikh rahi hai. "
+            f"Rise {probability_up}% vs fall {probability_down}%; chhota difference zyada uncertainty batata hai."
+        )
+
+    if wants_rsi:
         rsi = prediction.get("technicalIndicators", {}).get("rsi14")
-        if rsi is None:
-            return None
-        zone = "oversold zone" if float(rsi) < 30 else "overbought zone" if float(rsi) > 70 else "neutral zone"
-        return (
-            f"RSI ka full form Relative Strength Index hai; yeh recent price momentum ko 0-100 scale par dikhata hai.\n\n"
-            f"{name} ka displayed RSI (14) {rsi} hai, jo {zone} mein hai. 30 se neeche oversold aur 70 se upar overbought maana jaata hai.\n\n"
-            f"Limit: RSI akela future direction decide nahi karta. {reliability}"
-        )
-    if any(term in lowered for term in ("outlook", "prediction", "probability")):
-        outlook = prediction.get("outlook")
-        probability_up = prediction.get("probabilityUp")
-        probability_down = prediction.get("probabilityDown")
-        if outlook is None or probability_up is None or probability_down is None:
-            return None
-        return (
-            f"{name} ka {outlook} outlook model ka next-session research scenario hai—yeh guaranteed trading call nahi hai.\n\n"
-            f"Displayed probability-up {probability_up}% aur probability-down {probability_down}% hai. 42%-58% ke uncertain band mein output NEUTRAL rehta hai.\n\n"
-            f"Limit: {reliability}"
-        )
-    if "range" in lowered:
+        if rsi is not None:
+            zone = "recent selling strong" if float(rsi) < 30 else "recent buying strong" if float(rsi) > 70 else "normal momentum"
+            lines.append(f"• RSI (Relative Strength Index) {rsi}: price momentum ka 0 se 100 meter hai; abhi {zone} hai. RSI akela reversal predict nahi karta.")
+
+    if wants_range:
         expected_range = prediction.get("expectedRange") or {}
-        if expected_range.get("low") is None or expected_range.get("high") is None:
-            return None
-        return (
-            f"Expected range model ka next-session estimated price interval hai.\n\n"
-            f"{name} ke liye displayed range {expected_range['low']}–{expected_range['high']} "
-            f"{expected_range.get('currency') or 'local currency'} hai; actual price iske bahar bhi ja sakta hai.\n\n"
-            f"Limit: range historical volatility aur available inputs par based hai. {reliability}"
-        )
-    return None
+        if expected_range.get("low") is not None and expected_range.get("high") is not None:
+            lines.append(
+                f"• Range: agle session ka estimated area {expected_range['low']}–{expected_range['high']} "
+                f"{expected_range.get('currency') or 'local currency'} hai; actual price bahar bhi ja sakta hai."
+            )
+
+    if not lines:
+        return None
+    caution = (
+        "Model ka past test weak hai, isliye ise direction ke proof ki tarah use na karein."
+        if balanced_accuracy is not None and float(balanced_accuracy) < 53 else
+        "Ye probability-based research hai, guaranteed trading call nahi."
+    )
+    body = f"Aasaan matlab: {lines[0][2:]}"
+    if len(lines) > 1:
+        body += "\n" + "\n".join(lines[1:])
+    return body + f"\n\nDhyan rahe: {caution}"
 
 
 @router.get("/overview")
@@ -5606,7 +5610,7 @@ async def market_agent(request: FastApiRequest):
 
     system_prompt = _compact_agent_system_prompt(llm_context)
     recent = []
-    for item in payload.recent_messages[-6:]:
+    for item in payload.recent_messages[-10:]:
         if not isinstance(item, dict) or item.get("role") not in {"user", "assistant"}:
             continue
         content = item.get("content", "")
@@ -5658,22 +5662,9 @@ async def market_agent(request: FastApiRequest):
         )
 
     try:
-        # Provider routing already owns fallback. Retrying this complete chain
-        # doubled a 15-second Gemini timeout without improving answer quality.
-        configured_provider = os.getenv("LLM_PROVIDER", "").strip().lower()
-        local_shortcut = (
-            _local_metric_guardrail(payload.message, prediction)
-            if configured_provider in {"hybrid", "auto"}
-            and not os.getenv("GEMINI_API_KEY", "").strip()
-            else None
-        )
-        if local_shortcut is not None:
-            answer = local_shortcut
-            llm_provider = "fintrack-agent"
-            llm_status = "tool_grounded"
-            llm_used = False
-        else:
-            answer, llm_provider = _provider_chat(messages)
+        # Gemini is the primary generator for every question. Hybrid routing
+        # reaches Ollama only when the Gemini request actually fails.
+        answer, llm_provider = _provider_chat(messages)
         if not answer:
             raise RuntimeError("The configured LLM returned an empty answer.")
         if llm_provider == "ollama":
@@ -5692,6 +5683,26 @@ async def market_agent(request: FastApiRequest):
             context.get("company"),
             context.get("news"),
         )
+        if grounding_issue and llm_provider == "gemini" and os.getenv("LLM_PROVIDER", "").strip().lower() in {"hybrid", "auto"}:
+            # A successful HTTP response can still be unusable for this task
+            # (missing evidence/capability). Only then give Ollama one chance.
+            try:
+                answer = _ollama_chat(messages)
+                llm_provider = "ollama"
+                llm_status = "fallback_after_grounding"
+                grounding_issue = _llm_grounding_issue(
+                    answer,
+                    payload.message,
+                    prediction,
+                    context.get("macroFactors") or {"factors": []},
+                    context.get("historicalSession"),
+                    document_matches,
+                    document_requested,
+                    context.get("company"),
+                    context.get("news"),
+                )
+            except RuntimeError as error:
+                logger.warning("Ollama capability fallback failed: %s", _llm_failure_code(error))
         if grounding_issue:
             repaired_answer = _repair_llm_grounding_issue(answer, grounding_issue, prediction)
             if repaired_answer is not None:

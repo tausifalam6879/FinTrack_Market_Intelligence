@@ -34,6 +34,7 @@ const formatCompactMoney = (value, currency) => {
 const SAVED_RESEARCH_KEY = "fintrack.saved-research.v1";
 const MAX_SAVED_RESEARCH = 12;
 const MAX_COMPARISON = 4;
+const MAX_CHAT_CONTEXT = 10;
 
 const readSavedResearch = () => {
   try {
@@ -53,11 +54,9 @@ const cleanAgentAnswer = (value = "") => String(value)
 
 const groundedProviderLabel = (meta = {}) => {
   const provider = String(meta.llmProvider || "").toLowerCase();
-  const providerName = provider === "ollama" ? "Ollama local" : provider === "gemini" ? "Gemini" : provider === "fintrack-agent" ? "FinTrack agent" : "LLM";
-  if (meta.llmStatus === "tool_grounded") return `${providerName} grounded`;
-  if (["connected", "connected_repaired"].includes(meta.llmStatus) && meta.llmAnswerAccepted) return `${providerName} grounded`;
-  if (meta.llmStatus === "grounding_fallback") return `${providerName} checked · verified tool answer used`;
-  return "Verified tool fallback";
+  const providerName = provider === "ollama" ? "Ollama · verified data" : provider === "gemini" ? "Gemini · verified data" : provider === "fintrack-agent" ? "Instant FinTrack explanation" : "Verified market data";
+  if (["tool_grounded", "connected", "connected_repaired", "fallback_after_grounding"].includes(meta.llmStatus)) return providerName;
+  return "FinTrack verified answer";
 };
 
 export default function IntelligenceDesk({ initialSymbol = "^NSEI" }) {
@@ -357,7 +356,7 @@ export default function IntelligenceDesk({ initialSymbol = "^NSEI" }) {
     catch { setRagError("Document retrieval is temporarily unavailable. Market analytics above remain independent."); }
     finally { setRagLoading(false); }
   };
-  const send = async (value = question, viewOverride = activeView, recentOverride = messages.slice(-6)) => {
+  const send = async (value = question, viewOverride = activeView, recentOverride = messages.slice(-MAX_CHAT_CONTEXT)) => {
     const clean = value.trim();
     if (!clean || asking) return;
     const userMessage = { role: "user", content: clean };
@@ -369,7 +368,11 @@ export default function IntelligenceDesk({ initialSymbol = "^NSEI" }) {
         documents: "Section: reports and RAG. Answer only from indexed company reports; do not invent missing document facts.",
         mlops: "Section: model and MLOps. Explain only the model or monitoring data the user asks about, what it measures, and its main limitation."
       }[viewOverride];
-      const response = await marketApi.agent({ message: `${sectionInstruction} User question: ${clean}`, symbol, recentMessages: recentOverride });
+      const isShortFollowUp = /^(are you sure|really|why|how|explain more|sure|pakka|kya pakka|kyun|kaise)[?.!\s]*$/i.test(clean);
+      const followUpInstruction = isShortFollowUp
+        ? " This is a follow-up to the immediately previous assistant answer. Check that answer, address the doubt, and do not repeat it verbatim."
+        : "";
+      const response = await marketApi.agent({ message: `${sectionInstruction}${followUpInstruction} User question: ${clean}`, symbol, recentMessages: recentOverride });
       setMessages((current) => [...current, { role: "assistant", content: response.answer, meta: response }]);
     } catch {
       const localApi = /(?:localhost|127\.0\.0\.1)/i.test(marketApi.baseUrl);
@@ -381,23 +384,21 @@ export default function IntelligenceDesk({ initialSymbol = "^NSEI" }) {
   };
 
   const suggestedQuestions = {
-    overview: [`${symbol} outlook ka simple meaning kya hai?`, "Probability, RSI aur expected range ko aasaan language me samjhao"],
-    company: [`${symbol} ke fundamentals me sabse important baat kya hai?`, "Performance, catalysts aur analyst estimates ko simple language me samjhao"],
-    documents: [`${symbol} ke available reports ka short summary do`, "Document evidence me risk ya debt ke baare me kya likha hai?"],
-    mlops: ["Model score reliable hai ya nahi, simple language me batao", "Experiment, drift aur serving model ka difference samjhao"]
+    overview: [`${symbol} ka result simple words me batao`, "Probability, RSI aur range ka matlab kya hai?"],
+    company: [`${symbol} company ki health simple words me batao`, "Is company ki sabse important strength aur risk kya hai?"],
+    documents: [`${symbol} report ka short summary do`, "Report me debt ya major risk ke baare me kya likha hai?"],
+    mlops: ["Kya is model par bharosa kiya ja sakta hai?", "Model ko simple language me kaise test kiya gaya?"]
   }[activeView];
 
   const openContextAgent = () => {
-    setMessages([]);
     setQuestion("");
     setAgentOpen(true);
   };
 
   const explainMetric = (label, value, hint = "", view = "overview") => {
     const displayedValue = value === null || value === undefined || value === "" ? "unavailable" : value;
-    const prompt = `${label} ki displayed value ${displayedValue} hai${hint ? ` (${hint})` : ""}. Ye metric kya measure karta hai, is exact value ka simple meaning kya hai, aur iski ek important limitation Hinglish me 100 words ke andar samjhao.`;
+    const prompt = `${label} ${displayedValue} ka simple meaning batao${hint ? ` (${hint})` : ""}.`;
     setActiveView(view);
-    setMessages([]);
     setQuestion("");
     setAgentOpen(true);
     void send(prompt, view, []);
@@ -462,8 +463,6 @@ export default function IntelligenceDesk({ initialSymbol = "^NSEI" }) {
       {result?.mode === "cache" && <div className="notice warning">Showing the last verified browser research while the live backend reconnects.</div>}
       {error && <div className="notice error">{error}</div>}
 
-      <OperationsSummary status={modelStatus} loading={modelStatusLoading} error={modelStatusError} />
-
       {analysis && <>
         <div className="analysis-hero">
           <div><span className="asset-label">{analysis.symbol}</span><h3>{resolvedCompany?.symbol === analysis.symbol ? resolvedCompany.name : analysis.name}</h3><p>Evidence as of {new Date(analysis.dataAsOf).toLocaleString("en-IN")}</p></div>
@@ -488,28 +487,29 @@ export default function IntelligenceDesk({ initialSymbol = "^NSEI" }) {
           remove={removeSavedResearch}
           openResearch={(item) => { setResolvedCompany(item); load(item.symbol); }}
         />}
-        <div className="metric-grid">
-          <Metric label="Probability up" value={`${analysis.probabilityUp}%`} hint={`${analysis.probabilityDown}% probability down`} onExplain={explainMetric} />
-          <Metric label="Expected range" value={`${formatNumber(analysis.expectedRange?.low)} – ${formatNumber(analysis.expectedRange?.high)}`} hint={analysis.expectedRange?.currency} onExplain={explainMetric} />
-          <Metric label="RSI (14)" value={formatNumber(analysis.technicalIndicators?.rsi14)} hint="Below 30 oversold · above 70 overbought" onExplain={explainMetric} />
-          <Metric label="Walk-forward score" value={`${analysis.model?.balancedAccuracy ?? analysis.model?.backtestAccuracy}%`} hint={`${analysis.model?.walkForwardFolds || 1} time-ordered folds · ${analysis.model?.quality} quality`} onExplain={explainMetric} />
+        <SimpleMeaningCard analysis={analysis} />
+        <div className="metric-grid essential-metric-grid">
+          <Metric label="Chance of rise" value={`${analysis.probabilityUp}%`} hint={`${analysis.probabilityDown}% chance of fall · not a guarantee`} onExplain={explainMetric} />
+          <Metric label="Likely next-session range" value={`${formatNumber(analysis.expectedRange?.low)} – ${formatNumber(analysis.expectedRange?.high)}`} hint={`${analysis.expectedRange?.currency || "Local currency"} · price can move outside it`} onExplain={explainMetric} />
+          <Metric label="Momentum (RSI)" value={formatNumber(analysis.technicalIndicators?.rsi14)} hint="30–70 usually means no extreme momentum" onExplain={explainMetric} />
         </div>
-        <PredictionOutcomeSummary status={modelStatus} loading={modelStatusLoading} onOpen={() => setActiveView("mlops")} />
         <nav className="intelligence-view-tabs" aria-label="Intelligence detail views">
           {[
-            ["overview", "Overview"],
-            ...(!analysis.symbol.startsWith("^") ? [["company", "Company evidence"], ["documents", "Reports & RAG"]] : []),
-            ["mlops", "Model & MLOps"]
+            ["overview", "Simple summary"],
+            ...(!analysis.symbol.startsWith("^") ? [["company", "Company health"], ["documents", "Annual reports"]] : []),
+            ["mlops", "Advanced model details"]
           ].map(([value, label]) => <button type="button" key={value} className={activeView === value ? "active" : ""} onClick={() => setActiveView(value)}>{label}</button>)}
         </nav>
         <div className="context-agent-bar">
-          <div><strong>Need help with this section?</strong><span>Grounded AI will answer only from the visible {activeView} evidence.</span></div>
-          <button type="button" onClick={openContextAgent}>✦ Ask Grounded AI</button>
+          <div><strong>Is page ka koi number samajh nahi aaya?</strong><span>FinTrack usi displayed data ko simple words mein samjhayega.</span></div>
+          <button type="button" onClick={openContextAgent}>Ask FinTrack</button>
         </div>
         {activeView === "company" && !analysis.symbol.startsWith("^") && <CompanyFundamentalsPanel data={companyResearch} loading={companyResearchLoading} error={companyResearchError} />}
         {activeView === "company" && !analysis.symbol.startsWith("^") && <SectorPeerPanel data={peerComparison} loading={peerComparisonLoading} error={peerComparisonError} />}
-        {activeView === "overview" && analysis.riskBenchmark && <RiskBenchmarkPanel data={analysis.riskBenchmark} symbol={analysis.symbol} onExplain={explainMetric} />}
-        {activeView === "overview" && localExplanation && <PredictionExplanation explanation={localExplanation} outlook={analysis.outlook} />}
+        {activeView === "mlops" && analysis.riskBenchmark && <RiskBenchmarkPanel data={analysis.riskBenchmark} symbol={analysis.symbol} onExplain={explainMetric} />}
+        {activeView === "mlops" && localExplanation && <PredictionExplanation explanation={localExplanation} outlook={analysis.outlook} />}
+        {activeView === "mlops" && <OperationsSummary status={modelStatus} loading={modelStatusLoading} error={modelStatusError} />}
+        {activeView === "mlops" && <PredictionOutcomeSummary status={modelStatus} loading={modelStatusLoading} onOpen={() => setActiveView("mlops")} />}
         {activeView === "mlops" && <ModelRegistryPanel status={modelStatus} loading={modelStatusLoading} error={modelStatusError} activeModel={analysis.model} operationsStatus={operationsStatus} operationsError={operationsStatusError} />}
         {activeView === "mlops" && <ExperimentTrackingPanel data={experiments} loading={experimentsLoading} error={experimentsError} />}
         {activeView === "documents" && !symbol.startsWith("^") && <DocumentRagPanel
@@ -550,21 +550,21 @@ export default function IntelligenceDesk({ initialSymbol = "^NSEI" }) {
       </>}
 
       </div>
-      <button type="button" className="agent-launcher" onClick={openContextAgent}>✦ Ask Grounded AI</button>
+      <button type="button" className="agent-launcher" onClick={openContextAgent}>Ask FinTrack</button>
       <article className={`agent-panel agent-drawer${agentOpen ? " open" : ""}`}>
-        <div className="panel-title"><div><p className="eyebrow">GROUNDED AI · {activeView.toUpperCase()}</p><h3>Ask about this section</h3></div><button type="button" className="agent-close" onClick={() => setAgentOpen(false)} aria-label="Close research agent">×</button></div>
+        <div className="panel-title"><div><p className="eyebrow">FINTRACK ASSISTANT · VERIFIED DATA</p><h3>Ask about this page</h3></div><div className="agent-header-actions">{messages.length > 0 && <button type="button" className="agent-clear" onClick={() => setMessages([])}>Clear</button>}<button type="button" className="agent-close" onClick={() => setAgentOpen(false)} aria-label="Close research agent">×</button></div></div>
         <div className="suggested-row">
           {suggestedQuestions.map((item) => <button key={item} onClick={() => send(item)}>{item}</button>)}
         </div>
         <div className="chat-log">
-          {messages.length === 0 && <div className="agent-empty">Ask about prices, factors, market breadth, model weakness or current headlines.</div>}
+          {messages.length === 0 && <div className="agent-empty"><strong>Confused by a number?</strong><span>Ask in Hindi, Hinglish or English. You will get a short explanation, its meaning and one limitation.</span></div>}
           {messages.map((message, index) => <div key={index} className={`chat-message ${message.role}`}><p>{message.role === "assistant" ? cleanAgentAnswer(message.content) : message.content}</p>{message.meta && <>
             <small>{groundedProviderLabel(message.meta)}</small>
             {message.role === "assistant" && <AgentEvidenceTrace meta={message.meta} />}
           </>}</div>)}
-          {asking && <div className="chat-message assistant"><p>Checking verified market evidence, calculations and model scenarios...</p></div>}
+          {asking && <div className="chat-message assistant"><p>Checking the displayed data…</p></div>}
         </div>
-        <form className="chat-form" onSubmit={(event) => { event.preventDefault(); send(); }}><input value={question} onChange={(event) => setQuestion(event.target.value)} placeholder="Ask about available market evidence…" /><button disabled={!question.trim() || asking}>Send</button></form>
+        <form className="chat-form" onSubmit={(event) => { event.preventDefault(); send(); }}><input value={question} onChange={(event) => setQuestion(event.target.value)} placeholder="Ask in simple words…" /><button disabled={!question.trim() || asking}>Send</button></form>
       </article>
     </section>
   );
@@ -621,6 +621,33 @@ function PredictionOutcomeSummary({ status, loading, onOpen }) {
       <div><dt>Observed accuracy</dt><dd>{loading || monitoring?.observedAccuracy === null || monitoring?.observedAccuracy === undefined ? "Awaiting outcomes" : `${monitoring.observedAccuracy}%`}</dd></div>
     </dl>
     <button type="button" onClick={onOpen}>Open audit & MLOps →</button>
+  </aside>;
+}
+
+function SimpleMeaningCard({ analysis }) {
+  const probabilityUp = Number(analysis.probabilityUp);
+  const probabilityDown = Number(analysis.probabilityDown);
+  const rsi = Number(analysis.technicalIndicators?.rsi14);
+  const outlook = String(analysis.outlook || "NEUTRAL").toUpperCase();
+  const direction = outlook === "BULLISH"
+    ? "Model ko halki tezi ki possibility zyada dikh rahi hai."
+    : outlook === "BEARISH"
+      ? "Model ko halki girawat ki possibility zyada dikh rahi hai."
+      : "Model ko abhi koi clear direction nahi mil rahi hai.";
+  const momentum = !Number.isFinite(rsi)
+    ? "Momentum data available nahi hai."
+    : rsi < 30
+      ? `RSI ${formatNumber(rsi)} hai: recent selling kaafi strong rahi, lekin reversal guaranteed nahi hai.`
+      : rsi > 70
+        ? `RSI ${formatNumber(rsi)} hai: recent buying kaafi strong rahi, lekin correction guaranteed nahi hai.`
+        : `RSI ${formatNumber(rsi)} hai: momentum normal zone mein hai, koi extreme signal nahi.`;
+  return <aside className={`simple-meaning-card meaning-${outlook.toLowerCase()}`} aria-label="Simple meaning of this research">
+    <div><span>IN SIMPLE WORDS</span><h4>{direction}</h4></div>
+    <ul>
+      <li>Rise {Number.isFinite(probabilityUp) ? probabilityUp : "—"}% vs fall {Number.isFinite(probabilityDown) ? probabilityDown : "—"}%: difference chhota ho to uncertainty zyada hai.</li>
+      <li>{momentum}</li>
+      <li>Expected range ek estimate hai—not a target, promise or buy/sell signal.</li>
+    </ul>
   </aside>;
 }
 
@@ -1529,18 +1556,14 @@ function AgentEvidenceTrace({ meta }) {
   const citations = meta.citations || [];
   if (trace.length === 0) return null;
   return <details className="agent-evidence-trace">
-    <summary>Agent plan · {trace.length} read-only tools · evidence trace</summary>
-    <div className="agent-plan-intents">
-      {(meta.agentPlan?.intents || []).map((intent) => <span key={intent}>{intent.replaceAll("_", " ")}</span>)}
-    </div>
+    <summary>How this answer was checked ({trace.length} sources)</summary>
     <ol>{trace.map((item) => <li key={`${item.step}-${item.tool}`} className={`trace-${item.status}`}>
       <span>{item.step}</span>
-      <div><strong>{item.label || item.tool.replaceAll("_", " ")}</strong><small>{item.status.replaceAll("_", " ")} · {item.evidenceCount || 0} evidence · {item.source || "FinTrack"}</small>{item.message && <em>{item.message}</em>}</div>
+      <div><strong>{item.label || item.tool.replaceAll("_", " ")}</strong><small>{item.evidenceCount || 0} verified item(s) · {item.source || "FinTrack"}</small>{item.message && <em>{item.message}</em>}</div>
     </li>)}</ol>
     {citations.length > 0 && <div className="agent-citation-list"><strong>Document citations</strong>{citations.map((citation) => <a key={`${citation.citation}-${citation.page}`} href={citation.sourceUrl} target="_blank" rel="noreferrer">
       [{citation.citation} p.{citation.page}] {citation.title}
     </a>)}</div>}
-    <p>Planner: {meta.agentPlan?.planner || "legacy"} · tool mutation disabled · LLM does not choose tools</p>
   </details>;
 }
 

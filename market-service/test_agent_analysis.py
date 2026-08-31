@@ -174,7 +174,7 @@ class AgentAnalysisTests(unittest.TestCase):
 
         self.assertIsNone(issue)
 
-    def test_missing_weak_model_warning_repairs_useful_provider_answer(self):
+    def test_simple_rsi_answer_does_not_require_unrelated_model_warning(self):
         answer = (
             "RSI 45 neutral momentum zone dikhata hai: stock na overbought hai na oversold. "
             "Yeh ek technical indicator hai, guaranteed direction nahi."
@@ -186,11 +186,7 @@ class AgentAnalysisTests(unittest.TestCase):
             self.prediction,
             {"factors": []},
         )
-        repaired = _repair_llm_grounding_issue(answer, issue, self.prediction)
-
-        self.assertEqual("missing weak-model warning", issue)
-        self.assertIn("51.6%", repaired)
-        self.assertIn("reliable directional edge nahi", repaired)
+        self.assertIsNone(issue)
 
     def test_local_rsi_guardrail_prevents_small_model_semantic_errors(self):
         prediction = {
@@ -202,8 +198,23 @@ class AgentAnalysisTests(unittest.TestCase):
 
         self.assertIn("Relative Strength Index", answer)
         self.assertIn("23.3", answer)
-        self.assertIn("oversold zone", answer)
+        self.assertIn("recent selling strong", answer)
         self.assertNotIn("Rate of Change", answer)
+
+    def test_combined_metric_question_explains_probability_rsi_and_range(self):
+        prediction = {
+            **self.prediction,
+            "technicalIndicators": {"rsi14": 45.0},
+        }
+        answer = _local_metric_guardrail(
+            "Probability, RSI aur expected range ko simple language me samjhao",
+            prediction,
+        )
+
+        self.assertIn("Rise", answer)
+        self.assertIn("RSI (Relative Strength Index)", answer)
+        self.assertIn("Range", answer)
+        self.assertLess(len(answer.split()), 120)
 
     def test_broad_market_explanation_requires_comparison_not_unasked_volatility(self):
         relative_return = self.prediction["riskBenchmark"]["comparison"]["relativeReturnPoints"]

@@ -71,8 +71,7 @@ class RuntimeHealthTests(unittest.TestCase):
         with patch.dict(os.environ, {
             "LLM_PROVIDER": "hybrid",
             "GEMINI_API_KEY": secret,
-            "GEMINI_TIMEOUT_MS": "8000",
-            "GEMINI_CIRCUIT_COOLDOWN_SECONDS": "10",
+            "GEMINI_TIMEOUT_MS": "60000",
             "OLLAMA_BASE_URL": local_url,
         }, clear=False):
             report = readiness_report()
@@ -82,8 +81,9 @@ class RuntimeHealthTests(unittest.TestCase):
         self.assertEqual("hybrid", language_model["provider"])
         self.assertEqual("gemini", language_model["primaryProvider"])
         self.assertEqual("ollama", language_model["fallbackProvider"])
-        self.assertEqual(8000, language_model["geminiTimeoutMs"])
-        self.assertEqual(10, language_model["circuitCooldownSeconds"])
+        self.assertEqual(60000, language_model["geminiRequestTimeoutMs"])
+        self.assertEqual("actual-failure-or-unusable-answer-only", language_model["fallbackPolicy"])
+        self.assertTrue(language_model["geminiTriedForEveryQuestion"])
         self.assertNotIn(secret, serialized)
         self.assertNotIn(local_url, serialized)
 
