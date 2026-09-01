@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-labelledby="title">
+  <title id="title">FinTrack rising market chart</title>
+  <defs>
+    <linearGradient id="mint" x1="8" y1="6" x2="58" y2="61" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#a9f3dd"/>
+      <stop offset="1" stop-color="#63d5bd"/>
+    </linearGradient>
+  </defs>
+  <rect x="2" y="2" width="60" height="60" rx="17" fill="url(#mint)"/>
+  <path d="M16 43 28 30l10 8 12-17" fill="none" stroke="#0b4054" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="16" cy="43" r="5" fill="#8ee9d3" stroke="#0b4054" stroke-width="4"/>
+  <circle cx="28" cy="30" r="5" fill="#8ee9d3" stroke="#0b4054" stroke-width="4"/>
+  <circle cx="38" cy="38" r="5" fill="#8ee9d3" stroke="#0b4054" stroke-width="4"/>
+  <path d="m44 19 10-3-2 11Z" fill="#0b4054"/>
+</svg>

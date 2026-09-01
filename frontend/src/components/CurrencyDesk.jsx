@@ -9,7 +9,7 @@ const displayName = (code) => {
 
 const formatRate = (value, digits = 2) => Number(value).toLocaleString("en-IN", { minimumFractionDigits: digits, maximumFractionDigits: digits });
 
-export default function CurrencyDesk() {
+export default function CurrencyDesk({ onDataChange }) {
   const [result, setResult] = useState(() => marketApi.seed.currencies());
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -18,7 +18,11 @@ export default function CurrencyDesk() {
   const load = async (refresh = false, silent = false) => {
     if (!silent) setLoading(true);
     if (!silent) setError("");
-    try { setResult(await marketApi.currencies(refresh)); }
+    try {
+      const response = await marketApi.currencies(refresh);
+      setResult(response);
+      onDataChange?.(response);
+    }
     catch { if (!silent) setError("Currency feed is temporarily unavailable. The packaged verified snapshot remains visible."); }
     finally { if (!silent) setLoading(false); }
   };

@@ -47,6 +47,70 @@ test.beforeEach(async ({ page }) => {
   await page.goto("/");
 });
 
+test("market pulse opens with a clean live ribbon and an inspectable daily chart", async ({ page }) => {
+  await expect(page.locator(".brand-mark")).toHaveAttribute("src", "./fintrack-mark.svg");
+  await expect(page.locator(".public-chip")).toBeVisible();
+  const ribbon = page.getByRole("region", { name: "Live rotating market quotes" });
+  await expect(ribbon).toBeVisible();
+  await expect(ribbon.getByRole("button", { name: /Nifty 50/ })).toBeVisible();
+  if (page.viewportSize().width > 540) await expect(page.locator(".navbar-quote")).toBeVisible();
+  else await expect(page.locator(".navbar-quote")).toBeHidden();
+  await expect(page.getByLabel("Verified gold market move")).toContainText("GOLD MOVE");
+  await expect(page.getByLabel("Verified US dollar to Indian rupee rate")).toContainText("USD/INR");
+  await expect(page.locator(".topbar .topbar-tabs")).toBeVisible();
+  await expect(page.locator("main > .tabbar")).toHaveCount(0);
+
+  await page.getByRole("button", { name: "Open Market Pulse menu" }).click();
+  const marketNavigation = page.getByRole("navigation", { name: "Market Pulse navigation" });
+  await expect(marketNavigation).toBeVisible();
+  await expect(marketNavigation.getByRole("link", { name: /Market statistics/ })).toBeVisible();
+  await page.locator(".market-side-drawer").getByRole("button", { name: "Close Market Pulse menu" }).click();
+
+  const chart = page.getByRole("img", { name: /NSEI daily closing history/ });
+  await expect(chart).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Market statistics" })).toBeVisible();
+  await expect(page.locator(".market-statistics-panel")).toContainText("Advances");
+  await page.getByRole("button", { name: "1M", exact: true }).click();
+  await chart.hover({ position: { x: 120, y: 100 } });
+  await expect(page.locator(".history-tooltip")).toContainText("NSEI");
+
+  await page.locator("#risk-alerts").scrollIntoViewIfNeeded();
+  const stickyPositions = await page.evaluate(() => {
+    const topbar = document.querySelector(".topbar").getBoundingClientRect();
+    const ribbon = document.querySelector(".market-opening-ribbon").getBoundingClientRect();
+    return { topbarTop: topbar.top, topbarBottom: topbar.bottom, ribbonTop: ribbon.top, ribbonBottom: ribbon.bottom };
+  });
+  expect(stickyPositions.topbarTop).toBeGreaterThanOrEqual(-1);
+  expect(stickyPositions.topbarTop).toBeLessThanOrEqual(1);
+  expect(stickyPositions.ribbonTop).toBeGreaterThanOrEqual(stickyPositions.topbarBottom - 1);
+  expect(stickyPositions.ribbonTop).toBeLessThan(stickyPositions.topbarBottom + 20);
+  expect(stickyPositions.ribbonBottom).toBeGreaterThan(stickyPositions.ribbonTop);
+
+  const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
+  expect(overflow).toBeLessThanOrEqual(1);
+});
+
+test("navbar keeps relevant live context across every desk", async ({ page }) => {
+  const refreshedCurrency = page.waitForRequest((request) => {
+    const url = new URL(request.url());
+    return url.pathname.endsWith("/market/currencies") && url.searchParams.get("refresh") === "true";
+  });
+  await page.getByRole("button", { name: "Refresh now" }).click();
+  await refreshedCurrency;
+
+  await page.getByRole("tab", { name: /INR Currency Desk/i }).click();
+  await expect(page.getByLabel("Currency desk status")).toContainText("USD/INR NOW");
+  await expect(page.getByLabel("Currency desk status")).toContainText("RATE DIRECTORY");
+
+  await page.getByRole("tab", { name: /Market News/i }).click();
+  await expect(page.getByLabel("News desk status")).toContainText("HEADLINES");
+  await expect(page.getByLabel("News desk status")).toContainText("FEED CHECKED");
+
+  await page.getByRole("tab", { name: /Intelligence & MLOps/i }).click();
+  await expect(page.getByLabel("Intelligence service status")).toContainText("AI PROVIDER");
+  await expect(page.getByLabel("Intelligence service status")).toContainText("gemini");
+});
+
 test("research, browser watchlist, batch comparison and PDF action work together", async ({ page }) => {
   await page.getByRole("tab", { name: /Intelligence & MLOps/i }).click();
   await expect(page.getByRole("heading", { name: "Research an index or company" })).toBeVisible();

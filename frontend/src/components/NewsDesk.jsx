@@ -19,7 +19,7 @@ const relatedLabel = (symbol = "") => ({
 
 const sentimentLabel = (value) => Number(value) > 0.15 ? "Positive" : Number(value) < -0.15 ? "Negative" : "Neutral";
 
-export default function NewsDesk({ onResearch }) {
+export default function NewsDesk({ onResearch, onDataChange }) {
   const [result, setResult] = useState(() => marketApi.seed.newsFeed());
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -30,7 +30,9 @@ export default function NewsDesk({ onResearch }) {
     if (!silent) setLoading(true);
     if (!silent) setError("");
     try {
-      setResult(await marketApi.newsFeed(refresh));
+      const response = await marketApi.newsFeed(refresh);
+      setResult(response);
+      onDataChange?.(response);
     } catch {
       if (!silent) setError("The headline provider is temporarily unavailable. The packaged verified snapshot remains visible.");
     } finally {

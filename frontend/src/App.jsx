@@ -1,14 +1,15 @@
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import MarketPulse from "./components/MarketPulse";
 import CurrencyDesk from "./components/CurrencyDesk";
 import IntelligenceDesk from "./components/IntelligenceDesk";
 import NewsDesk from "./components/NewsDesk";
+import { marketApi } from "./services/marketApi";
 
 const tabs = [
-  { id: "markets", label: "Market Pulse", icon: "↗" },
-  { id: "currency", label: "INR Currency Desk", icon: "₹" },
-  { id: "news", label: "Market News", icon: "◫" },
-  { id: "intelligence", label: "Intelligence & MLOps", icon: "✦" }
+  { id: "markets", label: "Market Pulse", shortLabel: "Market", icon: "↗" },
+  { id: "currency", label: "INR Currency Desk", shortLabel: "Currency", icon: "₹" },
+  { id: "news", label: "Market News", shortLabel: "News", icon: "◫" },
+  { id: "intelligence", label: "Intelligence & MLOps", shortLabel: "MLOps", icon: "✦" }
 ];
 
 const tabDetails = {
@@ -39,6 +40,25 @@ export default function App() {
   const [researchSymbol, setResearchSymbol] = useState("^NSEI");
   const [draggingTab, setDraggingTab] = useState(false);
   const [sliderStyle, setSliderStyle] = useState({ left: 8, width: 0 });
+  const [marketQuotes, setMarketQuotes] = useState([]);
+  const [rotatingQuoteIndex, setRotatingQuoteIndex] = useState(0);
+  const [marketMenuOpen, setMarketMenuOpen] = useState(false);
+  const [marketContext, setMarketContext] = useState(() => {
+    const currencyData = marketApi.seed.currencies()?.data;
+    const currencies = currencyData?.currencies || [];
+    const analysis = marketApi.seed.analysis("^NSEI")?.data;
+    return {
+      usd: currencies.find((item) => item.code === "USD") || null,
+      gold: analysis?.macroFactor?.factors?.find((item) => item.factor === "Gold") || null,
+      currencyCount: Object.keys(currencyData?.referenceRates || {}).length,
+      currencyAsOf: currencyData?.generatedAt || null
+    };
+  });
+  const [newsContext, setNewsContext] = useState(() => {
+    const news = marketApi.seed.newsFeed()?.data;
+    return { count: news?.articles?.length || 0, generatedAt: news?.generatedAt || null };
+  });
+  const [operationsContext, setOperationsContext] = useState({ provider: "Checking", status: "connecting", database: "Checking" });
   const tabbarRef = useRef(null);
   const tabRefs = useRef([]);
   const dragRef = useRef(null);
@@ -46,6 +66,64 @@ export default function App() {
 
   const activeIndex = Math.max(0, tabs.findIndex((tab) => tab.id === activeTab));
   const activeSection = tabDetails[activeTab];
+  const rotatingQuote = marketQuotes[rotatingQuoteIndex % Math.max(1, marketQuotes.length)];
+
+  const applyCurrencyContext = useCallback((response) => {
+    const data = response?.data || response;
+    if (!data) return;
+    setMarketContext((current) => ({
+      ...current,
+      usd: data.currencies?.find((item) => item.code === "USD") || current.usd,
+      currencyCount: Object.keys(data.referenceRates || {}).length || current.currencyCount,
+      currencyAsOf: data.generatedAt || current.currencyAsOf
+    }));
+  }, []);
+
+  const applyNewsContext = useCallback((response) => {
+    const data = response?.data || response;
+    if (!data) return;
+    setNewsContext({ count: data.articles?.length || 0, generatedAt: data.generatedAt || null });
+  }, []);
+
+  const refreshMarketIndicators = useCallback(async (refresh = false) => {
+    const [currencyResult, analysisResult] = await Promise.allSettled([
+      marketApi.currencies(refresh),
+      marketApi.analysis("^NSEI", refresh)
+    ]);
+    if (currencyResult.status === "fulfilled") applyCurrencyContext(currencyResult.value);
+    if (analysisResult.status === "fulfilled") {
+      const gold = analysisResult.value?.data?.macroFactor?.factors?.find((item) => item.factor === "Gold");
+      if (gold) setMarketContext((current) => ({ ...current, gold }));
+    }
+  }, [applyCurrencyContext]);
+
+  useEffect(() => {
+    if (marketQuotes.length < 2) return undefined;
+    const intervalId = window.setInterval(() => {
+      setRotatingQuoteIndex((current) => {
+        const jump = 1 + Math.floor(Math.random() * (marketQuotes.length - 1));
+        return (current + jump) % marketQuotes.length;
+      });
+    }, 6000);
+    return () => window.clearInterval(intervalId);
+  }, [marketQuotes.length]);
+
+  useEffect(() => {
+    refreshMarketIndicators(false);
+    marketApi.newsFeed(false, 20).then(applyNewsContext).catch(() => undefined);
+    marketApi.operationsStatus().then((status) => setOperationsContext({
+      provider: status?.dependencies?.languageModel?.provider || "Local AI",
+      status: status?.dependencies?.languageModel?.status || status?.status || "ready",
+      database: status?.dependencies?.database?.backend || "Database"
+    })).catch(() => setOperationsContext((current) => ({ ...current, status: "offline" })));
+  }, [applyNewsContext, refreshMarketIndicators]);
+
+  useEffect(() => {
+    if (!marketMenuOpen) return undefined;
+    const closeOnEscape = (event) => { if (event.key === "Escape") setMarketMenuOpen(false); };
+    window.addEventListener("keydown", closeOnEscape);
+    return () => window.removeEventListener("keydown", closeOnEscape);
+  }, [marketMenuOpen]);
 
   useEffect(() => {
     const video = visualVideoRef.current;
@@ -149,11 +227,72 @@ export default function App() {
 
   return <div className="app-shell">
     <header className="topbar">
-      <a className="brand" href="#top" aria-label="FinTrack Market Intelligence home"><span className="brand-mark">F</span><span><strong>FinTrack</strong><small>Market Intelligence</small></span></a>
-      <div className="public-chip"><span /> Public research dashboard</div>
+      <div className="brand-cluster">
+        {activeTab === "markets" && <button className="market-menu-toggle" type="button" aria-label="Open Market Pulse menu" aria-expanded={marketMenuOpen} onClick={() => setMarketMenuOpen(true)}><span /><span /><span /></button>}
+        <a className="brand" href="#top" aria-label="FinTrack Market Intelligence home"><img className="brand-mark" src="./fintrack-mark.svg" alt="" /><span><strong>FinTrack</strong><small>Market Intelligence</small></span></a>
+      </div>
+      <nav ref={tabbarRef} className={`tabbar topbar-tabs${draggingTab ? " dragging" : ""}`} aria-label="Dashboard sections" role="tablist">
+        <span className="tab-slider" style={{ left: sliderStyle.left, width: sliderStyle.width }} aria-hidden="true" />
+        {tabs.map((tab, index) => <button
+          key={tab.id}
+          ref={(node) => { tabRefs.current[index] = node; }}
+          type="button"
+          role="tab"
+          aria-label={tab.label}
+          aria-selected={activeTab === tab.id}
+          className={activeTab === tab.id ? "active" : ""}
+          onClick={() => setActiveTab(tab.id)}
+          onPointerDown={(event) => beginTabDrag(event, index)}
+          onPointerMove={moveTabDrag}
+          onPointerUp={endTabDrag}
+          onPointerCancel={endTabDrag}
+          onKeyDown={(event) => handleTabKey(event, index)}
+          title={activeTab === tab.id ? "Drag this selector left or right" : `Open ${tab.label}`}
+        ><span>{tab.icon}</span><b>{tab.shortLabel}</b></button>)}
+      </nav>
+      {activeTab === "markets" && <div className="navbar-market-context">
+        {rotatingQuote && <button className="navbar-quote" key={rotatingQuote.symbol} onClick={() => openResearch(rotatingQuote.symbol)} aria-label={`Open ${rotatingQuote.name} research`}>
+          <span><small>MARKET NOW</small><strong>{rotatingQuote.name}</strong></span>
+          <span><b>{Number(rotatingQuote.price).toLocaleString("en-IN", { maximumFractionDigits: 2 })}</b><em className={Number(rotatingQuote.changePercent) >= 0 ? "positive" : "negative"}>{Number(rotatingQuote.changePercent) >= 0 ? "+" : ""}{rotatingQuote.changePercent}%</em></span>
+        </button>}
+        {marketContext.gold && <div className="market-context-tile" aria-label="Verified gold market move"><small>GOLD MOVE</small><strong className={Number(marketContext.gold.changePercent) >= 0 ? "positive" : "negative"}>{Number(marketContext.gold.changePercent) >= 0 ? "+" : ""}{marketContext.gold.changePercent}%</strong></div>}
+        {marketContext.usd && <div className="market-context-tile" aria-label="Verified US dollar to Indian rupee rate"><small>USD/INR</small><strong>₹{Number(marketContext.usd.inrValue).toLocaleString("en-IN", { maximumFractionDigits: 2 })}</strong></div>}
+      </div>}
+      {activeTab === "currency" && <div className="navbar-market-context" aria-label="Currency desk status">
+        {marketContext.usd && <div className="market-context-tile"><small>USD/INR NOW</small><strong>₹{Number(marketContext.usd.inrValue).toLocaleString("en-IN", { maximumFractionDigits: 2 })}</strong></div>}
+        <div className="market-context-tile"><small>RATE DIRECTORY</small><strong>{marketContext.currencyCount || "—"} pairs</strong></div>
+      </div>}
+      {activeTab === "news" && <div className="navbar-market-context" aria-label="News desk status">
+        <div className="market-context-tile"><small>HEADLINES</small><strong>{newsContext.count || "—"} verified</strong></div>
+        <div className="market-context-tile"><small>FEED CHECKED</small><strong>{newsContext.generatedAt ? new Date(newsContext.generatedAt).toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" }) : "Loading"}</strong></div>
+      </div>}
+      {activeTab === "intelligence" && <div className="navbar-market-context" aria-label="Intelligence service status">
+        <div className="market-context-tile"><small>AI PROVIDER</small><strong>{operationsContext.provider}</strong></div>
+        <div className="market-context-tile"><small>SERVICE</small><strong className={operationsContext.status === "ready" || operationsContext.status === "configured" ? "positive" : ""}>{operationsContext.status}</strong></div>
+      </div>}
+      <div className={`public-chip${activeTab === "markets" ? " compact" : ""}`} title="Public research dashboard"><span /><b>{activeTab === "markets" ? "Public" : "Public dashboard"}</b></div>
     </header>
 
-    <main id="top">
+    {activeTab === "markets" && <>
+      <button className={`market-drawer-backdrop${marketMenuOpen ? " open" : ""}`} aria-label="Close Market Pulse menu" tabIndex={marketMenuOpen ? 0 : -1} onClick={() => setMarketMenuOpen(false)} />
+      <aside className={`market-side-drawer${marketMenuOpen ? " open" : ""}`} aria-hidden={!marketMenuOpen}>
+        <div className="market-drawer-heading"><div><small>FINTRACK</small><strong>Market Pulse</strong></div><button aria-label="Close Market Pulse menu" onClick={() => setMarketMenuOpen(false)}>×</button></div>
+        <nav aria-label="Market Pulse navigation">
+          <p>MARKET VIEW</p>
+          <a href="#market-overview" onClick={() => setMarketMenuOpen(false)}><span>⌂</span><b>Overview</b><small>Live market status</small></a>
+          <a href="#daily-market" onClick={() => setMarketMenuOpen(false)}><span>⌁</span><b>Daily chart</b><small>Inspect each close</small></a>
+          <a href="#market-statistics" onClick={() => setMarketMenuOpen(false)}><span>▦</span><b>Market statistics</b><small>Board breadth</small></a>
+          <p>RESEARCH TOOLS</p>
+          <a href="#company-search" onClick={() => setMarketMenuOpen(false)}><span>⌕</span><b>Find a company</b><small>Search by name</small></a>
+          <a href="#risk-alerts" onClick={() => setMarketMenuOpen(false)}><span>!</span><b>Risk alerts</b><small>Downside monitor</small></a>
+          <a href="#global-markets" onClick={() => setMarketMenuOpen(false)}><span>◎</span><b>Global indices</b><small>Major markets</small></a>
+        </nav>
+        <p className="market-drawer-note">These links open real sections on this page. Quotes may be delayed.</p>
+      </aside>
+    </>}
+
+    <main id="top" className={activeTab === "markets" ? "market-page-active" : ""}>
+      {activeTab === "markets" && marketQuotes.length > 0 && <MarketOpeningRibbon quotes={marketQuotes} onResearch={openResearch} />}
       <section className="hero">
         <div>
           <p className="eyebrow">NO LOGIN · NO PERSONAL DATA</p>
@@ -180,31 +319,26 @@ export default function App() {
         </div>
       </section>
 
-      <nav ref={tabbarRef} className={`tabbar${draggingTab ? " dragging" : ""}`} aria-label="Dashboard sections" role="tablist">
-        <span className="tab-slider" style={{ left: sliderStyle.left, width: sliderStyle.width }} aria-hidden="true" />
-        {tabs.map((tab, index) => <button
-          key={tab.id}
-          ref={(node) => { tabRefs.current[index] = node; }}
-          type="button"
-          role="tab"
-          aria-selected={activeTab === tab.id}
-          className={activeTab === tab.id ? "active" : ""}
-          onClick={() => setActiveTab(tab.id)}
-          onPointerDown={(event) => beginTabDrag(event, index)}
-          onPointerMove={moveTabDrag}
-          onPointerUp={endTabDrag}
-          onPointerCancel={endTabDrag}
-          onKeyDown={(event) => handleTabKey(event, index)}
-          title={activeTab === tab.id ? "Drag this selector left or right" : `Open ${tab.label}`}
-        ><span>{tab.icon}</span>{tab.label}</button>)}
-      </nav>
-
-      {activeTab === "markets" && <MarketPulse onResearch={openResearch} />}
-      {activeTab === "currency" && <CurrencyDesk />}
-      {activeTab === "news" && <NewsDesk onResearch={openResearch} />}
+      {activeTab === "markets" && <MarketPulse onResearch={openResearch} onQuotesChange={setMarketQuotes} onMarketContextRefresh={refreshMarketIndicators} />}
+      {activeTab === "currency" && <CurrencyDesk onDataChange={applyCurrencyContext} />}
+      {activeTab === "news" && <NewsDesk onResearch={openResearch} onDataChange={applyNewsContext} />}
       {activeTab === "intelligence" && <IntelligenceDesk initialSymbol={researchSymbol} />}
     </main>
 
     <footer><div><strong>FinTrack Market Intelligence</strong><p>Public educational research dashboard. No account or personal finance data is collected.</p></div><p>Market data may be delayed. Not investment advice.</p></footer>
   </div>;
+}
+
+function MarketOpeningRibbon({ quotes, onResearch }) {
+  const items = useMemo(() => quotes.slice(0, 14), [quotes]);
+  const renderItems = (duplicate = false) => items.map((quote) => {
+    const positive = Number(quote.changePercent) >= 0;
+    return <button key={`${duplicate ? "copy" : "main"}-${quote.symbol}`} tabIndex={duplicate ? -1 : 0} aria-hidden={duplicate || undefined} onClick={() => onResearch(quote.symbol)}>
+      <strong>{quote.name}</strong><span>{Number(quote.price).toLocaleString("en-IN", { maximumFractionDigits: 2 })}</span><em className={positive ? "positive" : "negative"}>{positive ? "+" : ""}{quote.changePercent}%</em>
+    </button>;
+  });
+  return <section className="market-opening-ribbon" aria-label="Live rotating market quotes">
+    <div className="market-ribbon-label"><span>LIVE</span><strong>Market board</strong><small>Hover to pause</small></div>
+    <div className="market-ribbon-window"><div className="market-ribbon-track"><div>{renderItems(false)}</div><div aria-hidden="true">{renderItems(true)}</div></div></div>
+  </section>;
 }

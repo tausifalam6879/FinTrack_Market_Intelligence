@@ -3,7 +3,6 @@ import StatusBadge from "./StatusBadge";
 import { marketApi } from "../services/marketApi";
 
 const formatNumber = (value) => Number(value).toLocaleString("en-IN", { maximumFractionDigits: 2 });
-const sectors = ["All", "Indices", "Energy", "Banking", "Technology", "Automobile", "Consumer", "Healthcare", "Telecom", "Media"];
 const ALERT_SCAN_INTERVAL_MS = 15 * 60 * 1000;
 const ALERT_THRESHOLD_KEY = "fintrack.market.alert-threshold.v1";
 const SENT_ALERTS_KEY = "fintrack.market.sent-alerts.v1";
@@ -22,17 +21,15 @@ const readSentAlerts = () => {
   }
 };
 
-export default function MarketPulse({ onResearch }) {
+export default function MarketPulse({ onResearch, onQuotesChange, onMarketContextRefresh }) {
   const [result, setResult] = useState(() => marketApi.seed.overview());
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
-  const [sector, setSector] = useState("All");
   const [companyQuery, setCompanyQuery] = useState("");
   const [companyMatches, setCompanyMatches] = useState([]);
   const [companySearchMode, setCompanySearchMode] = useState("");
   const [companySearchError, setCompanySearchError] = useState("");
   const [searchingCompanies, setSearchingCompanies] = useState(false);
-  const [touchPaused, setTouchPaused] = useState(false);
   const [alertThreshold, setAlertThreshold] = useState(readAlertThreshold);
   const [nextScanAt, setNextScanAt] = useState(() => Date.now() + ALERT_SCAN_INTERVAL_MS);
   const [notificationPermission, setNotificationPermission] = useState(() => (
@@ -43,7 +40,9 @@ export default function MarketPulse({ onResearch }) {
     if (!silent) setLoading(true);
     if (!silent) setError("");
     try {
-      setResult(await marketApi.overview(refresh));
+      const response = await marketApi.overview(refresh);
+      setResult(response);
+      if (refresh) onMarketContextRefresh?.(true);
     } catch (requestError) {
       if (!silent) setError("Market provider is temporarily unavailable. Please retry after a moment.");
     } finally {
@@ -97,12 +96,13 @@ export default function MarketPulse({ onResearch }) {
     };
   }, [companyQuery]);
 
-  const board = useMemo(() => {
-    const items = result?.data?.watchlist || result?.data?.markets || [];
-    return items.filter((item) => item.status === "available" && (sector === "All" || item.sector === sector));
-  }, [result, sector]);
+  useEffect(() => {
+    const quotes = result?.data?.watchlist || result?.data?.markets || [];
+    onQuotesChange?.(quotes.filter((item) => item.status === "available"));
+  }, [onQuotesChange, result]);
 
   const globalIndices = (result?.data?.markets || []).filter((item) => item.status === "available");
+  const chartIndices = (result?.data?.watchlist || []).filter((item) => item.status === "available" && item.sector === "Indices");
   const generatedAt = result?.data?.generatedAt || result?.savedAt;
   const downsideAlerts = useMemo(() => {
     const companies = result?.data?.watchlist || [];
@@ -144,12 +144,12 @@ export default function MarketPulse({ onResearch }) {
   };
 
   return (
-    <section className="page-section" aria-labelledby="market-title">
+    <section id="market-overview" className="page-section" aria-labelledby="market-title">
       <div className="section-heading split-heading">
         <div>
           <p className="eyebrow">PUBLIC MARKET PULSE</p>
           <h2 id="market-title">Markets at a glance</h2>
-          <p>Filter sectors, inspect the latest available quote and open deeper research without leaving the website.</p>
+          <p>Search companies, inspect daily market movement and open deeper research without leaving the website.</p>
         </div>
         <div className="heading-actions">
           {result && <StatusBadge mode={result.mode} />}
@@ -161,7 +161,7 @@ export default function MarketPulse({ onResearch }) {
       {result?.mode === "cache" && <div className="notice warning">The live provider did not respond. Values below are the last verified browser response from {new Date(result.savedAt).toLocaleString("en-IN")}.</div>}
       {error && <div className="notice error">{error}</div>}
 
-      <section className="company-discovery" aria-labelledby="company-discovery-title">
+      <section id="company-search" className="company-discovery" aria-labelledby="company-discovery-title">
         <div>
           <p className="eyebrow">DYNAMIC COMPANY DISCOVERY</p>
           <h3 id="company-discovery-title">Find any supported public company</h3>
@@ -195,20 +195,12 @@ export default function MarketPulse({ onResearch }) {
         </div>}
       </section>
 
-      <div className="sector-row" aria-label="Market sectors">
-        {sectors.map((item) => <button key={item} className={sector === item ? "sector active" : "sector"} onClick={() => setSector(item)}>{item}</button>)}
+      <div id="daily-market" className="market-data-workspace">
+        <MarketHistoryPanel indices={chartIndices.length ? chartIndices : globalIndices} onResearch={onResearch} />
+        <MarketStatisticsPanel quotes={result?.data?.watchlist || []} generatedAt={generatedAt} onResearch={onResearch} />
       </div>
 
-      {loading && !result ? <LoadingCards count={8} /> : (
-        board.length > 0 ? <QuoteRail
-          quotes={board}
-          onResearch={onResearch}
-          touchPaused={touchPaused}
-          setTouchPaused={setTouchPaused}
-        /> : <div className="quote-empty">No verified quotes are available for this sector right now.</div>
-      )}
-
-      <section className="alert-center" aria-labelledby="alert-center-title">
+      <section id="risk-alerts" className="alert-center" aria-labelledby="alert-center-title">
         <div className="alert-center-header">
           <div>
             <p className="eyebrow">AI-ASSISTED RISK MONITOR</p>
@@ -257,7 +249,7 @@ export default function MarketPulse({ onResearch }) {
         <p className="alert-disclaimer">Alerts are evidence-based risk signals, not automatic sell instructions or personalized investment advice. Always verify the quote timestamp, source and your own risk plan.</p>
       </section>
 
-      <div className="subsection-heading">
+      <div id="global-markets" className="subsection-heading">
         <div><p className="eyebrow">GLOBAL VIEW</p><h3>Major global indices</h3></div>
         {generatedAt && <small>Feed checked {new Date(generatedAt).toLocaleString("en-IN")}</small>}
       </div>
@@ -274,54 +266,120 @@ export default function MarketPulse({ onResearch }) {
   );
 }
 
-function LoadingCards({ count }) {
-  return <div className="quote-grid">{Array.from({ length: count }, (_, index) => <div className="quote-card skeleton" key={index}><i /><i /><i /></div>)}</div>;
+function MarketStatisticsPanel({ quotes, generatedAt, onResearch }) {
+  const companies = quotes.filter((item) => item.status === "available" && item.sector !== "Indices");
+  const advances = companies.filter((item) => Number(item.changePercent) > 0.05);
+  const declines = companies.filter((item) => Number(item.changePercent) < -0.05);
+  const unchanged = companies.length - advances.length - declines.length;
+  const atHigh = companies.filter((item) => Number(item.high) > 0 && Number(item.price) >= Number(item.high) * 0.9995).length;
+  const atLow = companies.filter((item) => Number(item.low) > 0 && Number(item.price) <= Number(item.low) * 1.0005).length;
+  const sorted = [...companies].sort((first, second) => Number(second.changePercent) - Number(first.changePercent));
+  const gainer = sorted[0];
+  const loser = sorted[sorted.length - 1];
+
+  return <section id="market-statistics" className="market-statistics-panel" aria-labelledby="market-statistics-title">
+    <div className="market-statistics-heading">
+      <div><p className="eyebrow">VERIFIED BOARD BREADTH</p><h3 id="market-statistics-title">Market statistics</h3></div>
+      {generatedAt && <small>As of {new Date(generatedAt).toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" })}</small>}
+    </div>
+    <div className="market-stat-primary">
+      <article><small>Monitored</small><strong>{companies.length}</strong></article>
+      <article className="stat-up"><small>Advances</small><strong>{advances.length}</strong></article>
+      <article className="stat-down"><small>Declines</small><strong>{declines.length}</strong></article>
+      <article className="stat-flat"><small>Unchanged</small><strong>{unchanged}</strong></article>
+    </div>
+    <div className="market-stat-session">
+      <div><small>At session high</small><strong className="positive">▲ {atHigh}</strong></div>
+      <div><small>At session low</small><strong className="negative">▼ {atLow}</strong></div>
+    </div>
+    <div className="market-movers">
+      <p>BOARD MOVERS</p>
+      {gainer && <button onClick={() => onResearch(gainer.symbol)}><span><small>Largest gainer</small><strong>{gainer.name}</strong></span><b className="positive">+{gainer.changePercent}%</b></button>}
+      {loser && <button onClick={() => onResearch(loser.symbol)}><span><small>Largest decline</small><strong>{loser.name}</strong></span><b className="negative">{loser.changePercent}%</b></button>}
+    </div>
+    <p className="market-stat-note">Breadth covers FinTrack's monitored company board, not every exchange-listed stock.</p>
+  </section>;
 }
 
-function QuoteRail({ quotes, onResearch, touchPaused, setTouchPaused }) {
-  const repeatCount = Math.max(1, Math.ceil(8 / quotes.length));
-  const railItems = Array.from({ length: repeatCount }, (_, repeatIndex) => (
-    quotes.map((quote) => ({ quote, repeatIndex }))
-  )).flat();
-  const duration = Math.max(34, railItems.length * 3.2);
+function MarketHistoryPanel({ indices, onResearch }) {
+  const choices = indices.slice(0, 5);
+  const [symbol, setSymbol] = useState(() => choices.find((item) => item.symbol === "^NSEI")?.symbol || choices[0]?.symbol || "^NSEI");
+  const [period, setPeriod] = useState("3M");
+  const [analysis, setAnalysis] = useState(() => marketApi.seed.analysis(symbol)?.data || null);
+  const [loading, setLoading] = useState(false);
 
-  const renderGroup = (duplicate = false) => <div className="quote-group" aria-hidden={duplicate || undefined}>
-    {railItems.map(({ quote, repeatIndex }) => {
-      const positive = Number(quote.changePercent) >= 0;
-      const hiddenDuplicate = duplicate || repeatIndex > 0;
-      return <button
-        className="quote-card"
-        key={`${duplicate ? "duplicate" : "primary"}-${quote.symbol}-${repeatIndex}`}
-        onClick={() => onResearch(quote.symbol)}
-        tabIndex={hiddenDuplicate ? -1 : 0}
-        aria-hidden={hiddenDuplicate || undefined}
-      >
-        <div className="quote-card-top"><span>{quote.name}</span><span className={positive ? "trend up" : "trend down"}>{positive ? "↗" : "↘"}</span></div>
-        <strong>{formatNumber(quote.price)}</strong>
-        <span className={positive ? "change positive" : "change negative"}>{positive ? "+" : ""}{quote.changePercent}%</span>
-        <small>{quote.symbol} · {quote.sector || quote.region}</small>
-      </button>;
-    })}
+  useEffect(() => {
+    if (!choices.some((item) => item.symbol === symbol) && choices[0]) setSymbol(choices[0].symbol);
+  }, [choices, symbol]);
+
+  useEffect(() => {
+    let active = true;
+    const seed = marketApi.seed.analysis(symbol)?.data;
+    if (seed) setAnalysis(seed);
+    setLoading(!seed);
+    marketApi.analysis(symbol)
+      .then((response) => { if (active) setAnalysis(response.data); })
+      .catch(() => undefined)
+      .finally(() => { if (active) setLoading(false); });
+    return () => { active = false; };
+  }, [symbol]);
+
+  const history = analysis?.history || [];
+  const periodDays = { "1M": 22, "3M": 66, "6M": 132, "1Y": 260 }[period];
+  const visibleHistory = history.slice(-periodDays);
+  const selectedQuote = choices.find((item) => item.symbol === symbol);
+
+  return <section className="market-history-panel" aria-labelledby="market-history-title">
+    <div className="market-history-heading">
+      <div><p className="eyebrow">DAILY MARKET HISTORY</p><h3 id="market-history-title">Move through the chart, day by day</h3><p>Hover or touch the line to inspect the verified closing value for that date.</p></div>
+      <button className="text-button" onClick={() => onResearch(symbol)}>Open full research →</button>
+    </div>
+    <div className="market-history-toolbar">
+      <div className="index-picker" aria-label="Choose market index">{choices.map((item) => <button key={item.symbol} className={symbol === item.symbol ? "active" : ""} onClick={() => setSymbol(item.symbol)}>{item.name}</button>)}</div>
+      <div className="period-picker" aria-label="Choose chart period">{["1M", "3M", "6M", "1Y"].map((item) => <button key={item} className={period === item ? "active" : ""} onClick={() => setPeriod(item)}>{item}</button>)}</div>
+    </div>
+    <div className="market-history-summary">
+      <div><small>{selectedQuote?.name || analysis?.name || symbol}</small><strong>{selectedQuote ? formatNumber(selectedQuote.price) : "—"}</strong></div>
+      <span className={Number(selectedQuote?.changePercent) >= 0 ? "positive" : "negative"}>{selectedQuote ? `${Number(selectedQuote.changePercent) >= 0 ? "+" : ""}${selectedQuote.changePercent}% today` : "Daily close history"}</span>
+      <small>{analysis?.dataAsOf ? `Evidence ${new Date(analysis.dataAsOf).toLocaleString("en-IN")}` : "Loading verified history…"}</small>
+    </div>
+    {loading && visibleHistory.length < 2 ? <div className="history-loading">Loading verified daily history…</div> : <InteractiveHistoryChart history={visibleHistory} symbol={symbol} />}
+    <p className="chart-disclaimer">This is daily closing history, not an intraday exchange feed. Quotes may be delayed.</p>
+  </section>;
+}
+
+function InteractiveHistoryChart({ history, symbol }) {
+  const rows = history.filter((item) => Number.isFinite(Number(item.close)));
+  const [hoverIndex, setHoverIndex] = useState(null);
+  if (rows.length < 2) return <div className="history-loading">Verified history is unavailable for this index right now.</div>;
+  const closes = rows.map((item) => Number(item.close));
+  const min = Math.min(...closes);
+  const max = Math.max(...closes);
+  const spread = max - min || 1;
+  const xFor = (index) => 22 + (index / (rows.length - 1)) * 676;
+  const yFor = (value) => 218 - ((value - min) / spread) * 178;
+  const path = rows.map((item, index) => `${xFor(index)},${yFor(Number(item.close))}`).join(" ");
+  const activeIndex = hoverIndex === null ? rows.length - 1 : hoverIndex;
+  const active = rows[activeIndex];
+  const activeX = xFor(activeIndex);
+  const activeY = yFor(Number(active.close));
+  const move = (event) => {
+    const rect = event.currentTarget.getBoundingClientRect();
+    const ratio = Math.max(0, Math.min(1, (event.clientX - rect.left) / rect.width));
+    setHoverIndex(Math.round(ratio * (rows.length - 1)));
+  };
+  return <div className="interactive-history-chart" onPointerMove={move} onPointerLeave={() => setHoverIndex(null)}>
+    <svg viewBox="0 0 720 250" preserveAspectRatio="none" role="img" aria-label={`${symbol} daily closing history`}>
+      <defs><linearGradient id={`history-fill-${symbol.replace(/\W/g, "")}`} x1="0" y1="0" x2="0" y2="1"><stop offset="0" stopColor="#32a6c5" stopOpacity=".42"/><stop offset="1" stopColor="#32a6c5" stopOpacity=".03"/></linearGradient></defs>
+      {[40, 84, 128, 172, 218].map((y) => <line key={y} x1="22" x2="698" y1={y} y2={y} className="history-gridline" />)}
+      <polygon points={`22,218 ${path} 698,218`} fill={`url(#history-fill-${symbol.replace(/\W/g, "")})`} />
+      <polyline points={path} className="history-line" />
+      <line x1={activeX} x2={activeX} y1="30" y2="218" className="history-cursor" />
+      <circle cx={activeX} cy={activeY} r="5" className="history-point" />
+    </svg>
+    <div className={`history-tooltip ${activeX > 510 ? "align-left" : ""}`} style={{ left: `${(activeX / 720) * 100}%`, top: `${Math.max(8, (activeY / 250) * 100 - 4)}%` }}>
+      <strong>{symbol}</strong><b>{formatNumber(active.close)}</b><span>{new Date(`${active.date}T00:00:00`).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" })}</span>
+    </div>
+    <div className="history-axis"><span>{new Date(`${rows[0].date}T00:00:00`).toLocaleDateString("en-IN", { day: "2-digit", month: "short" })}</span><span>{new Date(`${rows[rows.length - 1].date}T00:00:00`).toLocaleDateString("en-IN", { day: "2-digit", month: "short" })}</span></div>
   </div>;
-
-  return <>
-    <div className="quote-rail-heading">
-      <span>{quotes.length} verified market cards in this view</span>
-      <small>{touchPaused ? "Animation paused" : "Hover, focus or touch a card to pause"}</small>
-    </div>
-    <div
-      className={`quote-marquee ${touchPaused ? "touch-paused" : ""}`}
-      style={{ "--quote-duration": `${duration}s` }}
-      role="region"
-      aria-label="Continuously moving market quote cards"
-      onPointerDown={(event) => { if (event.pointerType !== "mouse") setTouchPaused(true); }}
-      onPointerUp={(event) => { if (event.pointerType !== "mouse") setTouchPaused(false); }}
-      onPointerCancel={() => setTouchPaused(false)}
-    >
-      <div className="quote-track">
-        {renderGroup(false)}
-        {renderGroup(true)}
-      </div>
-    </div>
-  </>;
 }
