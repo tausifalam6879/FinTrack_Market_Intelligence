@@ -108,7 +108,7 @@ test("navbar keeps relevant live context across every desk", async ({ page }) =>
 
   await page.getByRole("tab", { name: /Intelligence & MLOps/i }).click();
   await expect(page.getByLabel("Intelligence service status")).toContainText("AI PROVIDER");
-  await expect(page.getByLabel("Intelligence service status")).toContainText("gemini");
+  await expect(page.getByLabel("Intelligence service status")).toContainText("Gemini");
 });
 
 test("research, browser watchlist, batch comparison and PDF action work together", async ({ page }) => {
@@ -141,6 +141,48 @@ test("metric explanation is grounded and concise", async ({ page }) => {
   await expect(page.locator(".agent-panel")).toHaveClass(/open/);
   await expect(page.locator(".chat-message.assistant")).toContainText("Probability up");
   await expect(page.locator(".chat-message.assistant small")).toHaveText("Gemini · verified data");
+});
+
+test("AI provider badge follows connectivity and the provider that answered", async ({ page, context }) => {
+  await page.getByRole("tab", { name: /Intelligence & MLOps/i }).click();
+  const serviceStatus = page.getByLabel("Intelligence service status");
+
+  await context.setOffline(true);
+  await expect(serviceStatus).toContainText("Ollama");
+  await expect(serviceStatus).toContainText("offline mode");
+  await context.setOffline(false);
+  await expect(serviceStatus).toContainText("Gemini");
+
+  let provider = "ollama";
+  await page.route("**/market/agent", (route) => route.fulfill({
+    status: 200,
+    contentType: "application/json",
+    body: JSON.stringify(provider === "ollama" ? {
+      answer: "This answer came from the local Ollama model using verified data.",
+      llmProvider: "ollama",
+      llmStatus: "fallback_after_grounding",
+      llmUsed: true,
+      llmAnswerAccepted: true
+    } : {
+      answer: "The language models were unavailable, so FinTrack returned its verified tool answer.",
+      llmProvider: "deterministic",
+      llmStatus: "offline",
+      llmUsed: false,
+      llmAnswerAccepted: false
+    })
+  }));
+
+  await page.locator(".agent-launcher").click();
+  await page.getByRole("button", { name: "Tell me about Nifty 50" }).click();
+  await expect(serviceStatus).toContainText("Ollama");
+  await expect(serviceStatus).toContainText("answered");
+
+  provider = "fallback";
+  await page.getByRole("button", { name: "What do probability, RSI, and the projected range mean?" }).click();
+  await expect(serviceStatus).toContainText("Verified fallback");
+  await expect(serviceStatus).toContainText("verified");
+  const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
+  expect(overflow).toBeLessThanOrEqual(1);
 });
 
 test("operations observability is visible in MLOps without page overflow", async ({ page }) => {

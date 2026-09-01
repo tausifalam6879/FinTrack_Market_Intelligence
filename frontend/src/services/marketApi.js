@@ -2,6 +2,10 @@ import bundledSnapshot from "../data/bundledMarketSnapshot.json";
 
 const DEFAULT_API = "http://localhost:8081";
 const API_BASE = String(import.meta.env.VITE_MARKET_API_BASE_URL || DEFAULT_API).replace(/\/$/, "");
+const HOSTED_FALLBACK_API = String(
+  import.meta.env.VITE_MARKET_FALLBACK_API_BASE_URL || "https://fintrack-market-gateway.onrender.com"
+).replace(/\/$/, "");
+const USING_LOCAL_API = /^(?:https?:\/\/)?(?:localhost|127\.0\.0\.1)(?::|\/|$)/i.test(API_BASE);
 const CACHE_PREFIX = "fintrack.market.intelligence.v1";
 
 const cacheKey = (name) => `${CACHE_PREFIX}.${name}`;
@@ -48,44 +52,61 @@ const seedResult = (name) => {
 };
 
 const request = async (path, { method = "GET", body, timeout = 30000, retry = method === "GET" } = {}) => {
-  const attempts = retry ? 2 : 1;
+  // A developer may open the Vite app before starting the local Java/Spring
+  // services. Public read-only data should still work in that state, while
+  // POST requests (AI questions, document preparation, comparisons) remain on
+  // the explicitly configured local backend.
+  const apiBases = method === "GET" && USING_LOCAL_API && HOSTED_FALLBACK_API !== API_BASE
+    ? [API_BASE, HOSTED_FALLBACK_API]
+    : [API_BASE];
   let lastError;
-  for (let attempt = 0; attempt < attempts; attempt += 1) {
-    const controller = new AbortController();
-    const timer = window.setTimeout(() => controller.abort(), timeout);
-    try {
-      const response = await fetch(`${API_BASE}${path}`, {
-        method,
-        headers: { "Content-Type": "application/json" },
-        body: body ? JSON.stringify(body) : undefined,
-        signal: controller.signal
-      });
-      if (!response.ok) {
-        const detail = await response.text();
-        const error = new Error(detail || `Request failed with status ${response.status}`);
-        error.status = response.status;
-        throw error;
+  for (let baseIndex = 0; baseIndex < apiBases.length; baseIndex += 1) {
+    const apiBase = apiBases[baseIndex];
+    const localFallbackAvailable = apiBase === API_BASE && USING_LOCAL_API && apiBases.length > 1;
+    const attempts = localFallbackAvailable ? 1 : retry ? 2 : 1;
+    for (let attempt = 0; attempt < attempts; attempt += 1) {
+      const controller = new AbortController();
+      // Render may need extra time to wake and compute an unseen company's
+      // first analysis. Keep the shorter timeout for a genuinely local service.
+      const effectiveTimeout = apiBase !== API_BASE ? Math.max(timeout, 120000) : timeout;
+      const timer = window.setTimeout(() => controller.abort(), effectiveTimeout);
+      try {
+        const response = await fetch(`${apiBase}${path}`, {
+          method,
+          headers: { "Content-Type": "application/json" },
+          body: body ? JSON.stringify(body) : undefined,
+          signal: controller.signal
+        });
+        if (!response.ok) {
+          const detail = await response.text();
+          const error = new Error(detail || `Request failed with status ${response.status}`);
+          error.status = response.status;
+          throw error;
+        }
+        const payload = await response.json();
+        const gateway = response.headers.get("X-FinTrack-Gateway");
+        if (gateway && payload && typeof payload === "object" && !Array.isArray(payload)) {
+          return {
+            ...payload,
+            _delivery: {
+              gateway,
+              requestId: response.headers.get("X-Request-Id") || null,
+              responseTimeMs: response.headers.get("X-Response-Time-Ms") || null,
+              fallback: apiBase !== API_BASE
+            }
+          };
+        }
+        return payload;
+      } catch (error) {
+        lastError = error;
+        const retryable = error.name === "AbortError" || !error.status || [502, 503, 504].includes(error.status);
+        if (!retryable) throw error;
+        const retryCurrentBase = attempt + 1 < attempts;
+        if (retryCurrentBase) await new Promise((resolve) => window.setTimeout(resolve, 350 * (attempt + 1)));
+        else break;
+      } finally {
+        window.clearTimeout(timer);
       }
-      const payload = await response.json();
-      const gateway = response.headers.get("X-FinTrack-Gateway");
-      if (gateway && payload && typeof payload === "object" && !Array.isArray(payload)) {
-        return {
-          ...payload,
-          _delivery: {
-            gateway,
-            requestId: response.headers.get("X-Request-Id") || null,
-            responseTimeMs: response.headers.get("X-Response-Time-Ms") || null
-          }
-        };
-      }
-      return payload;
-    } catch (error) {
-      lastError = error;
-      const retryable = error.name === "AbortError" || !error.status || [502, 503, 504].includes(error.status);
-      if (attempt + 1 >= attempts || !retryable) throw error;
-      await new Promise((resolve) => window.setTimeout(resolve, 350 * (attempt + 1)));
-    } finally {
-      window.clearTimeout(timer);
     }
   }
   throw lastError;

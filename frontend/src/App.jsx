@@ -12,6 +12,29 @@ const tabs = [
   { id: "intelligence", label: "Intelligence & MLOps", shortLabel: "MLOps", icon: "✦" }
 ];
 
+const networkProviderContext = (online = window.navigator.onLine) => ({
+  provider: online ? "Gemini" : "Ollama",
+  status: online ? "online" : "offline mode"
+});
+
+const configuredProviderLabel = (provider, online) => {
+  const normalized = String(provider || "").trim().toLowerCase();
+  if (normalized === "ollama" || normalized === "local") return "Ollama";
+  if (normalized === "gemini") return "Gemini";
+  if (normalized === "hybrid" || normalized === "auto") return online ? "Gemini" : "Ollama";
+  return online ? "Gemini" : "Ollama";
+};
+
+const answerProviderContext = (meta = {}) => {
+  const provider = String(meta.llmProvider || "").trim().toLowerCase();
+  const status = String(meta.llmStatus || "").trim().toLowerCase();
+  const verifiedFallback = meta.llmUsed === false || meta.llmAnswerAccepted === false || ["offline", "grounding_fallback"].includes(status);
+  if (verifiedFallback) return { provider: "Verified fallback", status: "verified" };
+  if (provider === "ollama" || provider === "local") return { provider: "Ollama", status: "answered" };
+  if (provider === "gemini") return { provider: "Gemini", status: "answered" };
+  return { provider: "Verified fallback", status: "verified" };
+};
+
 const tabDetails = {
   markets: {
     video: "./media/market-pulse.mp4", eyebrow: "LIVE MARKET PULSE", title: "See the market before you react.",
@@ -58,7 +81,7 @@ export default function App() {
     const news = marketApi.seed.newsFeed()?.data;
     return { count: news?.articles?.length || 0, generatedAt: news?.generatedAt || null };
   });
-  const [operationsContext, setOperationsContext] = useState({ provider: "Checking", status: "connecting", database: "Checking" });
+  const [operationsContext, setOperationsContext] = useState(() => ({ ...networkProviderContext(), database: "Checking" }));
   const tabbarRef = useRef(null);
   const tabRefs = useRef([]);
   const dragRef = useRef(null);
@@ -112,11 +135,25 @@ export default function App() {
     refreshMarketIndicators(false);
     marketApi.newsFeed(false, 20).then(applyNewsContext).catch(() => undefined);
     marketApi.operationsStatus().then((status) => setOperationsContext({
-      provider: status?.dependencies?.languageModel?.provider || "Local AI",
+      provider: configuredProviderLabel(status?.dependencies?.languageModel?.provider, window.navigator.onLine),
       status: status?.dependencies?.languageModel?.status || status?.status || "ready",
       database: status?.dependencies?.database?.backend || "Database"
-    })).catch(() => setOperationsContext((current) => ({ ...current, status: "offline" })));
+    })).catch(() => setOperationsContext((current) => ({ ...current, ...networkProviderContext() })));
   }, [applyNewsContext, refreshMarketIndicators]);
+
+  useEffect(() => {
+    const syncNetworkProvider = () => setOperationsContext((current) => ({ ...current, ...networkProviderContext() }));
+    window.addEventListener("online", syncNetworkProvider);
+    window.addEventListener("offline", syncNetworkProvider);
+    return () => {
+      window.removeEventListener("online", syncNetworkProvider);
+      window.removeEventListener("offline", syncNetworkProvider);
+    };
+  }, []);
+
+  const applyAnswerProvider = useCallback((meta) => {
+    setOperationsContext((current) => ({ ...current, ...answerProviderContext(meta) }));
+  }, []);
 
   useEffect(() => {
     if (!marketMenuOpen) return undefined;
@@ -322,7 +359,7 @@ export default function App() {
       {activeTab === "markets" && <MarketPulse onResearch={openResearch} onQuotesChange={setMarketQuotes} onMarketContextRefresh={refreshMarketIndicators} />}
       {activeTab === "currency" && <CurrencyDesk onDataChange={applyCurrencyContext} />}
       {activeTab === "news" && <NewsDesk onResearch={openResearch} onDataChange={applyNewsContext} />}
-      {activeTab === "intelligence" && <IntelligenceDesk initialSymbol={researchSymbol} />}
+      {activeTab === "intelligence" && <IntelligenceDesk initialSymbol={researchSymbol} onProviderChange={applyAnswerProvider} />}
     </main>
 
     <footer><div><strong>FinTrack Market Intelligence</strong><p>Public educational research dashboard. No account or personal finance data is collected.</p></div><p>Market data may be delayed. Not investment advice.</p></footer>

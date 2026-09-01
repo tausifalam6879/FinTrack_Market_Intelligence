@@ -59,7 +59,7 @@ const groundedProviderLabel = (meta = {}) => {
   return "FinTrack verified answer";
 };
 
-export default function IntelligenceDesk({ initialSymbol = "^NSEI" }) {
+export default function IntelligenceDesk({ initialSymbol = "^NSEI", onProviderChange = () => undefined }) {
   const [symbol, setSymbol] = useState(initialSymbol);
   const [draftSymbol, setDraftSymbol] = useState(initialSymbol);
   const [result, setResult] = useState(() => marketApi.seed.analysis(initialSymbol));
@@ -312,13 +312,19 @@ export default function IntelligenceDesk({ initialSymbol = "^NSEI" }) {
   };
   const resolveAndLoad = async () => {
     const clean = draftSymbol.trim();
-    if (!clean || resolvingCompany || loading) return;
+    if (!clean || resolvingCompany) return;
     const alias = indexAliases[clean.toUpperCase()];
     if (clean.startsWith("^") || alias) {
       setResolvedCompany(null);
       load(alias || clean);
       return;
     }
+    const availableMatch = companyMatches.find((item) => item.symbol.toUpperCase() === clean.toUpperCase()) || companyMatches[0];
+    if (availableMatch) {
+      selectCompany(availableMatch);
+      return;
+    }
+    if (searchingCompanies) return;
     setResolvingCompany(true);
     setError("");
     try {
@@ -327,13 +333,13 @@ export default function IntelligenceDesk({ initialSymbol = "^NSEI" }) {
       const exact = items.find((item) => item.symbol.toUpperCase() === clean.toUpperCase());
       const company = exact || items[0];
       if (!company) {
-        setError(`“${clean}” ke liye koi public company nahi mili. Company name ya valid ticker try karein.`);
+        setError(`No public company matched “${clean}”. Try a company name or a valid ticker.`);
         setCompanySearchOpen(true);
         return;
       }
       selectCompany(company);
     } catch {
-      setError("Company name ko market ticker me resolve nahi kiya ja saka. Please retry.");
+      setError("The company name could not be resolved to a market ticker. Please retry.");
     } finally { setResolvingCompany(false); }
   };
   const prepareDocuments = async () => {
@@ -373,6 +379,7 @@ export default function IntelligenceDesk({ initialSymbol = "^NSEI" }) {
         ? " This is a follow-up to the immediately previous assistant answer. Check that answer, address the doubt, and do not repeat it verbatim."
         : "";
       const response = await marketApi.agent({ message: `${sectionInstruction}${followUpInstruction} User question: ${clean}`, symbol, recentMessages: recentOverride });
+      onProviderChange(response);
       setMessages((current) => [...current, { role: "assistant", content: response.answer, meta: response }]);
     } catch {
       const localApi = /(?:localhost|127\.0\.0\.1)/i.test(marketApi.baseUrl);
@@ -447,7 +454,7 @@ export default function IntelligenceDesk({ initialSymbol = "^NSEI" }) {
       <div className="intelligence-company-search">
         <form className="symbol-search" onSubmit={(event) => { event.preventDefault(); resolveAndLoad(); }}>
           <input value={draftSymbol} onChange={(event) => { setDraftSymbol(event.target.value); setResolvedCompany(null); setCompanySearchOpen(true); }} placeholder="Company name or ticker, e.g. Amazon, CSCO, RELIANCE.NS" aria-label="Company name or market ticker" autoComplete="off" />
-          <button className="primary-button" disabled={loading || resolvingCompany}>{resolvingCompany ? "Finding company…" : loading ? "Researching…" : "Run research"}</button>
+          <button className="primary-button" disabled={resolvingCompany || searchingCompanies}>{resolvingCompany || searchingCompanies ? "Finding company…" : loading ? "Run new research" : "Run research"}</button>
         </form>
         {companySearchOpen && draftSymbol.trim().length >= 2 && !draftSymbol.trim().startsWith("^") && <div className="company-search-results intelligence-search-results" aria-label="Matching companies">
           {searchingCompanies && <div className="company-search-state">Finding the correct market ticker…</div>}
