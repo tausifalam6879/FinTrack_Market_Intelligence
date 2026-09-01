@@ -145,8 +145,24 @@ test("metric explanation is grounded and concise", async ({ page }) => {
 
 test("operations observability is visible in MLOps without page overflow", async ({ page }) => {
   await page.getByRole("tab", { name: /Intelligence & MLOps/i }).click();
+  const initialSecondaryNav = await page.evaluate(() => {
+    const topbar = document.querySelector(".topbar").getBoundingClientRect();
+    const detailTabs = document.querySelector(".intelligence-view-tabs").getBoundingClientRect();
+    return { topbarBottom: topbar.bottom, detailTabsTop: detailTabs.top };
+  });
+  expect(initialSecondaryNav.detailTabsTop).toBeGreaterThanOrEqual(initialSecondaryNav.topbarBottom);
+  expect(initialSecondaryNav.detailTabsTop).toBeLessThan(initialSecondaryNav.topbarBottom + 20);
   await page.getByRole("button", { name: "Advanced model details" }).click();
-  await expect(page.getByText("Latency, failures and AI fallback evidence")).toBeVisible();
+  const operationsHeading = page.getByText("Latency, failures and AI fallback evidence");
+  await operationsHeading.scrollIntoViewIfNeeded();
+  await expect(operationsHeading).toBeVisible();
+  const stickyPositions = await page.evaluate(() => {
+    const topbar = document.querySelector(".topbar").getBoundingClientRect();
+    const detailTabs = document.querySelector(".intelligence-view-tabs").getBoundingClientRect();
+    return { topbarBottom: topbar.bottom, detailTabsTop: detailTabs.top };
+  });
+  expect(stickyPositions.detailTabsTop).toBeGreaterThanOrEqual(stickyPositions.topbarBottom);
+  expect(stickyPositions.detailTabsTop).toBeLessThan(stickyPositions.topbarBottom + 20);
   const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
   expect(overflow).toBeLessThanOrEqual(1);
 });

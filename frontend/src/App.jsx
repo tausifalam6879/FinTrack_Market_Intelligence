@@ -291,7 +291,7 @@ export default function App() {
       </aside>
     </>}
 
-    <main id="top" className={activeTab === "markets" ? "market-page-active" : ""}>
+    <main id="top" className={activeTab === "markets" ? "market-page-active" : activeTab === "intelligence" ? "intelligence-page-active" : ""}>
       {activeTab === "markets" && marketQuotes.length > 0 && <MarketOpeningRibbon quotes={marketQuotes} onResearch={openResearch} />}
       <section className="hero">
         <div>

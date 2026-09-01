@@ -397,7 +397,8 @@ main { width: min(1500px, calc(100% - 40px)); margin: 0 auto; }
 .asset-label { color: #b4ebe6; font-size: 12px; font-weight: 800; letter-spacing: .11em; }
 .analysis-hero h3 { margin: 6px 0; font-size: 28px; }
 .analysis-hero p { margin: 0; color: #d5e9ed; font-size: 12px; }
-.intelligence-view-tabs { margin: 18px 0 14px; padding: 6px; display: grid; grid-template-columns: repeat(auto-fit,minmax(120px,1fr)); gap: 6px; border: 1px solid #d8e4e7; border-radius: 14px; background: #f2f7f8; position: sticky; top: 174px; z-index: 7; }
+.intelligence-page-active { padding-top: 62px; }
+.intelligence-view-tabs { width: min(1430px,calc(100% - 64px)); margin: 0; padding: 6px; display: grid; grid-template-columns: repeat(auto-fit,minmax(120px,1fr)); gap: 6px; position: fixed; top: 88px; left: 50%; z-index: 19; transform: translateX(-50%); border: 1px solid #d8e4e7; border-radius: 14px; background: rgba(242,247,248,.96); box-shadow: 0 10px 24px rgba(26,59,75,.1); backdrop-filter: blur(14px); }
 .intelligence-view-tabs button { min-height: 40px; padding: 7px 9px; border: 0; border-radius: 10px; color: #52677a; background: transparent; font-size: 11px; font-weight: 800; }
 .intelligence-view-tabs button:hover { color: var(--teal-dark); background: #e5f1f2; }
 .intelligence-view-tabs button.active { color: white; background: linear-gradient(100deg,var(--teal-dark),var(--teal)); box-shadow: 0 7px 16px rgba(8,125,140,.18); }
@@ -1308,6 +1309,9 @@ footer p { margin: 5px 0 0; }
   .topbar .topbar-tabs { flex: 0 1 156px; margin-inline: 5px; padding: 3px; }
   .topbar .topbar-tabs .tab-slider { height: 36px; top: 3px; }
   .topbar .topbar-tabs button { min-width: 0; min-height: 36px; }
+  .intelligence-page-active { padding-top: 60px; }
+  .intelligence-view-tabs { width: calc(100% - 22px); top: 76px; display: flex; overflow-x: auto; transform: translateX(-50%); scrollbar-width: thin; }
+  .intelligence-view-tabs button { min-width: 145px; flex: 1 0 145px; }
   .navbar-market-context { margin-left: auto; }
   .navbar-quote { min-width: 0; width: min(34vw,245px); gap: 10px; }
   .navbar-quote strong { max-width: 110px; }
@@ -1471,7 +1475,7 @@ footer p { margin: 5px 0 0; }
   .intelligence-company-search, .preset-row, .research-actions, .context-agent-bar,
   .operations-summary-link, .metric-explain-button { display: none !important; }
   main, .page-section, .intelligence-main { width: 100% !important; max-width: none !important; margin: 0 !important; padding: 0 !important; border: 0 !important; box-shadow: none !important; }
-  .intelligence-view-tabs { position: static; top: auto; }
+  .intelligence-view-tabs { width: auto; position: static; top: auto; left: auto; transform: none; }
   .analysis-hero { margin-top: 10px; color: #111827; border-color: #9ca3af; background: #eef6f8; break-inside: avoid; }
   .analysis-hero p, .asset-label, .outlook small { color: #475569; }
   .metric-grid, .prediction-outcome-summary, .risk-panel, .prediction-explanation, .research-grid,
