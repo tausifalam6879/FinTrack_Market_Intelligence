@@ -383,11 +383,12 @@ export default function IntelligenceDesk({ initialSymbol = "^NSEI" }) {
     } finally { setAsking(false); }
   };
 
+  const activeAssetName = resolvedCompany?.symbol === symbol ? resolvedCompany.name : analysis?.name || symbol;
   const suggestedQuestions = {
-    overview: [`${symbol} ka result simple words me batao`, "Probability, RSI aur range ka matlab kya hai?"],
-    company: [`${symbol} company ki health simple words me batao`, "Is company ki sabse important strength aur risk kya hai?"],
-    documents: [`${symbol} report ka short summary do`, "Report me debt ya major risk ke baare me kya likha hai?"],
-    mlops: ["Kya is model par bharosa kiya ja sakta hai?", "Model ko simple language me kaise test kiya gaya?"]
+    overview: [`Tell me about ${activeAssetName}`, "What do probability, RSI, and the projected range mean?"],
+    company: [`Tell me about ${activeAssetName}`, "What are this company's most important strength and risk?"],
+    documents: [`Summarize the available report for ${activeAssetName}`, "What does the report say about debt or major risks?"],
+    mlops: ["Can this model be trusted?", "How was this model tested?"]
   }[activeView];
 
   const openContextAgent = () => {

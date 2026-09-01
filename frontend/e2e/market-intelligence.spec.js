@@ -133,6 +133,10 @@ test("research, browser watchlist, batch comparison and PDF action work together
 
 test("metric explanation is grounded and concise", async ({ page }) => {
   await page.getByRole("tab", { name: /Intelligence & MLOps/i }).click();
+  await page.locator(".agent-launcher").click();
+  await expect(page.getByRole("button", { name: "Tell me about Nifty 50" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "What do probability, RSI, and the projected range mean?" })).toBeVisible();
+  await page.getByRole("button", { name: "Close research agent" }).click();
   await page.getByRole("button", { name: "Explain Chance of rise" }).click();
   await expect(page.locator(".agent-panel")).toHaveClass(/open/);
   await expect(page.locator(".chat-message.assistant")).toContainText("Probability up");
