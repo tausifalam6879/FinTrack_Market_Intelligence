@@ -144,10 +144,20 @@ test("metric explanation is grounded and concise", async ({ page }) => {
 });
 
 test("AI provider badge follows connectivity and the provider that answered", async ({ page, context }) => {
+  await page.route("**/market/operations-status", async (route) => {
+    await new Promise((resolve) => setTimeout(resolve, 700));
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({ status: "ready", dependencies: { languageModel: { provider: "gemini", status: "configured" } } })
+    });
+  });
+  await page.reload();
+  await context.setOffline(true);
+  await page.waitForTimeout(900);
   await page.getByRole("tab", { name: /Intelligence & MLOps/i }).click();
   const serviceStatus = page.getByLabel("Intelligence service status");
 
-  await context.setOffline(true);
   await expect(serviceStatus).toContainText("Ollama");
   await expect(serviceStatus).toContainText("offline mode");
   await context.setOffline(false);

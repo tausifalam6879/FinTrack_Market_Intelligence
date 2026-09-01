@@ -20,7 +20,7 @@ const networkProviderContext = (online = window.navigator.onLine) => ({
 const configuredProviderLabel = (provider, online) => {
   const normalized = String(provider || "").trim().toLowerCase();
   if (normalized === "ollama" || normalized === "local") return "Ollama";
-  if (normalized === "gemini") return "Gemini";
+  if (normalized === "gemini") return online ? "Gemini" : "Ollama";
   if (normalized === "hybrid" || normalized === "auto") return online ? "Gemini" : "Ollama";
   return online ? "Gemini" : "Ollama";
 };
@@ -134,10 +134,14 @@ export default function App() {
   useEffect(() => {
     refreshMarketIndicators(false);
     marketApi.newsFeed(false, 20).then(applyNewsContext).catch(() => undefined);
-    marketApi.operationsStatus().then((status) => setOperationsContext({
-      provider: configuredProviderLabel(status?.dependencies?.languageModel?.provider, window.navigator.onLine),
-      status: status?.dependencies?.languageModel?.status || status?.status || "ready",
-      database: status?.dependencies?.database?.backend || "Database"
+    marketApi.operationsStatus().then((status) => setOperationsContext((current) => {
+      const online = window.navigator.onLine;
+      return {
+        ...current,
+        provider: configuredProviderLabel(status?.dependencies?.languageModel?.provider, online),
+        status: online ? status?.dependencies?.languageModel?.status || status?.status || "ready" : "offline mode",
+        database: status?.dependencies?.database?.backend || "Database"
+      };
     })).catch(() => setOperationsContext((current) => ({ ...current, ...networkProviderContext() })));
   }, [applyNewsContext, refreshMarketIndicators]);
 
