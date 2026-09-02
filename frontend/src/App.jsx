@@ -68,6 +68,73 @@ const tabDetails = {
   }
 };
 
+const deskMenus = {
+  markets: {
+    title: "Market Pulse",
+    groups: [
+      { label: "MARKET VIEW", items: [
+        { target: "market-overview", icon: "⌂", label: "Overview", detail: "Live market status" },
+        { target: "daily-market", icon: "⌁", label: "Daily chart", detail: "Inspect each close" },
+        { target: "market-statistics", icon: "▦", label: "Market statistics", detail: "Board breadth" }
+      ] },
+      { label: "RESEARCH TOOLS", items: [
+        { target: "company-search", icon: "⌕", label: "Find a company", detail: "Search by name" },
+        { target: "risk-alerts", icon: "!", label: "Risk alerts", detail: "Downside monitor" },
+        { target: "global-markets", icon: "◎", label: "Global indices", detail: "Major markets" }
+      ] }
+    ],
+    note: "These links open real market sections. Quotes may be delayed."
+  },
+  currency: {
+    title: "Currency Desk",
+    groups: [
+      { label: "INR RATE DESK", items: [
+        { target: "currency-overview", icon: "₹", label: "Rate overview", detail: "Latest provider status" },
+        { target: "featured-currency-rates", icon: "◫", label: "Featured currencies", detail: "Major INR conversions" },
+        { target: "currency-directory", icon: "▦", label: "Currency directory", detail: "Browse available pairs" }
+      ] },
+      { label: "RATE LOOKUP", items: [
+        { target: "currency-search", focus: true, icon: "⌕", label: "Search a currency", detail: "Find code or name" },
+        { target: "currency-rate-notes", icon: "i", label: "Rate guidance", detail: "Understand limitations" }
+      ] }
+    ],
+    note: "Currency links stay inside the INR desk. Rates are informational reference values."
+  },
+  news: {
+    title: "Market News",
+    groups: [
+      { label: "NEWS FEED", items: [
+        { target: "news-overview", icon: "◫", label: "Desk overview", detail: "Feed status and refresh" },
+        { target: "news-headlines", icon: "≡", label: "Latest headlines", detail: "Current market stories" },
+        { target: "news-filters", icon: "⌁", label: "Themes & filters", detail: "India, US and sectors" }
+      ] },
+      { label: "VERIFY SOURCES", items: [
+        { target: "news-search", focus: true, icon: "⌕", label: "Search news", detail: "Company or publisher" },
+        { target: "news-sources", icon: "↗", label: "Publisher evidence", detail: "Check original sources" }
+      ] }
+    ],
+    note: "News links organise the current feed. Open the publisher before drawing a conclusion."
+  },
+  intelligence: {
+    title: "Intelligence & MLOps",
+    groups: [
+      { label: "COMPANY RESEARCH", items: [
+        { target: "research-workspace", icon: "⌕", label: "Find a company", detail: "Name or market ticker" },
+        { target: "research-summary", icon: "◎", label: "Current outlook", detail: "Displayed evidence" },
+        { target: "research-actions", icon: "+", label: "Research tools", detail: "Save, compare or print" }
+      ] },
+      { label: "MODEL & AI", items: [
+        { target: "intelligence-detail-views", view: "overview", icon: "⌂", label: "Simple summary", detail: "Readable model context" },
+        { target: "model-operations", view: "mlops", icon: "◇", label: "Model operations", detail: "Serving and validation" },
+        { target: "runtime-operations", view: "mlops", icon: "↯", label: "Runtime monitoring", detail: "Latency and fallbacks" },
+        { target: "experiment-tracking", view: "mlops", icon: "▦", label: "Experiment tracking", detail: "Offline run comparison" },
+        { target: "research-assistant", action: "open-agent", icon: "✦", label: "Ask FinTrack", detail: "Explain displayed data" }
+      ] }
+    ],
+    note: "MLOps links open the matching research view before moving to its exact evidence section."
+  }
+};
+
 export default function App() {
   const [activeTab, setActiveTab] = useState("markets");
   const [researchSymbol, setResearchSymbol] = useState("^NSEI");
@@ -75,7 +142,8 @@ export default function App() {
   const [sliderStyle, setSliderStyle] = useState({ left: 8, width: 0 });
   const [marketQuotes, setMarketQuotes] = useState([]);
   const [rotatingQuoteIndex, setRotatingQuoteIndex] = useState(0);
-  const [marketMenuOpen, setMarketMenuOpen] = useState(false);
+  const [deskMenuOpen, setDeskMenuOpen] = useState(false);
+  const [intelligenceNavigation, setIntelligenceNavigation] = useState(null);
   const [marketContext, setMarketContext] = useState(() => {
     const currencyData = marketApi.seed.currencies()?.data;
     const currencies = currencyData?.currencies || [];
@@ -99,6 +167,7 @@ export default function App() {
 
   const activeIndex = Math.max(0, tabs.findIndex((tab) => tab.id === activeTab));
   const activeSection = tabDetails[activeTab];
+  const activeMenu = deskMenus[activeTab];
   const rotatingQuote = marketQuotes[rotatingQuoteIndex % Math.max(1, marketQuotes.length)];
 
   const applyCurrencyContext = useCallback((response) => {
@@ -170,11 +239,16 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    if (!marketMenuOpen) return undefined;
-    const closeOnEscape = (event) => { if (event.key === "Escape") setMarketMenuOpen(false); };
+    if (!deskMenuOpen) return undefined;
+    const closeOnEscape = (event) => { if (event.key === "Escape") setDeskMenuOpen(false); };
     window.addEventListener("keydown", closeOnEscape);
     return () => window.removeEventListener("keydown", closeOnEscape);
-  }, [marketMenuOpen]);
+  }, [deskMenuOpen]);
+
+  useEffect(() => {
+    setDeskMenuOpen(false);
+    if (activeTab !== "intelligence") setIntelligenceNavigation(null);
+  }, [activeTab]);
 
   useEffect(() => {
     const video = visualVideoRef.current;
@@ -276,10 +350,18 @@ export default function App() {
 
   const openResearch = (symbol) => { setResearchSymbol(symbol); setActiveTab("intelligence"); window.scrollTo({ top: 0, behavior: "smooth" }); };
 
+  const followDrawerItem = (item) => {
+    setDeskMenuOpen(false);
+    if (item.view || item.action) {
+      setIntelligenceNavigation({ view: item.view, action: item.action, target: item.target, requestId: Date.now() });
+    }
+    if (item.focus) window.setTimeout(() => document.getElementById(item.target)?.focus(), 50);
+  };
+
   return <div className="app-shell">
     <header className="topbar">
       <div className="brand-cluster">
-        {activeTab === "markets" && <button className="market-menu-toggle" type="button" aria-label="Open Market Pulse menu" aria-expanded={marketMenuOpen} onClick={() => setMarketMenuOpen(true)}><span /><span /><span /></button>}
+        <button className="market-menu-toggle" type="button" aria-label={`Open ${activeMenu.title} menu`} aria-expanded={deskMenuOpen} onClick={() => setDeskMenuOpen(true)}><span /><span /><span /></button>
         <a className="brand" href="#top" aria-label="FinTrack Market Intelligence home"><img className="brand-mark" src="./fintrack-mark.svg" alt="" /><span><strong>FinTrack</strong><small>Market Intelligence</small></span></a>
       </div>
       <nav ref={tabbarRef} className={`tabbar topbar-tabs${draggingTab ? " dragging" : ""}`} aria-label="Dashboard sections" role="tablist">
@@ -324,23 +406,19 @@ export default function App() {
       <div className={`public-chip${activeTab === "markets" ? " compact" : ""}`} title="Public research dashboard"><span /><b>{activeTab === "markets" ? "Public" : "Public dashboard"}</b></div>
     </header>
 
-    {activeTab === "markets" && <>
-      <button className={`market-drawer-backdrop${marketMenuOpen ? " open" : ""}`} aria-label="Close Market Pulse menu" tabIndex={marketMenuOpen ? 0 : -1} onClick={() => setMarketMenuOpen(false)} />
-      <aside className={`market-side-drawer${marketMenuOpen ? " open" : ""}`} aria-hidden={!marketMenuOpen}>
-        <div className="market-drawer-heading"><div><small>FINTRACK</small><strong>Market Pulse</strong></div><button aria-label="Close Market Pulse menu" onClick={() => setMarketMenuOpen(false)}>×</button></div>
-        <nav aria-label="Market Pulse navigation">
-          <p>MARKET VIEW</p>
-          <a href="#market-overview" onClick={() => setMarketMenuOpen(false)}><span>⌂</span><b>Overview</b><small>Live market status</small></a>
-          <a href="#daily-market" onClick={() => setMarketMenuOpen(false)}><span>⌁</span><b>Daily chart</b><small>Inspect each close</small></a>
-          <a href="#market-statistics" onClick={() => setMarketMenuOpen(false)}><span>▦</span><b>Market statistics</b><small>Board breadth</small></a>
-          <p>RESEARCH TOOLS</p>
-          <a href="#company-search" onClick={() => setMarketMenuOpen(false)}><span>⌕</span><b>Find a company</b><small>Search by name</small></a>
-          <a href="#risk-alerts" onClick={() => setMarketMenuOpen(false)}><span>!</span><b>Risk alerts</b><small>Downside monitor</small></a>
-          <a href="#global-markets" onClick={() => setMarketMenuOpen(false)}><span>◎</span><b>Global indices</b><small>Major markets</small></a>
+    <>
+      <button className={`market-drawer-backdrop${deskMenuOpen ? " open" : ""}`} aria-label={`Close ${activeMenu.title} menu`} tabIndex={deskMenuOpen ? 0 : -1} onClick={() => setDeskMenuOpen(false)} />
+      <aside className={`market-side-drawer desk-${activeTab}${deskMenuOpen ? " open" : ""}`} aria-hidden={!deskMenuOpen}>
+        <div className="market-drawer-heading"><div><small>FINTRACK</small><strong>{activeMenu.title}</strong></div><button aria-label={`Close ${activeMenu.title} menu`} onClick={() => setDeskMenuOpen(false)}>×</button></div>
+        <nav aria-label={`${activeMenu.title} navigation`}>
+          {activeMenu.groups.map((group) => <div className="market-drawer-group" key={group.label}>
+            <p>{group.label}</p>
+            {group.items.map((item) => <a href={`#${item.target}`} key={`${item.target}-${item.label}`} onClick={() => followDrawerItem(item)}><span>{item.icon}</span><b>{item.label}</b><small>{item.detail}</small></a>)}
+          </div>)}
         </nav>
-        <p className="market-drawer-note">These links open real sections on this page. Quotes may be delayed.</p>
+        <p className="market-drawer-note">{activeMenu.note}</p>
       </aside>
-    </>}
+    </>
 
     <main id="top" className={activeTab === "markets" ? "market-page-active" : activeTab === "intelligence" ? "intelligence-page-active" : ""}>
       {activeTab === "markets" && marketQuotes.length > 0 && <MarketOpeningRibbon quotes={marketQuotes} onResearch={openResearch} />}
@@ -373,7 +451,7 @@ export default function App() {
       {activeTab === "markets" && <MarketPulse onResearch={openResearch} onQuotesChange={setMarketQuotes} onMarketContextRefresh={refreshMarketIndicators} />}
       {activeTab === "currency" && <CurrencyDesk onDataChange={applyCurrencyContext} />}
       {activeTab === "news" && <NewsDesk onResearch={openResearch} onDataChange={applyNewsContext} />}
-      {activeTab === "intelligence" && <IntelligenceDesk initialSymbol={researchSymbol} onProviderChange={applyAnswerProvider} />}
+      {activeTab === "intelligence" && <IntelligenceDesk initialSymbol={researchSymbol} onProviderChange={applyAnswerProvider} navigationRequest={intelligenceNavigation} />}
     </main>
 
     <footer><div><strong>FinTrack Market Intelligence</strong><p>Public educational research dashboard. No account or personal finance data is collected.</p></div><p>Market data may be delayed. Not investment advice.</p></footer>

@@ -114,6 +114,47 @@ test("navbar keeps relevant live context across every desk", async ({ page }) =>
   await expect(page.getByLabel("Intelligence service status")).toContainText("Gemini");
 });
 
+test("every desk has a distinct contextual navigation drawer", async ({ page }) => {
+  await page.getByRole("button", { name: "Open Market Pulse menu" }).click();
+  const marketNavigation = page.getByRole("navigation", { name: "Market Pulse navigation" });
+  await expect(marketNavigation).toContainText("Market statistics");
+  await expect(marketNavigation).not.toContainText("Currency directory");
+  await page.getByRole("button", { name: "Close Market Pulse menu" }).last().click();
+
+  await page.getByRole("tab", { name: /INR Currency Desk/i }).click();
+  await page.getByRole("button", { name: "Open Currency Desk menu" }).click();
+  const currencyNavigation = page.getByRole("navigation", { name: "Currency Desk navigation" });
+  await expect(currencyNavigation).toContainText("Featured currencies");
+  await expect(currencyNavigation).toContainText("Currency directory");
+  await expect(currencyNavigation).not.toContainText("Market statistics");
+  await currencyNavigation.getByRole("link", { name: /Currency directory/ }).click();
+  await expect(page.locator("#currency-directory")).toBeVisible();
+  await page.getByRole("button", { name: "Open Currency Desk menu" }).click();
+  await page.getByRole("navigation", { name: "Currency Desk navigation" }).getByRole("link", { name: /Search a currency/ }).click();
+  await expect(page.getByRole("textbox", { name: "Search currency directory" })).toBeFocused();
+
+  await page.getByRole("tab", { name: /Market News/i }).click();
+  await page.getByRole("button", { name: "Open Market News menu" }).click();
+  const newsNavigation = page.getByRole("navigation", { name: "Market News navigation" });
+  await expect(newsNavigation).toContainText("Latest headlines");
+  await expect(newsNavigation).toContainText("Publisher evidence");
+  await expect(newsNavigation).not.toContainText("Currency directory");
+  await page.getByRole("button", { name: "Close Market News menu" }).last().click();
+
+  await page.getByRole("tab", { name: /Intelligence & MLOps/i }).click();
+  await page.getByRole("button", { name: "Open Intelligence & MLOps menu" }).click();
+  const intelligenceNavigation = page.getByRole("navigation", { name: "Intelligence & MLOps navigation" });
+  await expect(intelligenceNavigation).toContainText("Model operations");
+  await expect(intelligenceNavigation).toContainText("Runtime monitoring");
+  await expect(intelligenceNavigation).not.toContainText("Latest headlines");
+  await intelligenceNavigation.getByRole("link", { name: /Runtime monitoring/ }).click();
+  await expect(page.locator("#runtime-operations")).toBeVisible();
+  await expect(page.getByRole("button", { name: "Advanced model details" })).toHaveClass(/active/);
+  await page.getByRole("button", { name: "Open Intelligence & MLOps menu" }).click();
+  await page.getByRole("navigation", { name: "Intelligence & MLOps navigation" }).getByRole("link", { name: /Ask FinTrack/ }).click();
+  await expect(page.locator(".agent-panel")).toHaveClass(/open/);
+});
+
 test("an unusable currency refresh never replaces verified rates with zero", async ({ page }) => {
   await page.route("**/market/currencies?refresh=true", (route) => route.fulfill({
     status: 200,

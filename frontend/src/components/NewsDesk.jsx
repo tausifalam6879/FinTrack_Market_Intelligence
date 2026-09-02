@@ -56,7 +56,7 @@ export default function NewsDesk({ onResearch, onDataChange }) {
   }, [result, activeFilter, search]);
 
   return (
-    <section className="page-section" aria-labelledby="news-title">
+    <section id="news-overview" className="page-section" aria-labelledby="news-title">
       <div className="section-heading split-heading">
         <div>
           <p className="eyebrow">TIMESTAMPED MARKET HEADLINES</p>
@@ -73,15 +73,15 @@ export default function NewsDesk({ onResearch, onDataChange }) {
       {result?.mode === "cache" && <div className="notice warning">The live headline provider did not respond. Showing the last successful browser response from {new Date(result.savedAt).toLocaleString("en-IN")}.</div>}
       {error && <div className="notice error">{error}</div>}
 
-      <div className="news-toolbar">
+      <div id="news-filters" className="news-toolbar">
         <div className="sector-row" aria-label="News themes">
           {filters.map((filter) => <button key={filter} className={activeFilter === filter ? "sector active" : "sector"} onClick={() => setActiveFilter(filter)}>{filter}</button>)}
         </div>
-        <input className="search-input" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search headlines, publisher or company…" aria-label="Search market news" />
+        <input id="news-search" className="search-input" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search headlines, publisher or company…" aria-label="Search market news" />
       </div>
 
       {loading && !result ? <NewsSkeleton /> : articles.length > 0 ? (
-        <div className="news-grid">
+        <div id="news-headlines" className="news-grid">
           {articles.map((article, index) => {
             const symbol = article.relatedSymbol || "^NSEI";
             const label = sentimentLabel(article.sentiment);
@@ -106,7 +106,7 @@ export default function NewsDesk({ onResearch, onDataChange }) {
         </div>
       ) : <div className="news-empty">No matching current headline was returned. Try another filter or refresh the feed.</div>}
 
-      <div className="news-footer-note">
+      <div id="news-sources" className="news-footer-note">
         <span>Source: {result?.data?.source || "Yahoo Finance headlines via yfinance"}</span>
         {result?.data?.generatedAt && <span>Feed checked {new Date(result.data.generatedAt).toLocaleString("en-IN")}</span>}
       </div>

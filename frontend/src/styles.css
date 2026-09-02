@@ -65,6 +65,9 @@ h1, h2, h3, .brand { font-family: "Manrope", sans-serif; }
 .market-drawer-backdrop { width: 100%; height: 100%; padding: 0; position: fixed; inset: 0; z-index: 39; pointer-events: none; opacity: 0; border: 0; background: rgba(12,31,45,.38); transition: opacity .22s ease; }
 .market-drawer-backdrop.open { pointer-events: auto; opacity: 1; }
 .market-side-drawer { width: min(330px, calc(100vw - 30px)); height: 100dvh; padding: 22px 18px; display: flex; flex-direction: column; position: fixed; top: 0; left: 0; z-index: 40; transform: translateX(-103%); visibility: hidden; color: #eefcfc; background: radial-gradient(circle at 8% 2%,rgba(81,205,190,.24),transparent 26%), linear-gradient(165deg,#102f49 0%,#0a5260 58%,#123d5e 100%); box-shadow: 18px 0 50px rgba(4,25,38,.36); transition: transform .25s ease, visibility .25s; }
+.market-side-drawer.desk-currency { background: radial-gradient(circle at 8% 2%,rgba(91,224,204,.26),transparent 27%), linear-gradient(165deg,#10364b 0%,#08716f 60%,#174b68 100%); }
+.market-side-drawer.desk-news { background: radial-gradient(circle at 8% 2%,rgba(113,172,255,.25),transparent 27%), linear-gradient(165deg,#142d50 0%,#175e7d 57%,#244c79 100%); }
+.market-side-drawer.desk-intelligence { background: radial-gradient(circle at 8% 2%,rgba(125,224,207,.22),transparent 25%), linear-gradient(165deg,#143348 0%,#12656c 48%,#285a86 100%); }
 .market-side-drawer.open { transform: translateX(0); visibility: visible; }
 .market-drawer-heading { padding: 0 2px 18px; display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid rgba(204,245,242,.18); }
 .market-drawer-heading > div { display: grid; }
@@ -72,7 +75,7 @@ h1, h2, h3, .brand { font-family: "Manrope", sans-serif; }
 .market-drawer-heading strong { margin-top: 3px; font: 800 21px "Manrope",sans-serif; }
 .market-drawer-heading button { width: 36px; height: 36px; border: 1px solid rgba(255,255,255,.2); border-radius: 10px; color: #e7f9f8; background: rgba(255,255,255,.08); font-size: 22px; }
 .market-side-drawer nav { padding: 12px 0; overflow-y: auto; }
-.market-side-drawer nav > p { margin: 14px 10px 7px; color: #8db9c2; font-size: 9px; font-weight: 900; letter-spacing: .13em; }
+.market-drawer-group > p { margin: 14px 10px 7px; color: #8db9c2; font-size: 9px; font-weight: 900; letter-spacing: .13em; }
 .market-side-drawer nav a { margin: 3px 0; padding: 11px 10px; display: grid; grid-template-columns: 28px minmax(0,1fr); gap: 1px 8px; align-items: center; color: #e9f7f8; text-decoration: none; border: 1px solid transparent; border-radius: 11px; }
 .market-side-drawer nav a:hover, .market-side-drawer nav a:focus-visible { color: #fff; border-color: rgba(142,232,218,.22); background: rgba(136,229,216,.12); }
 .market-side-drawer nav a > span { width: 28px; height: 28px; grid-row: 1 / 3; display: grid; place-items: center; border-radius: 8px; color: #8be8d9; background: rgba(105,221,204,.13); font-weight: 900; }
@@ -251,6 +254,10 @@ main { width: min(1500px, calc(100% - 40px)); margin: 0 auto; }
 .market-movers button b { flex: 0 0 auto; font-size: 12px; }
 .market-stat-note { margin: 14px 0 0; color: var(--muted); font-size: 9px; line-height: 1.45; }
 #market-overview, #company-search, #risk-alerts, #global-markets { scroll-margin-top: 180px; }
+#currency-overview, #featured-currency-rates, #currency-directory, #currency-search, #currency-rate-notes,
+#news-overview, #news-headlines, #news-filters, #news-search, #news-sources { scroll-margin-top: 100px; }
+#research-workspace, #research-summary, #research-actions, #intelligence-detail-views, #research-assistant,
+#runtime-operations, #experiment-tracking, #model-validation { scroll-margin-top: 165px; }
 .trend { font-size: 21px; }
 .change { font-weight: 800; }
 .positive, .up { color: #15824a; }

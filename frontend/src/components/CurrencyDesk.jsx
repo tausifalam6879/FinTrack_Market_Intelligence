@@ -45,7 +45,7 @@ export default function CurrencyDesk({ onDataChange }) {
     .sort((left, right) => left.code.localeCompare(right.code)), [result, search]);
 
   return (
-    <section className="page-section" aria-labelledby="currency-title">
+    <section id="currency-overview" className="page-section" aria-labelledby="currency-title">
       <div className="section-heading split-heading">
         <div><p className="eyebrow">INR CURRENCY DESK</p><h2 id="currency-title">How global currencies compare with ₹1</h2><p>One unit of each listed currency is converted into Indian rupees using the latest available provider quote.</p></div>
         <div className="heading-actions">{result && <StatusBadge mode={result.mode} label={result.mode === "live" ? "Currency feed connected" : undefined} />}<button className="secondary-button" onClick={() => load(true)} disabled={loading}>{loading ? "Checking…" : "Refresh now"}</button></div>
@@ -55,7 +55,7 @@ export default function CurrencyDesk({ onDataChange }) {
       {result?.mode === "cache" && <div className="notice warning">Showing the last verified response from {new Date(result.savedAt).toLocaleString("en-IN")} while the provider reconnects.</div>}
       {error && <div className="notice error">{error}</div>}
 
-      <div className="currency-grid">
+      <div id="featured-currency-rates" className="currency-grid">
         {(result?.data?.currencies || []).map((currency) => {
           const displayedRate = formatRate(currency.inrValue, currency.digits);
           return <article className="currency-card" key={currency.code}>
@@ -67,15 +67,15 @@ export default function CurrencyDesk({ onDataChange }) {
         })}
       </div>
 
-      <div className="directory-panel">
+      <div id="currency-directory" className="directory-panel">
         <div className="subsection-heading"><div><p className="eyebrow">CURRENCY DIRECTORY</p><h3>{directory.length} matching currencies</h3></div>{result?.data?.generatedAt && <small>Checked {new Date(result.data.generatedAt).toLocaleString("en-IN")}</small>}</div>
-        <input className="search-input" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search USD, Thai baht, South African rand…" aria-label="Search currency directory" />
+        <input id="currency-search" className="search-input" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search USD, Thai baht, South African rand…" aria-label="Search currency directory" />
         <div className="directory-grid">
           {directory.slice(0, 80).map((currency) => <article key={currency.code}><strong>{currency.code}</strong><span>₹{formatRate(currency.value, currency.value < 1 ? 4 : 2)}</span><small>{currency.name}</small></article>)}
         </div>
         {directory.length > 80 && <p className="data-note">Showing the first 80 matches. Narrow the search to find a specific currency.</p>}
       </div>
-      <p className="data-note">Rates are informational midpoint/reference values. Banks, cards and remittance providers may apply a different rate or markup.</p>
+      <p id="currency-rate-notes" className="data-note">Rates are informational midpoint/reference values. Banks, cards and remittance providers may apply a different rate or markup.</p>
     </section>
   );
 }

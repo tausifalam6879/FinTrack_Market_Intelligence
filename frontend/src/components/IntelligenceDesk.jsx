@@ -59,7 +59,7 @@ const groundedProviderLabel = (meta = {}) => {
   return "FinTrack verified answer";
 };
 
-export default function IntelligenceDesk({ initialSymbol = "^NSEI", onProviderChange = () => undefined }) {
+export default function IntelligenceDesk({ initialSymbol = "^NSEI", onProviderChange = () => undefined, navigationRequest = null }) {
   const [symbol, setSymbol] = useState(initialSymbol);
   const [draftSymbol, setDraftSymbol] = useState(initialSymbol);
   const [result, setResult] = useState(() => marketApi.seed.analysis(initialSymbol));
@@ -108,6 +108,16 @@ export default function IntelligenceDesk({ initialSymbol = "^NSEI", onProviderCh
   const loadSequenceRef = useRef(0);
 
   useEffect(() => { setSymbol(initialSymbol); setDraftSymbol(initialSymbol); }, [initialSymbol]);
+
+  useEffect(() => {
+    if (!navigationRequest) return undefined;
+    if (navigationRequest.view) setActiveView(navigationRequest.view);
+    if (navigationRequest.action === "open-agent") setAgentOpen(true);
+    const timer = window.setTimeout(() => {
+      document.getElementById(navigationRequest.target)?.scrollIntoView({ behavior: "smooth", block: "start" });
+    }, 50);
+    return () => window.clearTimeout(timer);
+  }, [navigationRequest]);
 
   useEffect(() => {
     try { window.localStorage.setItem(SAVED_RESEARCH_KEY, JSON.stringify(savedResearch)); }
@@ -450,7 +460,7 @@ export default function IntelligenceDesk({ initialSymbol = "^NSEI", onProviderCh
   };
 
   return (
-    <section className="page-section intelligence-page" aria-labelledby="research-title">
+    <section id="research-workspace" className="page-section intelligence-page" aria-labelledby="research-title">
       <div className="intelligence-main">
       <div className="section-heading split-heading">
         <div><p className="eyebrow">OPEN MARKET INTELLIGENCE</p><h2 id="research-title">Research an index or company</h2><p>Technical evidence, macro drivers and AI explanations remain inside this website.</p></div>
@@ -478,11 +488,11 @@ export default function IntelligenceDesk({ initialSymbol = "^NSEI", onProviderCh
       {error && <div className="notice error">{error}</div>}
 
       {analysis && <>
-        <div className="analysis-hero">
+        <div id="research-summary" className="analysis-hero">
           <div><span className="asset-label">{analysis.symbol}</span><h3>{resolvedCompany?.symbol === analysis.symbol ? resolvedCompany.name : analysis.name}</h3><p>Evidence as of {new Date(analysis.dataAsOf).toLocaleString("en-IN")}</p></div>
           <div className={`outlook outlook-${String(analysis.outlook).toLowerCase()}`}><small>Experimental outlook</small><strong>{analysis.outlook}</strong></div>
         </div>
-        <div className="research-actions" aria-label="Research actions">
+        <div id="research-actions" className="research-actions" aria-label="Research actions">
           <button type="button" onClick={saveCurrentResearch} disabled={savedResearch.some((item) => item.symbol === analysis.symbol)}>
             {savedResearch.some((item) => item.symbol === analysis.symbol) ? "✓ Saved for comparison" : "+ Save company"}
           </button>
@@ -507,14 +517,14 @@ export default function IntelligenceDesk({ initialSymbol = "^NSEI", onProviderCh
           <Metric label="Likely next-session range" value={`${formatNumber(analysis.expectedRange?.low)} – ${formatNumber(analysis.expectedRange?.high)}`} hint={`${analysis.expectedRange?.currency || "Local currency"} · price can move outside it`} onExplain={explainMetric} />
           <Metric label="Momentum (RSI)" value={formatNumber(analysis.technicalIndicators?.rsi14)} hint="30–70 usually means no extreme momentum" onExplain={explainMetric} />
         </div>
-        <nav className="intelligence-view-tabs" aria-label="Intelligence detail views">
+        <nav id="intelligence-detail-views" className="intelligence-view-tabs" aria-label="Intelligence detail views">
           {[
             ["overview", "Simple summary"],
             ...(!analysis.symbol.startsWith("^") ? [["company", "Company health"], ["documents", "Annual reports"]] : []),
             ["mlops", "Advanced model details"]
           ].map(([value, label]) => <button type="button" key={value} className={activeView === value ? "active" : ""} onClick={() => setActiveView(value)}>{label}</button>)}
         </nav>
-        <div className="context-agent-bar">
+        <div id="research-assistant" className="context-agent-bar">
           <div><strong>Is page ka koi number samajh nahi aaya?</strong><span>FinTrack usi displayed data ko simple words mein samjhayega.</span></div>
           <button type="button" onClick={openContextAgent}>Ask FinTrack</button>
         </div>
@@ -1759,13 +1769,13 @@ function ModelRegistryPanel({ status, loading, error, activeModel, operationsSta
 }
 
 function RuntimeOperationsPanel({ data, error }) {
-  if (error) return <div className="runtime-operations runtime-operations-error"><strong>Runtime telemetry unavailable</strong><span>{error}</span></div>;
-  if (!data) return <div className="runtime-operations"><strong>Loading aggregate API telemetry…</strong></div>;
+  if (error) return <div id="runtime-operations" className="runtime-operations runtime-operations-error"><strong>Runtime telemetry unavailable</strong><span>{error}</span></div>;
+  if (!data) return <div id="runtime-operations" className="runtime-operations"><strong>Loading aggregate API telemetry…</strong></div>;
   const api = data.telemetry?.api || {};
   const llm = data.telemetry?.languageModel || {};
   const database = data.dependencies?.database || {};
   const languageModel = data.dependencies?.languageModel || {};
-  return <section className="runtime-operations" aria-labelledby="runtime-operations-title">
+  return <section id="runtime-operations" className="runtime-operations" aria-labelledby="runtime-operations-title">
     <div className="runtime-operations-heading">
       <div><span className="monitoring-kicker">LIVE SERVICE OBSERVABILITY</span><strong id="runtime-operations-title">Latency, failures and AI fallback evidence</strong></div>
       <span>{data.status} · aggregate only</span>
@@ -1791,7 +1801,7 @@ function ExperimentTrackingPanel({ data, loading, error }) {
   const runs = data?.runs || [];
   const deepRun = runs.find((run) => run.deepLearningExperiment);
   const deep = deepRun?.deepLearningExperiment;
-  return <section className="experiment-panel" aria-labelledby="experiment-tracking-title">
+  return <section id="experiment-tracking" className="experiment-panel" aria-labelledby="experiment-tracking-title">
     <div className="experiment-heading">
       <div>
         <p className="eyebrow">MLFLOW EXPERIMENT TRACKING</p>
@@ -1915,7 +1925,7 @@ function DocumentRagPanel({ symbol, documents, documentsLoading, preparation, pr
 
 function ModelEvidence({ model, comparisons, importance, audit }) {
   const maxImportance = Math.max(...importance.map((item) => Number(item.importance) || 0), 1);
-  return <section className="model-evidence" aria-labelledby="model-validation-title">
+  return <section id="model-validation" className="model-evidence" aria-labelledby="model-validation-title">
     <div className="panel-title">
       <div><p className="eyebrow">PREDICTIVE ML EVIDENCE</p><h3 id="model-validation-title">Model validation and prediction audit</h3></div>
       <span>Time order preserved · no random shuffle</span>
