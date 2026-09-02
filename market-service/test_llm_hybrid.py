@@ -22,6 +22,17 @@ class HybridLlmTests(unittest.TestCase):
         ollama_chat.assert_not_called()
 
     @patch("market_intelligence._ollama_chat", return_value="Local Ollama answer")
+    @patch("market_intelligence._gemini_chat")
+    def test_offline_preference_skips_gemini_timeout(self, gemini_chat, ollama_chat):
+        with patch.dict(os.environ, {"LLM_PROVIDER": "hybrid"}, clear=False):
+            answer, provider = market._provider_chat(MESSAGES, prefer_local=True)
+
+        self.assertEqual("Local Ollama answer", answer)
+        self.assertEqual("ollama", provider)
+        gemini_chat.assert_not_called()
+        ollama_chat.assert_called_once_with(MESSAGES)
+
+    @patch("market_intelligence._ollama_chat", return_value="Local Ollama answer")
     @patch("market_intelligence._gemini_chat", side_effect=RuntimeError("Gemini service is unavailable."))
     def test_hybrid_retries_gemini_for_every_question_before_ollama(self, gemini_chat, ollama_chat):
         with patch.dict(os.environ, {"LLM_PROVIDER": "hybrid"}, clear=False):

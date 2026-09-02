@@ -7,7 +7,16 @@ const displayName = (code) => {
   catch { return code; }
 };
 
-const formatRate = (value, digits = 2) => Number(value).toLocaleString("en-IN", { minimumFractionDigits: digits, maximumFractionDigits: digits });
+const positiveRate = (value) => {
+  if (value === null || value === undefined || value === "") return null;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+};
+
+const formatRate = (value, digits = 2) => {
+  const parsed = positiveRate(value);
+  return parsed === null ? null : parsed.toLocaleString("en-IN", { minimumFractionDigits: digits, maximumFractionDigits: digits });
+};
 
 export default function CurrencyDesk({ onDataChange }) {
   const [result, setResult] = useState(() => marketApi.seed.currencies());
@@ -31,6 +40,7 @@ export default function CurrencyDesk({ onDataChange }) {
 
   const directory = useMemo(() => Object.entries(result?.data?.referenceRates || {})
     .map(([code, value]) => ({ code, value, name: displayName(code) }))
+    .filter((item) => positiveRate(item.value) !== null)
     .filter((item) => `${item.code} ${item.name}`.toLowerCase().includes(search.trim().toLowerCase()))
     .sort((left, right) => left.code.localeCompare(right.code)), [result, search]);
 
@@ -46,12 +56,15 @@ export default function CurrencyDesk({ onDataChange }) {
       {error && <div className="notice error">{error}</div>}
 
       <div className="currency-grid">
-        {(result?.data?.currencies || []).map((currency) => <article className="currency-card" key={currency.code}>
-          <div className="currency-country">{currency.country}</div>
-          <div className="currency-code">{currency.code}</div>
-          <strong>₹{formatRate(currency.inrValue, currency.digits)}</strong>
-          <small>{currency.quoteMode === "intraday" ? "Latest quote" : "Reference rate"} · {currency.name}</small>
-        </article>)}
+        {(result?.data?.currencies || []).map((currency) => {
+          const displayedRate = formatRate(currency.inrValue, currency.digits);
+          return <article className="currency-card" key={currency.code}>
+            <div className="currency-country">{currency.country}</div>
+            <div className="currency-code">{currency.code}</div>
+            <strong>{displayedRate === null ? "Unavailable" : `₹${displayedRate}`}</strong>
+            <small>{currency.quoteMode === "intraday" ? "Latest quote" : "Reference rate"} · {currency.name}</small>
+          </article>;
+        })}
       </div>
 
       <div className="directory-panel">

@@ -10,10 +10,28 @@ const CACHE_PREFIX = "fintrack.market.intelligence.v1";
 
 const cacheKey = (name) => `${CACHE_PREFIX}.${name}`;
 
+const isPositiveNumber = (value) => {
+  if (value === null || value === undefined || value === "") return false;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0;
+};
+
+const isUsableCurrencyData = (data) => (
+  Array.isArray(data?.currencies)
+  && data.currencies.some((item) => isPositiveNumber(item?.inrValue))
+);
+
+const isUsableData = (name, data) => name !== "currencies" || isUsableCurrencyData(data);
+
 const readCache = (name) => {
   try {
     const value = localStorage.getItem(cacheKey(name));
-    return value ? JSON.parse(value) : null;
+    const cached = value ? JSON.parse(value) : null;
+    if (cached?.data && !isUsableData(name, cached.data)) {
+      localStorage.removeItem(cacheKey(name));
+      return null;
+    }
+    return cached;
   } catch {
     return null;
   }
@@ -115,6 +133,9 @@ const request = async (path, { method = "GET", body, timeout = 30000, retry = me
 const withCache = async (name, loader) => {
   try {
     const data = await loader();
+    if (!isUsableData(name, data)) {
+      throw new Error("The currency provider returned no usable positive INR rates.");
+    }
     writeCache(name, data);
     return { data, mode: "live", savedAt: data.generatedAt || new Date().toISOString() };
   } catch (error) {

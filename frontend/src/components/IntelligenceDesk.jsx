@@ -378,14 +378,20 @@ export default function IntelligenceDesk({ initialSymbol = "^NSEI", onProviderCh
       const followUpInstruction = isShortFollowUp
         ? " This is a follow-up to the immediately previous assistant answer. Check that answer, address the doubt, and do not repeat it verbatim."
         : "";
-      const response = await marketApi.agent({ message: `${sectionInstruction}${followUpInstruction} User question: ${clean}`, symbol, recentMessages: recentOverride });
+      const agentPayload = {
+        message: `${sectionInstruction}${followUpInstruction} User question: ${clean}`,
+        symbol,
+        recentMessages: recentOverride
+      };
+      if (!window.navigator.onLine) agentPayload.preferLocal = true;
+      const response = await marketApi.agent(agentPayload);
       onProviderChange(response);
       setMessages((current) => [...current, { role: "assistant", content: response.answer, meta: response }]);
     } catch {
       const localApi = /(?:localhost|127\.0\.0\.1)/i.test(marketApi.baseUrl);
       const offlineHelp = !window.navigator.onLine && !localApi
         ? "Offline Ollama cannot be reached from the hosted website. Run start-local.ps1 and open http://127.0.0.1:5173, then ask again."
-        : "The local gateway or research API is unavailable. Restart with npm run dev so FinTrack starts the complete local stack, then retry; the displayed price analytics remain independent.";
+        : "The local gateway or research API is unavailable. Open the FinTrack Market Intelligence desktop shortcut, wait for startup, and retry; the displayed price analytics remain independent.";
       setMessages((current) => [...current, { role: "assistant", content: offlineHelp, meta: { llmStatus: "offline" } }]);
     } finally { setAsking(false); }
   };

@@ -347,6 +347,7 @@ class MarketAgentRequest(BaseModel):
     message: str = Field(min_length=2, max_length=3000)
     symbol: Optional[str] = Field(default=None, max_length=20)
     recent_messages: List[Dict[str, Any]] = Field(default_factory=list)
+    prefer_local: bool = False
 
 
 class MarketComparisonRequest(BaseModel):
@@ -820,22 +821,41 @@ def _reference_inr_rates() -> Dict[str, float]:
     cached = _cache_get("inr-reference-rates", 60 * 60)
     if cached is not None:
         return cached
-    request = UrlRequest(
-        "https://open.er-api.com/v6/latest/INR",
-        headers={"User-Agent": "FinTrack-market-service/1.0"},
-    )
-    with urlopen(request, timeout=8) as response:
-        payload = json.loads(response.read().decode("utf-8"))
-    rates = payload.get("rates", {}) if payload.get("result") == "success" else {}
-    usable = {str(code).upper(): float(rate) for code, rate in rates.items() if _round(rate) and float(rate) > 0}
-    return _cache_put("inr-reference-rates", usable)
+    stale = (_cache.get("inr-reference-rates") or {}).get("value")
+    try:
+        request = UrlRequest(
+            "https://open.er-api.com/v6/latest/INR",
+            headers={"User-Agent": "FinTrack-market-service/1.0"},
+        )
+        with urlopen(request, timeout=8) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+        rates = payload.get("rates", {}) if payload.get("result") == "success" else {}
+        usable = {str(code).upper(): float(rate) for code, rate in rates.items() if _round(rate) and float(rate) > 0}
+        if not usable:
+            raise RuntimeError("The reference-rate provider returned no usable rates.")
+        return _cache_put("inr-reference-rates", usable)
+    except Exception:
+        if isinstance(stale, dict) and stale:
+            return stale
+        raise
+
+
+def _currency_payload_usable(payload: Any) -> bool:
+    if not isinstance(payload, dict):
+        return False
+    for item in payload.get("currencies") or []:
+        try:
+            if item.get("inrValue") is not None and float(item["inrValue"]) > 0:
+                return True
+        except (AttributeError, TypeError, ValueError):
+            continue
+    return False
 
 
 def inr_currency_rates(refresh: bool = False) -> Dict[str, Any]:
-    if refresh:
-        _cache.pop("inr-currency-rates", None)
-    cached = _cache_get("inr-currency-rates", QUOTE_CACHE_TTL_SECONDS)
-    if cached is not None:
+    stale = (_cache.get("inr-currency-rates") or {}).get("value")
+    cached = None if refresh else _cache_get("inr-currency-rates", QUOTE_CACHE_TTL_SECONDS)
+    if cached is not None and _currency_payload_usable(cached):
         return cached
 
     try:
@@ -877,6 +897,10 @@ def inr_currency_rates(refresh: bool = False) -> Dict[str, Any]:
         "source": "Yahoo Finance via yfinance for featured pairs; ExchangeRate-API reference directory",
         "dataDelayNotice": "Currency quotes may be delayed by the upstream provider and are not bank conversion rates.",
     }
+    if not _currency_payload_usable(result):
+        if _currency_payload_usable(stale):
+            return stale
+        raise RuntimeError("Currency providers returned no usable positive INR rates.")
     return _cache_put("inr-currency-rates", result)
 
 
@@ -4072,11 +4096,13 @@ def _openai_compatible_chat(messages: List[Dict[str, str]], provider: str) -> st
         raise RuntimeError(f"{provider} service is unavailable or rejected the request.") from error
 
 
-def _provider_chat(messages: List[Dict[str, str]]) -> tuple[str, str]:
+def _provider_chat(messages: List[Dict[str, str]], prefer_local: bool = False) -> tuple[str, str]:
     provider = os.getenv("LLM_PROVIDER", "").strip().lower()
     if provider in {"", "none", "off", "disabled"}:
         raise RuntimeError("LLM is not configured; deterministic evidence synthesis is active.")
     if provider in {"ollama", "local"}:
+        return _ollama_chat(messages), "ollama"
+    if prefer_local and provider in {"gemini", "hybrid", "auto"}:
         return _ollama_chat(messages), "ollama"
     if provider == "gemini":
         return _gemini_chat(messages), "gemini"
@@ -5186,7 +5212,10 @@ def get_global_market_overview(refresh: bool = False):
 
 @router.get("/currencies")
 def get_inr_currency_rates(refresh: bool = False):
-    return inr_currency_rates(refresh)
+    try:
+        return inr_currency_rates(refresh)
+    except RuntimeError as error:
+        raise HTTPException(status_code=503, detail=str(error)) from error
 
 
 @router.get("/analysis")
@@ -5318,6 +5347,7 @@ async def market_agent(request: FastApiRequest):
             message=raw_payload.get("message", ""),
             symbol=raw_payload.get("symbol") or None,
             recent_messages=raw_payload.get("recent_messages") or raw_payload.get("recentMessages") or [],
+            prefer_local=raw_payload.get("prefer_local", raw_payload.get("preferLocal", False)),
         )
     except Exception as error:
         raise HTTPException(status_code=422, detail=f"Invalid market agent request: {error}") from error
@@ -5664,7 +5694,7 @@ async def market_agent(request: FastApiRequest):
     try:
         # Gemini is the primary generator for every question. Hybrid routing
         # reaches Ollama only when the Gemini request actually fails.
-        answer, llm_provider = _provider_chat(messages)
+        answer, llm_provider = _provider_chat(messages, prefer_local=payload.prefer_local)
         if not answer:
             raise RuntimeError("The configured LLM returned an empty answer.")
         if llm_provider == "ollama":

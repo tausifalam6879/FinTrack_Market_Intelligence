@@ -12,6 +12,16 @@ const tabs = [
   { id: "intelligence", label: "Intelligence & MLOps", shortLabel: "MLOps", icon: "✦" }
 ];
 
+const validCurrencyQuote = (item) => {
+  if (item?.inrValue === null || item?.inrValue === undefined || item?.inrValue === "") return false;
+  const parsed = Number(item.inrValue);
+  return Number.isFinite(parsed) && parsed > 0;
+};
+
+const displayCurrencyQuote = (item) => validCurrencyQuote(item)
+  ? Number(item.inrValue).toLocaleString("en-IN", { maximumFractionDigits: 2 })
+  : "—";
+
 const networkProviderContext = (online = window.navigator.onLine) => ({
   provider: online ? "Gemini" : "Ollama",
   status: online ? "online" : "offline mode"
@@ -71,7 +81,7 @@ export default function App() {
     const currencies = currencyData?.currencies || [];
     const analysis = marketApi.seed.analysis("^NSEI")?.data;
     return {
-      usd: currencies.find((item) => item.code === "USD") || null,
+      usd: currencies.find((item) => item.code === "USD" && validCurrencyQuote(item)) || null,
       gold: analysis?.macroFactor?.factors?.find((item) => item.factor === "Gold") || null,
       currencyCount: Object.keys(currencyData?.referenceRates || {}).length,
       currencyAsOf: currencyData?.generatedAt || null
@@ -96,7 +106,7 @@ export default function App() {
     if (!data) return;
     setMarketContext((current) => ({
       ...current,
-      usd: data.currencies?.find((item) => item.code === "USD") || current.usd,
+      usd: data.currencies?.find((item) => item.code === "USD" && validCurrencyQuote(item)) || current.usd,
       currencyCount: Object.keys(data.referenceRates || {}).length || current.currencyCount,
       currencyAsOf: data.generatedAt || current.currencyAsOf
     }));
@@ -297,10 +307,10 @@ export default function App() {
           <span><b>{Number(rotatingQuote.price).toLocaleString("en-IN", { maximumFractionDigits: 2 })}</b><em className={Number(rotatingQuote.changePercent) >= 0 ? "positive" : "negative"}>{Number(rotatingQuote.changePercent) >= 0 ? "+" : ""}{rotatingQuote.changePercent}%</em></span>
         </button>}
         {marketContext.gold && <div className="market-context-tile" aria-label="Verified gold market move"><small>GOLD MOVE</small><strong className={Number(marketContext.gold.changePercent) >= 0 ? "positive" : "negative"}>{Number(marketContext.gold.changePercent) >= 0 ? "+" : ""}{marketContext.gold.changePercent}%</strong></div>}
-        {marketContext.usd && <div className="market-context-tile" aria-label="Verified US dollar to Indian rupee rate"><small>USD/INR</small><strong>₹{Number(marketContext.usd.inrValue).toLocaleString("en-IN", { maximumFractionDigits: 2 })}</strong></div>}
+        {marketContext.usd && <div className="market-context-tile" aria-label="Verified US dollar to Indian rupee rate"><small>USD/INR</small><strong>₹{displayCurrencyQuote(marketContext.usd)}</strong></div>}
       </div>}
       {activeTab === "currency" && <div className="navbar-market-context" aria-label="Currency desk status">
-        {marketContext.usd && <div className="market-context-tile"><small>USD/INR NOW</small><strong>₹{Number(marketContext.usd.inrValue).toLocaleString("en-IN", { maximumFractionDigits: 2 })}</strong></div>}
+        {marketContext.usd && <div className="market-context-tile"><small>USD/INR NOW</small><strong>₹{displayCurrencyQuote(marketContext.usd)}</strong></div>}
         <div className="market-context-tile"><small>RATE DIRECTORY</small><strong>{marketContext.currencyCount || "—"} pairs</strong></div>
       </div>}
       {activeTab === "news" && <div className="navbar-market-context" aria-label="News desk status">

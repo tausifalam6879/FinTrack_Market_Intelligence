@@ -41,7 +41,7 @@ public class GatewayRequestValidator {
             Map.entry("/market/documents", Set.of("symbol")),
             Map.entry("/market/documents/discover", Set.of("symbol")));
     private static final Map<String, Set<String>> POST_ROUTES = Map.of(
-            "/market/agent", Set.of("message", "symbol", "recentMessages"),
+            "/market/agent", Set.of("message", "symbol", "recentMessages", "preferLocal"),
             "/market/documents/ask", Set.of("symbol", "question", "limit"),
             "/market/documents/prepare", Set.of("symbol"));
 
@@ -102,6 +102,10 @@ public class GatewayRequestValidator {
 
         validateSymbol(text(root, "symbol"), true);
         if ("/market/agent".equals(path)) validateText(text(root, "message"), "message", 2, 3_000);
+        JsonNode preferLocal = root.get("preferLocal");
+        if (preferLocal != null && !preferLocal.isBoolean()) {
+            badRequest("invalid_prefer_local", "preferLocal must be a boolean.");
+        }
         if ("/market/documents/ask".equals(path)) validateText(text(root, "question"), "question", 3, 1_200);
         JsonNode recentMessages = root.get("recentMessages");
         if (recentMessages != null && (!recentMessages.isArray() || recentMessages.size() > 8)) {

@@ -32,10 +32,13 @@ async function mockMarketApi(page) {
       driftMonitoring: { status: "collecting_evidence", features: [] }, retrainingPolicy: { automaticRetraining: false, decision: "collecting_evidence" }
     });
     if (path.endsWith("/market/experiments")) return json({ runs: [], count: 0, configuration: { experimentName: "FinTrack", backend: "MLflow" } });
-    if (path.endsWith("/market/agent")) return json({
-      answer: "Probability up model ke available evidence mein agle session ke upward scenario ka estimate hai. Yeh guarantee nahi hai.",
-      llmStatus: "connected", llmAnswerAccepted: true, llmProvider: "gemini", agentPlan: { intents: ["model_and_technical_analysis"] }, toolTrace: [], citations: []
-    });
+    if (path.endsWith("/market/agent")) {
+      const preferLocal = Boolean(request.postDataJSON()?.preferLocal);
+      return json({
+        answer: "Probability up model ke available evidence mein agle session ke upward scenario ka estimate hai. Yeh guarantee nahi hai.",
+        llmStatus: "connected", llmAnswerAccepted: true, llmProvider: preferLocal ? "ollama" : "gemini", agentPlan: { intents: ["model_and_technical_analysis"] }, toolTrace: [], citations: []
+      });
+    }
     if (path.endsWith("/market/companies")) return json({ items: [] });
     if (path.endsWith("/market/documents")) return json({ items: [], preparation: { supported: false } });
     return json({});
@@ -111,6 +114,24 @@ test("navbar keeps relevant live context across every desk", async ({ page }) =>
   await expect(page.getByLabel("Intelligence service status")).toContainText("Gemini");
 });
 
+test("an unusable currency refresh never replaces verified rates with zero", async ({ page }) => {
+  await page.route("**/market/currencies?refresh=true", (route) => route.fulfill({
+    status: 200,
+    contentType: "application/json",
+    body: JSON.stringify({
+      baseCurrency: "INR",
+      currencies: [{ code: "USD", name: "US Dollar", country: "United States", inrValue: null, digits: 2 }],
+      referenceRates: {},
+      generatedAt: new Date().toISOString()
+    })
+  }));
+  await page.getByRole("tab", { name: /INR Currency Desk/i }).click();
+  await expect(page.locator(".currency-card").first()).not.toContainText("₹0.00");
+  await page.getByRole("button", { name: "Refresh now" }).click();
+  await expect(page.locator(".currency-card").first()).not.toContainText("₹0.00");
+  await expect(page.locator(".notice.warning")).toContainText("last verified response");
+});
+
 test("research, browser watchlist, batch comparison and PDF action work together", async ({ page }) => {
   await page.getByRole("tab", { name: /Intelligence & MLOps/i }).click();
   await expect(page.getByRole("heading", { name: "Research an index or company" })).toBeVisible();
@@ -160,6 +181,11 @@ test("AI provider badge follows connectivity and the provider that answered", as
 
   await expect(serviceStatus).toContainText("Ollama");
   await expect(serviceStatus).toContainText("offline mode");
+  const offlineAgentRequest = page.waitForRequest((request) => new URL(request.url()).pathname.endsWith("/market/agent"));
+  await page.locator(".agent-launcher").click();
+  await page.getByRole("button", { name: "Tell me about Nifty 50" }).click();
+  expect((await offlineAgentRequest).postDataJSON().preferLocal).toBe(true);
+  await expect(serviceStatus).toContainText("Ollama");
   await context.setOffline(false);
   await expect(serviceStatus).toContainText("Gemini");
 
@@ -182,7 +208,6 @@ test("AI provider badge follows connectivity and the provider that answered", as
     })
   }));
 
-  await page.locator(".agent-launcher").click();
   await page.getByRole("button", { name: "Tell me about Nifty 50" }).click();
   await expect(serviceStatus).toContainText("Ollama");
   await expect(serviceStatus).toContainText("answered");

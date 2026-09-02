@@ -62,8 +62,16 @@ class GatewayRequestValidatorTest {
 
     @Test
     void acceptsGroundedAgentPayload() {
-        byte[] body = "{\"symbol\":\"AAPL\",\"message\":\"Explain the current evidence\",\"recentMessages\":[]}".getBytes();
+        byte[] body = "{\"symbol\":\"AAPL\",\"message\":\"Explain the current evidence\",\"recentMessages\":[],\"preferLocal\":true}".getBytes();
         assertDoesNotThrow(() -> validator.validate(
                 HttpMethod.POST, "/market/agent", new LinkedMultiValueMap<>(), body));
+    }
+
+    @Test
+    void rejectsNonBooleanLocalProviderPreference() {
+        byte[] body = "{\"symbol\":\"AAPL\",\"message\":\"Explain the current evidence\",\"preferLocal\":\"yes\"}".getBytes();
+        GatewayRequestException exception = assertThrows(GatewayRequestException.class,
+                () -> validator.validate(HttpMethod.POST, "/market/agent", new LinkedMultiValueMap<>(), body));
+        assertEquals("invalid_prefer_local", exception.code());
     }
 }
