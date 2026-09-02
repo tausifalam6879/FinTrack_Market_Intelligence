@@ -18,7 +18,7 @@ if (-not $pythonExe -or -not (Test-Path $pythonExe)) {
 $defaults = @{
     LLM_PROVIDER = 'hybrid'
     GEMINI_TIMEOUT_MS = '60000'
-    OLLAMA_MODEL = 'llama3.2:latest'
+    OLLAMA_MODEL = 'llama3.2:1b'
     OLLAMA_BASE_URL = 'http://127.0.0.1:11434'
     OLLAMA_TIMEOUT_MS = '45000'
     OLLAMA_KEEP_ALIVE = '30m'

@@ -5,7 +5,7 @@ const snapshot = JSON.parse(fs.readFileSync(new URL("../src/data/bundledMarketSn
 const hostedGateway = "https://fintrack-market-gateway.onrender.com";
 
 test("company discovery falls back to the hosted read-only API when local services are offline", async ({ page }) => {
-  await page.route("http://localhost:8002/market/**", (route) => route.abort("connectionrefused"));
+  await page.route("http://localhost:8081/market/**", (route) => route.abort("connectionrefused"));
   await page.route(`${hostedGateway}/market/**`, async (route) => {
     const url = new URL(route.request().url());
     const path = url.pathname;

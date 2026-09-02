@@ -2,13 +2,19 @@
 
 ## Local AI startup (Windows)
 
+For a normal Windows user, double-click `Install FinTrack for Windows.cmd` once while online. The installer prepares the runtime, verifies the local Ollama model, creates a desktop shortcut and adds a quiet per-user sign-in shortcut. After that, opening **FinTrack Market Intelligence** from the desktop starts any missing local services and opens `http://127.0.0.1:5173/#top`; the user does not run npm, Python or Spring commands. Run `Uninstall FinTrack for Windows.cmd` to remove only those shortcuts while preserving project data.
+
+This repository-based installer expects Python 3.12, Java, Node.js/npm and Ollama to be installed. A future fully bundled desktop package can include those runtimes, but a website cannot install or start native processes because browsers intentionally prohibit that level of operating-system access.
+
+Use `https://tausifalam6879.github.io/FinTrack_Market_Intelligence/` when online; it needs no local command. Use `http://127.0.0.1:5173/#top` for private local/offline mode; after the one-time Windows install, the desktop shortcut and sign-in launcher manage its services automatically.
+
 If the frontend and gateway are already running, start only the research API from this directory:
 
 ```powershell
 .\start-local-api.ps1
 ```
 
-Use `.\start-local.ps1` when starting the entire local stack. The API launcher defaults to Gemini-first hybrid routing with `llama3.2:latest` as the local Ollama fallback, preserving explicit environment overrides. Stop an existing API on port 8002 before starting another copy.
+Use `.\start-local.ps1` when starting the entire local stack. The API launcher defaults to Gemini-first hybrid routing with the faster `llama3.2:1b` model as the local Ollama fallback, preserving explicit environment overrides. Stop an existing API on port 8002 before starting another copy.
 
 Configure `GEMINI_API_KEY` privately in the local process or Windows user environment for local Gemini. Render environment variables do not apply to localhost. The launcher warns when the local key is absent, without printing credentials. Ollama must be running with the configured model installed. A bare `uvicorn app:app` does not apply these local AI defaults and can leave the service in deterministic-only mode.
 
