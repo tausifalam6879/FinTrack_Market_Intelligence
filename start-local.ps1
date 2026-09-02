@@ -6,6 +6,26 @@ $serviceRoot = Join-Path $projectRoot "market-service"
 $gatewayRoot = Join-Path $projectRoot "gateway-service"
 $frontendRoot = Join-Path $projectRoot "frontend"
 
+function Test-FinTrackEndpoint([string]$Uri, [int]$TimeoutSeconds = 3) {
+    try {
+        $response = Invoke-RestMethod -Uri $Uri -TimeoutSec $TimeoutSeconds
+        return $response.status -in @('ok', 'ready')
+    } catch {
+        return $false
+    }
+}
+
+function Wait-FinTrackEndpoint([string]$Name, [string]$Uri, [int]$Attempts = 24) {
+    for ($attempt = 1; $attempt -le $Attempts; $attempt++) {
+        if (Test-FinTrackEndpoint $Uri) {
+            Write-Host "${Name}: ready"
+            return
+        }
+        Start-Sleep -Seconds 2
+    }
+    throw "$Name did not become ready at $Uri. Check its local process logs and retry."
+}
+
 $basePython = $null
 if (Get-Command py -ErrorAction SilentlyContinue) {
     $basePython = (& py -3.12 -c "import sys; print(sys.executable)" 2>$null | Select-Object -First 1)
@@ -43,14 +63,24 @@ if (-not $gatewayJar) {
     throw "Spring gateway JAR is missing. Connect once and run .\mvnw.cmd package inside gateway-service."
 }
 
-$apiCommand = "& '$(Join-Path $projectRoot 'start-local-api.ps1')'"
-Start-Process powershell -WindowStyle Hidden -ArgumentList "-NoExit", "-Command", $apiCommand
-Start-Process powershell -WindowStyle Hidden -ArgumentList "-NoExit", "-Command", "java -jar '$($gatewayJar.FullName)'"
-Start-Process powershell -WindowStyle Hidden -ArgumentList "-NoExit", "-Command", "Set-Location '$frontendRoot'; `$env:VITE_MARKET_API_BASE_URL='http://localhost:8081'; npm run dev"
+if (-not (Test-FinTrackEndpoint 'http://127.0.0.1:8002/health/ready')) {
+    $apiScript = Join-Path $projectRoot 'start-local-api.ps1'
+    Start-Process powershell.exe -WindowStyle Hidden -ArgumentList "-NoProfile -ExecutionPolicy Bypass -File `"$apiScript`" -Port 8002"
+}
+Wait-FinTrackEndpoint 'FastAPI ML/data service' 'http://127.0.0.1:8002/health/ready'
 
-Write-Host "FinTrack Market Intelligence is starting."
+if (-not (Test-FinTrackEndpoint 'http://127.0.0.1:8081/health/ready')) {
+    Start-Process java.exe -WindowStyle Hidden -ArgumentList "-jar `"$($gatewayJar.FullName)`""
+}
+Wait-FinTrackEndpoint 'Spring gateway' 'http://127.0.0.1:8081/health/ready'
+
+Write-Host "FinTrack Market Intelligence is ready."
 Write-Host "Frontend: http://localhost:5173"
 Write-Host "Spring gateway: http://localhost:8081/health/ready"
 Write-Host "FastAPI ML/data service: http://localhost:8002/docs"
 Write-Host "AI policy: Gemini on every question -> Ollama only after an actual failure/unusable answer -> verified fallback"
 if ($ollamaReady) { Write-Host "Ollama: ready" }
+
+Set-Location $frontendRoot
+$env:VITE_MARKET_API_BASE_URL = 'http://localhost:8081'
+npm run dev:frontend

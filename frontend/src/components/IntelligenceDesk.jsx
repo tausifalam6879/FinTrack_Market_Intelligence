@@ -385,7 +385,7 @@ export default function IntelligenceDesk({ initialSymbol = "^NSEI", onProviderCh
       const localApi = /(?:localhost|127\.0\.0\.1)/i.test(marketApi.baseUrl);
       const offlineHelp = !window.navigator.onLine && !localApi
         ? "Offline Ollama cannot be reached from the hosted website. Run start-local.ps1 and open http://127.0.0.1:5173, then ask again."
-        : "The local research backend is unavailable. Start the FinTrack local services and retry; the displayed price analytics remain independent.";
+        : "The local gateway or research API is unavailable. Restart with npm run dev so FinTrack starts the complete local stack, then retry; the displayed price analytics remain independent.";
       setMessages((current) => [...current, { role: "assistant", content: offlineHelp, meta: { llmStatus: "offline" } }]);
     } finally { setAsking(false); }
   };

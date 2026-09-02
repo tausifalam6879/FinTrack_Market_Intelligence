@@ -11,9 +11,11 @@ services:
         value: production
       - key: APP_VERSION
         value: render
-      # Keep false until DATABASE_URL points to managed PostgreSQL; then set true.
+      # The value is managed privately in Render and must never be committed.
+      - key: DATABASE_URL
+        sync: false
       - key: REQUIRE_DURABLE_DATABASE
-        value: "false"
+        value: "true"
       - key: DATABASE_BACKUP_POLICY
         value: not_configured
       - key: LLM_PROVIDER

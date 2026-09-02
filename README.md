@@ -191,13 +191,15 @@ The stack exposes:
 
 Named Docker volumes persist PostgreSQL rows, API data, model artifacts and MLflow runs. `docker compose down` stops the services without deleting those volumes. Do not use `docker compose down --volumes` unless the local persisted project data should intentionally be removed.
 
-### Frontend
+### Full local stack
 
 ```powershell
 cd frontend
 npm install
 npm run dev
 ```
+
+`npm run dev` waits for the FastAPI research service and Spring gateway, then starts the frontend at `http://localhost:5173`. Use `npm run dev:frontend` only when ports `8002` and `8081` are already healthy and only the Vite UI needs to be restarted.
 
 ## Runtime and training dependency separation
 
