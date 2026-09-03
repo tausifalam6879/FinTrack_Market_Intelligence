@@ -31,6 +31,8 @@ const formatCompactMoney = (value, currency) => {
   }
 };
 
+const isExplicitIndianTicker = (value = "") => /^[A-Z0-9][A-Z0-9&-]{0,18}\.(?:NS|BO)$/i.test(String(value).trim());
+
 const SAVED_RESEARCH_KEY = "fintrack.saved-research.v1";
 const MAX_SAVED_RESEARCH = 12;
 const MAX_COMPARISON = 4;
@@ -158,7 +160,7 @@ export default function IntelligenceDesk({ initialSymbol = "^NSEI", onProviderCh
 
   useEffect(() => {
     const clean = draftSymbol.trim();
-    if (!companySearchOpen || clean.length < 2 || clean.startsWith("^")) {
+    if (!companySearchOpen || clean.length < 2 || clean.startsWith("^") || isExplicitIndianTicker(clean)) {
       setCompanyMatches([]);
       setCompanySearchError("");
       setSearchingCompanies(false);
@@ -181,7 +183,7 @@ export default function IntelligenceDesk({ initialSymbol = "^NSEI", onProviderCh
       } finally {
         if (active) setSearchingCompanies(false);
       }
-    }, 300);
+    }, 180);
     return () => { active = false; window.clearTimeout(timer); };
   }, [companySearchOpen, draftSymbol]);
 
@@ -211,91 +213,88 @@ export default function IntelligenceDesk({ initialSymbol = "^NSEI", onProviderCh
     setCompanySearchOpen(false);
     setCompanyMatches([]);
     setSymbol(normalized); setDraftSymbol(normalized);
-    const monitoringRequest = marketApi.modelStatus(normalized)
-      .then((status) => { if (loadSequenceRef.current === requestId) setModelStatus(status); })
-      .catch(() => { if (loadSequenceRef.current === requestId) { setModelStatus(null); setModelStatusError("Persistent model monitoring is temporarily unavailable."); } })
-      .finally(() => { if (loadSequenceRef.current === requestId) setModelStatusLoading(false); });
-    const experimentsRequest = marketApi.experiments(normalized, 8)
-      .then((response) => { if (loadSequenceRef.current === requestId) setExperiments(response); })
-      .catch(() => {
-        if (loadSequenceRef.current === requestId) {
-          setExperiments(null);
-          setExperimentsError("Experiment comparison is temporarily unavailable.");
-        }
-      })
-      .finally(() => { if (loadSequenceRef.current === requestId) setExperimentsLoading(false); });
-    const peersRequest = normalized.startsWith("^")
-      ? Promise.resolve().then(() => {
-          if (loadSequenceRef.current === requestId) {
-            setPeerComparison(null);
-            setPeerComparisonLoading(false);
-          }
-        })
-      : marketApi.peerComparison(normalized, refresh)
-        .then((response) => { if (loadSequenceRef.current === requestId) setPeerComparison(response.data || response); })
+    const startSecondaryRequests = () => {
+      // The summary is the interaction the visitor asked for. Model
+      // monitoring, experiments, peers, fundamentals and document inventory
+      // enrich that result, but must not compete with or block it.
+      const monitoringRequest = marketApi.modelStatus(normalized)
+        .then((status) => { if (loadSequenceRef.current === requestId) setModelStatus(status); })
+        .catch(() => { if (loadSequenceRef.current === requestId) { setModelStatus(null); setModelStatusError("Persistent model monitoring is temporarily unavailable."); } })
+        .finally(() => { if (loadSequenceRef.current === requestId) setModelStatusLoading(false); });
+      const experimentsRequest = marketApi.experiments(normalized, 8)
+        .then((response) => { if (loadSequenceRef.current === requestId) setExperiments(response); })
         .catch(() => {
           if (loadSequenceRef.current === requestId) {
-            setPeerComparison(null);
-            setPeerComparisonError("Dynamic sector comparison is temporarily unavailable.");
+            setExperiments(null);
+            setExperimentsError("Experiment comparison is temporarily unavailable.");
           }
         })
-        .finally(() => { if (loadSequenceRef.current === requestId) setPeerComparisonLoading(false); });
-    const companyRequest = normalized.startsWith("^")
-      ? Promise.resolve().then(() => {
-          if (loadSequenceRef.current === requestId) {
-            setCompanyResearch(null);
-            setCompanyResearchLoading(false);
-          }
-        })
-      : marketApi.company(normalized, refresh)
-        .then((response) => { if (loadSequenceRef.current === requestId) setCompanyResearch(response.data || response); })
-        .catch(() => {
-          if (loadSequenceRef.current === requestId) {
-            setCompanyResearch(null);
-            setCompanyResearchError("Company fundamentals are temporarily unavailable.");
-          }
-        })
-        .finally(() => { if (loadSequenceRef.current === requestId) setCompanyResearchLoading(false); });
-    const documentsRequest = normalized.startsWith("^")
-      ? Promise.resolve().then(() => { setDocuments([]); setDocumentPreparation(null); setDocumentsLoading(false); })
-      : marketApi.documents(normalized)
-        .then(async (initialResponse) => {
-          if (loadSequenceRef.current !== requestId) return;
-          let response = initialResponse;
-          setDocumentPreparation(response.preparation || null);
-          if (!(response.items || []).length && response.preparation?.autoPrepare && response.preparation?.needsPreparation !== false) {
-            setRagPreparing(true);
-            try {
-              await marketApi.prepareDocuments(normalized);
-              response = await marketApi.documents(normalized);
-            } catch {
-              if (loadSequenceRef.current === requestId) {
-                setRagPrepareError(`Verified market evidence for ${normalized} could not be indexed right now. Please retry.`);
-              }
-            } finally {
-              if (loadSequenceRef.current === requestId) setRagPreparing(false);
+        .finally(() => { if (loadSequenceRef.current === requestId) setExperimentsLoading(false); });
+      const peersRequest = normalized.startsWith("^")
+        ? Promise.resolve().then(() => {
+            if (loadSequenceRef.current === requestId) {
+              setPeerComparison(null);
+              setPeerComparisonLoading(false);
             }
-          }
-          if (loadSequenceRef.current === requestId) {
-            setDocuments(response.items || []);
-            setDocumentPreparation(response.preparation || null);
-          }
-        })
-        .catch(() => { if (loadSequenceRef.current === requestId) { setDocuments([]); setDocumentPreparation(null); } })
-        .finally(() => { if (loadSequenceRef.current === requestId) setDocumentsLoading(false); });
+          })
+        : marketApi.peerComparison(normalized, refresh)
+          .then((response) => { if (loadSequenceRef.current === requestId) setPeerComparison(response.data || response); })
+          .catch(() => {
+            if (loadSequenceRef.current === requestId) {
+              setPeerComparison(null);
+              setPeerComparisonError("Dynamic sector comparison is temporarily unavailable.");
+            }
+          })
+          .finally(() => { if (loadSequenceRef.current === requestId) setPeerComparisonLoading(false); });
+      const companyRequest = normalized.startsWith("^")
+        ? Promise.resolve().then(() => {
+            if (loadSequenceRef.current === requestId) {
+              setCompanyResearch(null);
+              setCompanyResearchLoading(false);
+            }
+          })
+        : marketApi.company(normalized, refresh)
+          .then((response) => { if (loadSequenceRef.current === requestId) setCompanyResearch(response.data || response); })
+          .catch(() => {
+            if (loadSequenceRef.current === requestId) {
+              setCompanyResearch(null);
+              setCompanyResearchError("Company fundamentals are temporarily unavailable.");
+            }
+          })
+          .finally(() => { if (loadSequenceRef.current === requestId) setCompanyResearchLoading(false); });
+      const documentsRequest = normalized.startsWith("^")
+        ? Promise.resolve().then(() => {
+            if (loadSequenceRef.current === requestId) {
+              setDocuments([]);
+              setDocumentPreparation(null);
+              setDocumentsLoading(false);
+            }
+          })
+        : marketApi.documents(normalized)
+          .then((response) => {
+            if (loadSequenceRef.current === requestId) {
+              setDocuments(response.items || []);
+              setDocumentPreparation(response.preparation || null);
+            }
+          })
+          .catch(() => { if (loadSequenceRef.current === requestId) { setDocuments([]); setDocumentPreparation(null); } })
+          .finally(() => { if (loadSequenceRef.current === requestId) setDocumentsLoading(false); });
+
+      // These panels finish independently. Report preparation remains an
+      // explicit user action in the Documents view instead of an expensive
+      // automatic side effect of every company search.
+      void Promise.allSettled([monitoringRequest, experimentsRequest, peersRequest, companyRequest, documentsRequest]);
+    };
     try {
       const nextResult = await marketApi.analysis(normalized, refresh);
       if (loadSequenceRef.current === requestId) {
         setResult(nextResult);
-        await monitoringRequest;
-        try {
-          const refreshedStatus = await marketApi.modelStatus(normalized);
-          if (loadSequenceRef.current === requestId) {
-            setModelStatus(refreshedStatus);
-            setModelStatusError("");
-          }
-        } catch {
-          // The first monitoring response remains usable if this post-prediction refresh fails.
+        if (!normalized.startsWith("^") && nextResult?.data?.name) {
+          setResolvedCompany((current) => current?.symbol === normalized ? current : {
+            symbol: normalized,
+            name: nextResult.data.name,
+            exchange: normalized.endsWith(".NS") ? "NSE" : normalized.endsWith(".BO") ? "BSE" : "Listed market"
+          });
         }
       }
     } catch {
@@ -303,7 +302,7 @@ export default function IntelligenceDesk({ initialSymbol = "^NSEI", onProviderCh
     } finally {
       if (loadSequenceRef.current === requestId) setLoading(false);
     }
-    await Promise.allSettled([monitoringRequest, experimentsRequest, peersRequest, companyRequest, documentsRequest]);
+    if (loadSequenceRef.current === requestId) startSecondaryRequests();
   };
 
   useEffect(() => { load(initialSymbol, false, true); }, [initialSymbol]);
@@ -327,6 +326,13 @@ export default function IntelligenceDesk({ initialSymbol = "^NSEI", onProviderCh
     if (clean.startsWith("^") || alias) {
       setResolvedCompany(null);
       load(alias || clean);
+      return;
+    }
+    if (isExplicitIndianTicker(clean)) {
+      // Exchange-qualified NSE/BSE tickers are already unambiguous. Avoid a
+      // directory round-trip and start the requested research immediately.
+      setResolvedCompany(null);
+      load(clean);
       return;
     }
     const availableMatch = companyMatches.find((item) => item.symbol.toUpperCase() === clean.toUpperCase()) || companyMatches[0];
@@ -470,9 +476,9 @@ export default function IntelligenceDesk({ initialSymbol = "^NSEI", onProviderCh
       <div className="intelligence-company-search">
         <form className="symbol-search" onSubmit={(event) => { event.preventDefault(); resolveAndLoad(); }}>
           <input value={draftSymbol} onChange={(event) => { setDraftSymbol(event.target.value); setResolvedCompany(null); setCompanySearchOpen(true); }} placeholder="Company name or ticker, e.g. Amazon, CSCO, RELIANCE.NS" aria-label="Company name or market ticker" autoComplete="off" />
-          <button className="primary-button" disabled={resolvingCompany || searchingCompanies}>{resolvingCompany || searchingCompanies ? "Finding company…" : loading ? "Run new research" : "Run research"}</button>
+          <button className="primary-button" disabled={resolvingCompany || searchingCompanies || loading}>{resolvingCompany || searchingCompanies ? "Finding company…" : loading ? "Loading research…" : "Run research"}</button>
         </form>
-        {companySearchOpen && draftSymbol.trim().length >= 2 && !draftSymbol.trim().startsWith("^") && <div className="company-search-results intelligence-search-results" aria-label="Matching companies">
+        {companySearchOpen && draftSymbol.trim().length >= 2 && !draftSymbol.trim().startsWith("^") && !isExplicitIndianTicker(draftSymbol) && <div className="company-search-results intelligence-search-results" aria-label="Matching companies">
           {searchingCompanies && <div className="company-search-state">Finding the correct market ticker…</div>}
           {!searchingCompanies && companySearchError && <div className="company-search-state error">{companySearchError}</div>}
           {!searchingCompanies && companyMatches.map((company) => <button type="button" key={company.symbol} onClick={() => selectCompany(company)}>

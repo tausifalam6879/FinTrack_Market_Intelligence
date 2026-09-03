@@ -84,9 +84,10 @@ const request = async (path, { method = "GET", body, timeout = 30000, retry = me
     const attempts = localFallbackAvailable ? 1 : retry ? 2 : 1;
     for (let attempt = 0; attempt < attempts; attempt += 1) {
       const controller = new AbortController();
-      // Render may need extra time to wake and compute an unseen company's
-      // first analysis. Keep the shorter timeout for a genuinely local service.
-      const effectiveTimeout = apiBase !== API_BASE ? Math.max(timeout, 120000) : timeout;
+      // Each endpoint already supplies a timeout that reflects its cost.
+      // Do not silently turn a 15-second directory/status request into a
+      // two-minute wait just because the fallback happens to be hosted.
+      const effectiveTimeout = timeout;
       const timer = window.setTimeout(() => controller.abort(), effectiveTimeout);
       try {
         const response = await fetch(`${apiBase}${path}`, {
@@ -117,7 +118,11 @@ const request = async (path, { method = "GET", body, timeout = 30000, retry = me
         return payload;
       } catch (error) {
         lastError = error;
-        const retryable = error.name === "AbortError" || !error.status || [502, 503, 504].includes(error.status);
+        // A timed-out request has already consumed its full user-facing
+        // budget. Retrying it immediately doubles the wait without improving
+        // the current interaction; transient gateway/network failures can
+        // still use the normal retry path.
+        const retryable = error.name !== "AbortError" && (!error.status || [502, 503, 504].includes(error.status));
         if (!retryable) throw error;
         const retryCurrentBase = attempt + 1 < attempts;
         if (retryCurrentBase) await new Promise((resolve) => window.setTimeout(resolve, 350 * (attempt + 1)));
