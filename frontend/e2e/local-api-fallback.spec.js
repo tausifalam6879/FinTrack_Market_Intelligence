@@ -47,11 +47,12 @@ test("an explicit NSE or BSE ticker shows research before slow monitoring finish
     const json = (body) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(body) });
     if (path.endsWith("/market/companies")) {
       companyDirectoryRequests += 1;
-      return json({ items: [] });
+      await new Promise((resolve) => setTimeout(resolve, 4_000));
+      return json({ items: [{ symbol: "SPICEJET.BO", name: "SpiceJet Limited", exchange: "BSE" }] });
     }
     if (path.endsWith("/market/analysis")) {
       const symbol = url.searchParams.get("symbol") || "^NSEI";
-      return json({ ...snapshot.analysis["^NSEI"], symbol, name: symbol === "SPICEJET.BO" ? "SpiceJet Limited" : symbol });
+      return json({ ...snapshot.analysis["^NSEI"], symbol, name: symbol });
     }
     if (path.endsWith("/market/model-status")) {
       await new Promise((resolve) => setTimeout(resolve, 4_000));
@@ -72,7 +73,9 @@ test("an explicit NSE or BSE ticker shows research before slow monitoring finish
   await search.fill("SPICEJET.BO");
   await page.getByRole("button", { name: "Run research" }).click();
 
-  await expect(page.locator(".analysis-hero")).toContainText("SpiceJet Limited");
+  await expect(page.locator(".analysis-hero")).toContainText("SPICEJET.BO");
   await expect(page.getByRole("button", { name: "Run research" })).toBeEnabled();
-  expect(companyDirectoryRequests).toBe(0);
+  await expect(page.getByText("Resolved to")).toBeVisible();
+  await expect(page.getByText("SpiceJet Limited").first()).toBeVisible();
+  expect(companyDirectoryRequests).toBe(1);
 });

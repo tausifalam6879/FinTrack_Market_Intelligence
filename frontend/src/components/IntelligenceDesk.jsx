@@ -279,11 +279,20 @@ export default function IntelligenceDesk({ initialSymbol = "^NSEI", onProviderCh
           })
           .catch(() => { if (loadSequenceRef.current === requestId) { setDocuments([]); setDocumentPreparation(null); } })
           .finally(() => { if (loadSequenceRef.current === requestId) setDocumentsLoading(false); });
+      const identityRequest = isExplicitIndianTicker(normalized)
+        ? marketApi.companies(normalized, 3)
+          .then((response) => {
+            if (loadSequenceRef.current !== requestId) return;
+            const exact = (response.items || []).find((item) => item.symbol.toUpperCase() === normalized);
+            if (exact) setResolvedCompany(exact);
+          })
+          .catch(() => undefined)
+        : Promise.resolve();
 
       // These panels finish independently. Report preparation remains an
       // explicit user action in the Documents view instead of an expensive
       // automatic side effect of every company search.
-      void Promise.allSettled([monitoringRequest, experimentsRequest, peersRequest, companyRequest, documentsRequest]);
+      void Promise.allSettled([monitoringRequest, experimentsRequest, peersRequest, companyRequest, documentsRequest, identityRequest]);
     };
     try {
       const nextResult = await marketApi.analysis(normalized, refresh);
