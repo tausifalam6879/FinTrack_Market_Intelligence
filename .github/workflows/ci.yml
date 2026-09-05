@@ -18,19 +18,20 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     services:
-      postgres:
-        image: postgres:17-alpine
+      mysql:
+        image: mysql:8.4
         env:
-          POSTGRES_DB: fintrack_ci
-          POSTGRES_USER: fintrack
-          POSTGRES_PASSWORD: fintrack_ci_password
+          MYSQL_DATABASE: fintrack_ci
+          MYSQL_USER: fintrack
+          MYSQL_PASSWORD: fintrack_ci_password
+          MYSQL_ROOT_PASSWORD: fintrack_ci_root_password
         ports:
-          - 5432:5432
+          - 3306:3306
         options: >-
-          --health-cmd "pg_isready -U fintrack -d fintrack_ci"
+          --health-cmd "mysqladmin ping -h 127.0.0.1 -u fintrack -pfintrack_ci_password --silent"
           --health-interval 5s
           --health-timeout 5s
-          --health-retries 12
+          --health-retries 20
     steps:
       - name: Checkout repository
         uses: actions/checkout@v6
@@ -56,31 +57,35 @@ jobs:
         working-directory: market-service
         run: python -m compileall -q .
 
+      - name: Compile release scripts
+        run: python -m compileall -q scripts
+
       - name: Run backend test suite
         working-directory: market-service
         env:
           GIT_PYTHON_REFRESH: quiet
+          FINTRACK_TEST_MYSQL_URL: mysql://fintrack:fintrack_ci_password@127.0.0.1:3306/fintrack_ci
         run: python -m unittest discover -s . -p "test_*.py" -v
 
-      - name: Verify PostgreSQL schema and readiness
+      - name: Verify MySQL schema and readiness
         working-directory: market-service
         env:
-          DATABASE_URL: postgresql://fintrack:fintrack_ci_password@127.0.0.1:5432/fintrack_ci
+          DATABASE_URL: mysql://fintrack:fintrack_ci_password@127.0.0.1:3306/fintrack_ci
           REQUIRE_DURABLE_DATABASE: "true"
           MODEL_ARTIFACT_DIR: ${{ runner.temp }}/fintrack-artifacts
         run: |
-          python -c "from runtime_health import initialize_runtime, readiness_report; initialize_runtime(); report=readiness_report(); database=report['checks']['database']; assert report['status']=='ready', report; assert database['backend']=='postgresql', report; assert database['schemaVersion']==database['expectedSchemaVersion']==4, report; assert database['durableAcrossDeploys'] is True, report; assert database['durabilityRequired'] is True, report"
+          python -c "from runtime_health import initialize_runtime, readiness_report; initialize_runtime(); report=readiness_report(); database=report['checks']['database']; assert report['status']=='ready', report; assert database['backend']=='mysql', report; assert database['schemaVersion']==database['expectedSchemaVersion']==5, report; assert database['durableAcrossDeploys'] is True, report; assert database['durabilityRequired'] is True, report"
           python database_maintenance.py status
 
-      - name: Verify SQLite-to-PostgreSQL cutover with real PostgreSQL
+      - name: Verify legacy-to-MySQL cutover with real MySQL
         working-directory: market-service
         env:
-          DATABASE_URL: postgresql://fintrack:fintrack_ci_password@127.0.0.1:5432/fintrack_ci
+          DATABASE_URL: mysql://fintrack:fintrack_ci_password@127.0.0.1:3306/fintrack_ci
           SOURCE_DATABASE_URL: sqlite:///${{ runner.temp }}/fintrack-cutover-source.db
         run: |
           python -c "import os; from persistence import Database; source=Database(os.environ['SOURCE_DATABASE_URL']); source.initialize_schema(); source.upsert_company({'symbol':'INFY.NS','name':'Infosys Limited','source':'ci'}); source.upsert_market_bars([{'symbol':'INFY.NS','session_date':'2026-08-12','open':1500.0,'high':1520.0,'low':1490.0,'close':1512.0,'adjusted_close':1512.0,'volume':1000000,'source':'ci','ingested_at':'2026-08-13T00:00:00+00:00'}])"
           python database_maintenance.py migrate --confirm-empty-target --manifest-path "${{ runner.temp }}/fintrack-cutover-manifest.json"
-          python -c "import json; from pathlib import Path; report=json.loads(Path('${{ runner.temp }}/fintrack-cutover-manifest.json').read_text()); assert report['status']=='verified', report; assert report['targetBackend']=='postgresql', report; assert report['tablesVerified']==10, report; assert report['totalRows']==2, report; assert report['credentialsIncluded'] is False, report"
+          python -c "import json; from pathlib import Path; report=json.loads(Path('${{ runner.temp }}/fintrack-cutover-manifest.json').read_text()); assert report['status']=='verified', report; assert report['targetBackend']=='mysql', report; assert report['tablesVerified']==10, report; assert report['totalRows']==2, report; assert report['credentialsIncluded'] is False, report"
 
   frontend-build:
     runs-on: ubuntu-latest
@@ -180,9 +185,17 @@ jobs:
         run: |
           set -euo pipefail
           network_name="fintrack-ci-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          mysql_name="fintrack-mysql-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           api_name="fintrack-api-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           docker network create "$network_name" >/dev/null
-          api_id=$(docker run --detach --name "$api_name" --network "$network_name" --publish 127.0.0.1:8002:8000 fintrack-api:ci)
+          mysql_id=$(docker run --detach --name "$mysql_name" --network "$network_name" --env MYSQL_DATABASE=fintrack_ci --env MYSQL_USER=fintrack --env MYSQL_PASSWORD=fintrack_ci_password --env MYSQL_ROOT_PASSWORD=fintrack_ci_root_password mysql:8.4)
+          for attempt in $(seq 1 40); do
+            if docker exec "$mysql_name" mysqladmin ping -h 127.0.0.1 -u fintrack -pfintrack_ci_password --silent; then
+              break
+            fi
+            sleep 2
+          done
+          api_id=$(docker run --detach --name "$api_name" --network "$network_name" --publish 127.0.0.1:8002:8000 --env MYSQL_HOST="$mysql_name" --env MYSQL_PORT=3306 --env MYSQL_DATABASE=fintrack_ci --env MYSQL_USER=fintrack --env MYSQL_PASSWORD=fintrack_ci_password --env REQUIRE_DURABLE_DATABASE=true fintrack-api:ci)
           gateway_id=""
           cleanup() {
             if [ -n "$gateway_id" ]; then
@@ -191,6 +204,8 @@ jobs:
             fi
             docker logs "$api_id" || true
             docker rm --force "$api_id" >/dev/null || true
+            docker logs "$mysql_id" || true
+            docker rm --force "$mysql_id" >/dev/null || true
             docker network rm "$network_name" >/dev/null || true
           }
           trap cleanup EXIT

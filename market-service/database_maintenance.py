@@ -13,7 +13,7 @@ import subprocess
 from typing import Any, Dict, Optional
 from urllib.parse import parse_qs, unquote, urlparse
 
-from database_cutover import migrate_sqlite_to_postgresql, write_cutover_manifest
+from database_cutover import migrate_legacy_to_mysql, write_cutover_manifest
 from persistence import Database, utc_now
 
 
@@ -23,6 +23,22 @@ def _sha256(path: Path) -> str:
         for chunk in iter(lambda: stream.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def _database_cli(name: str) -> Optional[str]:
+    """Locate a database CLI without requiring users to edit Windows PATH."""
+    executable = shutil.which(name)
+    if executable:
+        return executable
+    if os.name == "nt":
+        program_files = Path(os.getenv("ProgramFiles", r"C:\Program Files"))
+        candidates = sorted(
+            (program_files / "MySQL").glob(f"MySQL Server */bin/{name}.exe"),
+            reverse=True,
+        )
+        if candidates:
+            return str(candidates[0])
+    return None
 
 
 def _postgres_environment(database_url: str) -> tuple[Dict[str, str], list[str]]:
@@ -44,6 +60,27 @@ def _postgres_environment(database_url: str) -> tuple[Dict[str, str], list[str]]
     return environment, connection_arguments
 
 
+def _mysql_environment(database_url: str) -> tuple[Dict[str, str], list[str], str]:
+    parsed = urlparse(database_url.replace("mysql+pymysql://", "mysql://", 1))
+    if not parsed.hostname or not parsed.path.strip("/") or not parsed.username:
+        raise ValueError("DATABASE_URL is not a complete MySQL connection string.")
+    environment = os.environ.copy()
+    if parsed.password is not None:
+        environment["MYSQL_PWD"] = unquote(parsed.password)
+    query = parse_qs(parsed.query)
+    connection_arguments = [
+        "--host", parsed.hostname,
+        "--port", str(parsed.port or 3306),
+        "--user", unquote(parsed.username),
+        "--default-character-set", query.get("charset", ["utf8mb4"])[0],
+    ]
+    if query.get("ssl-mode"):
+        connection_arguments.extend(["--ssl-mode", query["ssl-mode"][0]])
+    if query.get("ssl-ca"):
+        connection_arguments.extend(["--ssl-ca", query["ssl-ca"][0]])
+    return environment, connection_arguments, unquote(parsed.path.strip("/"))
+
+
 def database_status(database: Optional[Database] = None) -> Dict[str, Any]:
     repository = database or Database()
     repository.initialize_schema()
@@ -53,7 +90,7 @@ def database_status(database: Optional[Database] = None) -> Dict[str, Any]:
         "status": "ready" if schema["upToDate"] else "migration_required",
         "backend": repository.backend,
         "location": repository.location,
-        "durableAcrossDeploys": repository.backend == "postgresql",
+        "durableAcrossDeploys": repository.backend == "mysql",
         "schema": schema,
         "backupPolicy": os.getenv("DATABASE_BACKUP_POLICY", "not_configured"),
         "checkedAt": utc_now(),
@@ -68,7 +105,24 @@ def create_backup(target: Path, database: Optional[Database] = None) -> Dict[str
         raise ValueError("Backup target already exists; choose a new timestamped file.")
     target.parent.mkdir(parents=True, exist_ok=True)
 
-    if repository.backend == "sqlite":
+    if repository.backend == "mysql":
+        executable = _database_cli("mysqldump")
+        if not executable:
+            raise RuntimeError("mysqldump is required for MySQL logical backups.")
+        environment, connection, database_name = _mysql_environment(repository.url)
+        subprocess.run([
+            executable,
+            "--single-transaction",
+            "--skip-lock-tables",
+            "--routines",
+            "--triggers",
+            "--no-tablespaces",
+            "--result-file", str(target),
+            *connection,
+            database_name,
+        ], env=environment, check=True)
+        backup_format = "mysql-sql"
+    elif repository.backend == "sqlite":
         source = sqlite3.connect(repository._sqlite_path())
         destination = sqlite3.connect(target)
         try:
@@ -78,7 +132,7 @@ def create_backup(target: Path, database: Optional[Database] = None) -> Dict[str
             source.close()
         backup_format = "sqlite-online-backup"
     else:
-        executable = shutil.which("pg_dump")
+        executable = _database_cli("pg_dump")
         if not executable:
             raise RuntimeError("pg_dump is required for PostgreSQL logical backups.")
         environment, connection = _postgres_environment(repository.url)
@@ -140,14 +194,28 @@ def restore_empty_target(
         raise ValueError("Restore target is not empty; existing project tables will not be overwritten.")
 
     source = Path(backup_path).resolve()
-    if repository.backend == "sqlite":
+    if repository.backend == "mysql":
+        if verification["format"] != "mysql-sql":
+            raise ValueError("A MySQL target requires a MySQL SQL dump.")
+        executable = _database_cli("mysql")
+        if not executable:
+            raise RuntimeError("mysql client is required for MySQL restores.")
+        environment, connection, database_name = _mysql_environment(repository.url)
+        with source.open("rb") as stream:
+            subprocess.run(
+                [executable, *connection, database_name],
+                stdin=stream,
+                env=environment,
+                check=True,
+            )
+    elif repository.backend == "sqlite":
         if verification["format"] != "sqlite-online-backup":
             raise ValueError("A SQLite target requires a SQLite online-backup file.")
         shutil.copy2(source, repository._sqlite_path())
     else:
         if verification["format"] != "postgresql-custom":
             raise ValueError("A PostgreSQL target requires a PostgreSQL custom-format dump.")
-        executable = shutil.which("pg_restore")
+        executable = _database_cli("pg_restore")
         if not executable:
             raise RuntimeError("pg_restore is required for PostgreSQL restores.")
         environment, connection = _postgres_environment(repository.url)
@@ -199,7 +267,7 @@ def main() -> None:
         source_url = arguments.source_database_url or os.getenv("SOURCE_DATABASE_URL")
         if not source_url:
             raise SystemExit("migrate requires SOURCE_DATABASE_URL or --source-database-url")
-        result = migrate_sqlite_to_postgresql(
+        result = migrate_legacy_to_mysql(
             Database(source_url), database,
             confirm_empty_target=arguments.confirm_empty_target,
         )

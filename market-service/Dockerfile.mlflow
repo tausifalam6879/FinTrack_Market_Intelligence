@@ -4,7 +4,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1
 
-RUN pip install --no-cache-dir "mlflow>=3.10,<4.0" \
+RUN pip install --no-cache-dir "mlflow>=3.10,<4.0" "PyMySQL>=1.1,<2.0" \
     && groupadd --gid 10001 mlflow \
     && useradd --uid 10001 --gid mlflow --create-home --shell /usr/sbin/nologin mlflow \
     && mkdir -p /mlflow/artifacts \
@@ -17,4 +17,4 @@ EXPOSE 5000
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
   CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:5000/health', timeout=4)" || exit 1
 
-CMD ["mlflow", "server", "--backend-store-uri", "sqlite:////mlflow/mlflow.db", "--artifacts-destination", "/mlflow/artifacts", "--serve-artifacts", "--host", "0.0.0.0", "--port", "5000"]
+CMD ["sh", "-c", "mlflow server --backend-store-uri \"${MLFLOW_BACKEND_STORE_URI}\" --artifacts-destination /mlflow/artifacts --serve-artifacts --host 0.0.0.0 --port 5000"]

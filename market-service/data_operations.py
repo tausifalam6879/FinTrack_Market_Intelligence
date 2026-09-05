@@ -32,10 +32,10 @@ def database_storage_snapshot(database: Optional[Database] = None) -> Dict[str, 
     configured_backup_policy = os.getenv("DATABASE_BACKUP_POLICY", "").strip()
     return {
         "backend": repository.backend,
-        "durableAcrossDeploys": repository.backend == "postgresql",
+        "durableAcrossDeploys": repository.backend == "mysql",
         "retention": (
-            "External PostgreSQL lifecycle"
-            if repository.backend == "postgresql"
+            "Managed MySQL lifecycle"
+            if repository.backend == "mysql"
             else "Local service-instance lifecycle"
         ),
         "schema": schema,
@@ -44,8 +44,8 @@ def database_storage_snapshot(database: Optional[Database] = None) -> Dict[str, 
             "policy": configured_backup_policy or "not_configured",
             "recommendedAction": (
                 "Use provider PITR plus periodic logical exports."
-                if repository.backend == "postgresql"
-                else "Move production data to PostgreSQL before relying on backups."
+                if repository.backend == "mysql"
+                else "Move production data to MySQL before relying on backups."
             ),
         },
         "credentialsExposed": False,

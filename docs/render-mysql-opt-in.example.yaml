@@ -1,0 +1,12 @@
+# OPT-IN EXAMPLE ONLY. Set the real managed MySQL connection string privately
+# in the Render service dashboard. Never commit credentials.
+services:
+  - type: web
+    name: fintrack-market-intelligence-api
+    envVars:
+      - key: DATABASE_URL
+        sync: false
+      - key: REQUIRE_DURABLE_DATABASE
+        value: "true"
+      - key: DATABASE_BACKUP_POLICY
+        value: provider-pitr-plus-verified-logical-export

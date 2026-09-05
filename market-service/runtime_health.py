@@ -64,7 +64,7 @@ def readiness_report() -> Dict[str, Any]:
     try:
         database.ping()
         schema = database.schema_status()
-        durable_database_ready = database.backend == "postgresql"
+        durable_database_ready = database.backend == "mysql"
         if not schema["upToDate"]:
             database_status = "migration-required"
         elif durable_database_required and not durable_database_ready:

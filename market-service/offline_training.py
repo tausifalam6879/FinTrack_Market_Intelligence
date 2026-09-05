@@ -313,7 +313,7 @@ def train_symbols(
 def main() -> None:
     parser = argparse.ArgumentParser(description="Train versioned FinTrack models from persisted OHLCV data.")
     parser.add_argument("--symbols", nargs="+", required=True, help="One or more stored Yahoo Finance symbols.")
-    parser.add_argument("--database-url", help="PostgreSQL URL or sqlite:///path override.")
+    parser.add_argument("--database-url", help="MySQL URL override.")
     parser.add_argument("--artifact-dir", help="Directory for trusted joblib model artifacts.")
     arguments = parser.parse_args()
     result = train_symbols(

@@ -76,7 +76,7 @@ Three scikit-learn classifiers are trained and compared:
 
 Evaluation preserves chronology. An expanding-window `TimeSeriesSplit` with a one-session gap tests each model on future rows without random shuffling or leaking future prices into training. The winner is selected using balanced accuracy, ROC AUC and Brier score. Out-of-sample skill controls probability shrinkage toward 50%; only values above 58% or below 42% create a directional label, while uncertain output remains `NEUTRAL`.
 
-The repository also contains a production-oriented offline path. `data_pipeline.py` validates and upserts arbitrary symbols into PostgreSQL (or a local SQLite development database). `offline_training.py` reserves a final untouched chronological holdout and purges the boundary row whose next-session target would otherwise overlap that holdout. It compares the selected model with majority, previous-session momentum and SMA-trend baselines, applies a quality gate, records the model run and writes a checksummed joblib artifact. Artifacts remain `candidate` or `rejected` until a separate trusted approval step promotes a qualified candidate.
+The repository also contains a production-oriented offline path. `data_pipeline.py` validates and upserts arbitrary symbols into MySQL. `offline_training.py` reserves a final untouched chronological holdout and purges the boundary row whose next-session target would otherwise overlap that holdout. It compares the selected model with majority, previous-session momentum and SMA-trend baselines, applies a quality gate, records the model run and writes a checksummed joblib artifact. Artifacts remain `candidate` or `rejected` until a separate trusted approval step promotes a qualified candidate.
 
 ## PyTorch deep-learning comparator
 
@@ -88,12 +88,12 @@ Approved serving is controlled by `model_registry.py`, never by a public mutatio
 
 ## MLflow experiment tracking
 
-Every new `offline_training.py` run is logged to MLflow with its symbol, selected estimator, chronological train/holdout periods, dataset version, feature count, walk-forward folds, untouched holdout metrics, naive-baseline metrics, quality-gate outcome, PyTorch comparator metrics, SHA-256 checksums, training summary, checksummed joblib artifact and MLP checkpoint. The default tracking backend is an ignored local SQLite MLflow database at `market-service/data/mlflow.db` with artifacts under `market-service/data/mlartifacts/`; this avoids MLflow's maintenance-only legacy filesystem tracking store. Set `MLFLOW_TRACKING_URI` and `MLFLOW_ARTIFACT_ROOT` for a shared tracking server/storage and `MLFLOW_EXPERIMENT_NAME` to control grouping. Tracking is failure-tolerant by default and can be made mandatory with `MLFLOW_REQUIRED=true`.
+Every new `offline_training.py` run is logged to MLflow with its symbol, selected estimator, chronological train/holdout periods, dataset version, feature count, walk-forward folds, untouched holdout metrics, naive-baseline metrics, quality-gate outcome, PyTorch comparator metrics, SHA-256 checksums, training summary, checksummed joblib artifact and MLP checkpoint. MLflow uses the dedicated `fintrack_mlflow` MySQL database and keeps artifacts under `market-service/data/mlartifacts/`. Set `MLFLOW_TRACKING_URI` and `MLFLOW_ARTIFACT_ROOT` for a shared tracking service and `MLFLOW_EXPERIMENT_NAME` to control grouping. Tracking is failure-tolerant by default and can be made mandatory with `MLFLOW_REQUIRED=true`.
 
 The public dashboard uses `GET /market/experiments?symbol=...` to compare registered training runs without exposing artifact filesystem paths or permitting model mutations. The MLflow UI can be started separately from `market-service` with:
 
 ```powershell
-mlflow ui --backend-store-uri sqlite:///data/mlflow.db --host 127.0.0.1 --port 5000
+mlflow server --backend-store-uri $env:MLFLOW_TRACKING_URI --host 127.0.0.1 --port 5000
 ```
 
 ## Company document RAG
@@ -181,7 +181,7 @@ docs/            Architecture, production database and interview handoff
 
 ### Production-style Docker stack
 
-`compose.yaml` starts four isolated services: the non-root Spring Boot gateway, non-root FastAPI runtime, PostgreSQL 17 and an MLflow tracking server. PostgreSQL, gateway, API and MLflow ports bind to `127.0.0.1` by default instead of being exposed to the local network. Copy `compose.env.example` to `.env`, replace the development password/contact values, and then run:
+`compose.yaml` starts four isolated services: the non-root Spring Boot gateway, non-root FastAPI runtime, MySQL 8.4 and an MLflow tracking server. MySQL, gateway, API and MLflow ports bind to `127.0.0.1` by default instead of being exposed to the local network. Copy `compose.env.example` to `.env`, replace the development password/contact values, and then run:
 
 ```powershell
 docker compose up --build
@@ -193,9 +193,9 @@ The stack exposes:
 - public Spring gateway: `http://127.0.0.1:8081`;
 - API readiness: `http://127.0.0.1:8002/health/ready`;
 - MLflow UI: `http://127.0.0.1:5000`;
-- PostgreSQL: `127.0.0.1:5433` for optional local inspection.
+- MySQL: `127.0.0.1:3307` for optional local inspection.
 
-Named Docker volumes persist PostgreSQL rows, API data, model artifacts and MLflow runs. `docker compose down` stops the services without deleting those volumes. Do not use `docker compose down --volumes` unless the local persisted project data should intentionally be removed.
+Named Docker volumes persist MySQL rows, API data, model artifacts and MLflow runs. `docker compose down` stops the services without deleting those volumes. Do not use `docker compose down --volumes` unless the local persisted project data should intentionally be removed.
 
 ### Full local stack
 
@@ -228,7 +228,7 @@ Render now uses `/health/ready` as its deployment health check.
 `.github/workflows/ci.yml` runs on pull requests and `main` pushes. It:
 
 1. installs the reproducible Python 3.12 training environment and runs all backend tests;
-2. creates the complete schema against a real PostgreSQL 17 service and verifies readiness;
+2. creates the complete schema against a real MySQL 8.4 service and verifies readiness;
 3. builds and tests the Java 21 Spring Boot gateway, validation and circuit-breaker policy;
 4. installs frontend dependencies from `package-lock.json` and produces a Vite production build;
 5. installs Playwright Chromium and runs saved-comparison, PDF, grounded-agent, observability and overflow flows on desktop and mobile;
@@ -278,7 +278,7 @@ Never place API keys in the React app or commit them to Git.
 
 ### Persistent market data and offline training
 
-Local development uses an ignored SQLite database. The same repository class switches to PostgreSQL whenever `DATABASE_URL` begins with `postgresql://`.
+Local and hosted application data use MySQL. Run `configure-local-mysql.ps1` once to create the dedicated local databases and application account without committing or printing its generated password.
 
 ```powershell
 cd market-service
@@ -296,13 +296,13 @@ python model_registry.py --approve YOUR_MODEL_RUN_ID
 python monitoring_job.py --symbols RELIANCE.NS HDFCBANK.NS
 ```
 
-Every approved-model prediction stores the exact served feature vector. Training-only quantile baselines and timestamped PSI snapshots stay in PostgreSQL/SQLite, while rolling 10/20/30-outcome quality is exposed through `GET /market/model-status` and `GET /market/model-drift`. The policy returns `keep_serving`, `watch` or `retrain_recommended`, but never trains or promotes a replacement automatically; offline holdout checks, checksums and explicit approval remain mandatory.
+Every approved-model prediction stores the exact served feature vector. Training-only quantile baselines and timestamped PSI snapshots stay in MySQL, while rolling 10/20/30-outcome quality is exposed through `GET /market/model-status` and `GET /market/model-drift`. The policy returns `keep_serving`, `watch` or `retrain_recommended`, but never trains or promotes a replacement automatically; offline holdout checks, checksums and explicit approval remain mandatory.
 
 ### Demand-driven scheduled data operations
 
 FinTrack does not restrict research to a fixed company list. When a visitor opens any supported company or index, its validated two-year daily history is persisted and becomes part of the demand-driven operations universe. `GET /market/data-operations?symbol=...` reports the latest stored session, calendar-age policy, offline-training readiness, last ingestion run and whether storage survives service deployments.
 
-`.github/workflows/market-data-operations.yml` refreshes this database-discovered universe on weekdays and can also be started manually with optional symbols. It activates only after the repository secret `FINTRACK_DATABASE_URL` points to the same durable PostgreSQL database used by the API; without that secret it exits successfully with a clear skipped summary. The workflow refreshes data and drift evidence only—it never trains or approves a model.
+`.github/workflows/market-data-operations.yml` refreshes this database-discovered universe on weekdays and can also be started manually with optional symbols. It activates only after the repository secret `FINTRACK_DATABASE_URL` points to the same durable MySQL database used by the API; without that secret it exits successfully with a clear skipped summary. The workflow refreshes data and drift evidence only—it never trains or approves a model.
 
 ```powershell
 cd market-service
@@ -311,10 +311,10 @@ python operations_pipeline.py --period 2y
 python operations_pipeline.py --symbols-text "RELIANCE.NS,AAPL,CSCO"
 ```
 
-For PostgreSQL:
+For MySQL:
 
 ```env
-DATABASE_URL=postgresql://user:password@host:5432/fintrack
+DATABASE_URL=mysql://user:password@host:3306/fintrack?ssl-mode=REQUIRED
 MODEL_ARTIFACT_DIR=artifacts
 DATABASE_BACKUP_POLICY=provider-pitr-plus-logical-export
 ```
@@ -326,21 +326,21 @@ Safe maintenance commands refuse to overwrite existing backups or restore into a
 ```powershell
 cd market-service
 python database_maintenance.py status
-python database_maintenance.py backup backups/fintrack-2026-08-13.dump
-python database_maintenance.py verify backups/fintrack-2026-08-13.dump
+python database_maintenance.py backup backups/fintrack-2026-09-04.sql
+python database_maintenance.py verify backups/fintrack-2026-09-04.sql
 # Restore is intentionally gated and works only against an empty target database.
-python database_maintenance.py restore backups/fintrack-2026-08-13.dump --confirm-empty-target
+python database_maintenance.py restore backups/fintrack-2026-09-04.sql --confirm-empty-target
 ```
 
-For the one-time production cutover, keep the SQLite source and PostgreSQL target URLs in environment variables and generate a non-secret verification manifest:
+For the one-time production cutover, keep the previous source URL and new MySQL target URL in environment variables and generate a non-secret verification manifest:
 
 ```powershell
-$env:SOURCE_DATABASE_URL = "sqlite:///C:/absolute/path/to/fintrack.db"
-$env:DATABASE_URL = "postgresql://USER:PASSWORD@HOST:5432/DATABASE?sslmode=require"
-python database_maintenance.py migrate --confirm-empty-target --manifest-path ../backups/postgres-cutover.json
+$env:SOURCE_DATABASE_URL = "<previous database connection URL>"
+$env:DATABASE_URL = "mysql://USER:PASSWORD@HOST:3306/DATABASE?ssl-mode=REQUIRED"
+python database_maintenance.py migrate --confirm-empty-target --manifest-path ../backups/mysql-cutover.json
 ```
 
-See [Production PostgreSQL](docs/production-postgres.md) and the explicit opt-in [Render database example](docs/render-postgres-opt-in.example.yaml) before connecting Render and GitHub Actions to a shared database. The current free demo is intentionally not changed to a paid resource automatically.
+See [Production MySQL](docs/production-mysql.md) and the explicit opt-in [Render database example](docs/render-mysql-opt-in.example.yaml) before connecting Render and GitHub Actions to a shared database. The current public demo is intentionally not changed automatically.
 
 The persistence schema contains public-company metadata, OHLCV bars, ingestion audits, model runs, prediction outcomes, served-feature snapshots and model-drift history. It does not store user accounts or personal financial data.
 
@@ -356,7 +356,7 @@ https://fintrack-market-intelligence-api.onrender.com
 
 The active Blueprint now also contains an independently deployable free Spring gateway service pointed at FastAPI. Keep GitHub Pages on the direct FastAPI URL until `https://fintrack-market-gateway.onrender.com/health/ready` passes; then change `VITE_MARKET_API_BASE_URL` to the gateway URL. The same `/market/compare` contract works in direct FastAPI compatibility mode and full Spring orchestration mode.
 
-Run the read-only release check with `python scripts/production_smoke_test.py`; add `--gateway https://fintrack-market-gateway.onrender.com` after the gateway is live and `--require-postgres` only after durable PostgreSQL is deliberately connected.
+Run the read-only release check with `python scripts/production_smoke_test.py`; add `--gateway https://fintrack-market-gateway.onrender.com` after the gateway is live and `--require-mysql` only after durable MySQL is deliberately connected.
 
 Technical architecture: [system architecture](docs/system-architecture.md).
 

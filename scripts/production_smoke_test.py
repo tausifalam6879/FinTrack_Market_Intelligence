@@ -1,4 +1,4 @@
-"""Read-only production smoke checks for API, gateway, batch comparison and PostgreSQL readiness."""
+"""Read-only production smoke checks for API, gateway, batch comparison and MySQL readiness."""
 
 from __future__ import annotations
 
@@ -30,16 +30,16 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Verify a deployed FinTrack service without mutation calls.")
     parser.add_argument("--api", default="https://fintrack-market-intelligence-api.onrender.com")
     parser.add_argument("--gateway", default="", help="Optional deployed Spring Boot gateway URL.")
-    parser.add_argument("--require-postgres", action="store_true")
+    parser.add_argument("--require-mysql", action="store_true")
     args = parser.parse_args()
     api = args.api.rstrip("/")
 
     readiness = request_json(f"{api}/health/ready")
     database = readiness["checks"]["database"]
     assert readiness["status"] == "ready", readiness
-    assert database["schemaVersion"] == database["expectedSchemaVersion"] == 4, database
-    if args.require_postgres:
-        assert database["backend"] == "postgresql", database
+    assert database["schemaVersion"] == database["expectedSchemaVersion"] == 5, database
+    if args.require_mysql:
+        assert database["backend"] == "mysql", database
         assert database["durableAcrossDeploys"] is True, database
         assert database["durabilityRequired"] is True, database
 

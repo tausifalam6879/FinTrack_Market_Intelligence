@@ -14,7 +14,7 @@ flowchart LR
     F --> D[Official NSE / SEC documents]
     F --> ML[scikit-learn inference]
     F --> G[Optional grounded Gemini]
-    F --> DB[(SQLite demo or PostgreSQL production)]
+    F --> DB[(MySQL application database)]
     T[Offline training] --> MF[MLflow experiment tracking]
     T --> A[Checksummed model artifacts]
     A --> F
@@ -33,7 +33,7 @@ sequenceDiagram
     participant GW as Spring Boot (optional public boundary)
     participant API as FastAPI
     participant P as Market provider
-    participant DB as PostgreSQL
+    participant DB as MySQL
     UI->>GW: GET /market/analysis?symbol=INFY.NS
     GW->>GW: Validate route, symbol and request ID
     GW->>API: WebClient request with timeout/retry
@@ -99,7 +99,7 @@ MLflow is a developer/model-governance path, not part of every user request. Gem
 | `document_chunks` | Page-aware RAG chunks and vectors/terms |
 | `schema_migrations` | Applied idempotent schema versions |
 
-SQLite is acceptable for local/demo mode. PostgreSQL is required for durable deployment, shared scheduled operations, reliable prediction outcomes and report indexes across redeploys.
+MySQL is used for local development, durable deployment, shared scheduled operations, prediction outcomes and report indexes.
 
 ## Resilience and observability
 

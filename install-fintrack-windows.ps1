@@ -5,11 +5,19 @@ $ErrorActionPreference = 'Stop'
 $projectRoot = $PSScriptRoot
 $runtimeLauncher = Join-Path $projectRoot 'start-fintrack-background.ps1'
 $preparationLauncher = Join-Path $projectRoot 'start-local.ps1'
+$mysqlConfigurator = Join-Path $projectRoot 'configure-local-mysql.ps1'
 $powerShellExe = (Get-Command powershell.exe -ErrorAction Stop).Source
 $startupShortcut = Join-Path ([Environment]::GetFolderPath('Startup')) 'FinTrack Market Intelligence.lnk'
 $desktopShortcut = Join-Path ([Environment]::GetFolderPath('Desktop')) 'FinTrack Market Intelligence.lnk'
 
 if (-not $WhatIfPreference) {
+    $savedDatabaseUrl = [Environment]::GetEnvironmentVariable('DATABASE_URL', 'User')
+    $savedMysqlPassword = [Environment]::GetEnvironmentVariable('MYSQL_PASSWORD', 'User')
+    $hasSavedMysqlUrl = -not [string]::IsNullOrWhiteSpace($savedDatabaseUrl) -and $savedDatabaseUrl.StartsWith('mysql')
+    if (-not $hasSavedMysqlUrl -and [string]::IsNullOrWhiteSpace($savedMysqlPassword)) {
+        & $mysqlConfigurator
+        if ($LASTEXITCODE -ne 0) { throw 'FinTrack MySQL configuration failed.' }
+    }
     & $preparationLauncher -InstallDependencies -PrepareOnly -ProductionFrontend -RequireOfflineAi
     if ($LASTEXITCODE -ne 0) { throw 'FinTrack prerequisite preparation failed.' }
 }

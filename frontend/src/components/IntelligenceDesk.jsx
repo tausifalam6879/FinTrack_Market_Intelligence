@@ -1612,7 +1612,7 @@ function OperationsSummary({ status, loading, error }) {
   const retraining = status?.retrainingPolicy;
   const schema = dataOps?.storage?.schema;
   const checking = loading || (!status && !error);
-  const storageLabel = dataOps?.storage?.durableAcrossDeploys ? "Durable PostgreSQL" : "Instance storage";
+  const storageLabel = dataOps?.storage?.durableAcrossDeploys ? "Durable MySQL" : "Instance storage";
   const freshness = String(dataOps?.freshness || "provider_only").replaceAll("_", " ");
   const driftLabel = String(drift?.status || "collecting evidence").replaceAll("_", " ");
 
@@ -1761,7 +1761,7 @@ function ModelRegistryPanel({ status, loading, error, activeModel, operationsSta
           <strong>{String(dataOps?.freshness || "provider_only").replaceAll("_", " ")}</strong>
         </div>
         <span className={`monitoring-pill ${dataOps?.freshness || "provider_only"}`}>
-          {dataOps?.storage?.durableAcrossDeploys ? "Durable PostgreSQL" : "Instance storage"}
+          {dataOps?.storage?.durableAcrossDeploys ? "Durable MySQL" : "Instance storage"}
         </span>
       </div>
       <div className="monitoring-policy-grid">

@@ -51,11 +51,11 @@ jobs:
           if [ -z "$DATABASE_URL" ]; then
             echo "configured=false" >> "$GITHUB_OUTPUT"
             echo "### Scheduled operations skipped" >> "$GITHUB_STEP_SUMMARY"
-            echo "Add the FINTRACK_DATABASE_URL repository secret to use the same durable PostgreSQL database as the API." >> "$GITHUB_STEP_SUMMARY"
-          elif [[ "$DATABASE_URL" != postgresql://* && "$DATABASE_URL" != postgres://* ]]; then
+            echo "Add the FINTRACK_DATABASE_URL repository secret to use the same durable MySQL database as the API." >> "$GITHUB_STEP_SUMMARY"
+          elif [[ "$DATABASE_URL" != mysql://* && "$DATABASE_URL" != mysql+pymysql://* ]]; then
             echo "configured=false" >> "$GITHUB_OUTPUT"
             echo "### Scheduled operations blocked" >> "$GITHUB_STEP_SUMMARY"
-            echo "FINTRACK_DATABASE_URL must be a PostgreSQL URL; SQLite cannot persist across hosted deployments." >> "$GITHUB_STEP_SUMMARY"
+            echo "FINTRACK_DATABASE_URL must be a MySQL URL." >> "$GITHUB_STEP_SUMMARY"
             exit 1
           else
             echo "configured=true" >> "$GITHUB_OUTPUT"

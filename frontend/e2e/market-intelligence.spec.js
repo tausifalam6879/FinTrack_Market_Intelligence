@@ -19,7 +19,7 @@ async function mockMarketApi(page) {
     if (path.endsWith("/market/operations-status")) return json({
       status: "ready",
       telemetry: { privacy: "aggregate-only; no questions, symbols, IP addresses or personal data stored", api: { totalRequests: 12, serverErrors: 0, errorRatePercent: 0, averageLatencyMs: 42, p95LatencyMs: 90, routes: [] }, languageModel: { acceptedRatePercent: 100, fallbackRatePercent: 0 } },
-      dependencies: { database: { backend: "postgresql", status: "ready" }, languageModel: { provider: "gemini", status: "configured" } }
+      dependencies: { database: { backend: "mysql", status: "ready" }, languageModel: { provider: "gemini", status: "configured" } }
     });
     if (path.endsWith("/market/compare")) {
       const payload = request.postDataJSON();

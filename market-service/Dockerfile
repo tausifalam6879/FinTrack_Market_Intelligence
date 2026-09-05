@@ -5,7 +5,6 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
     PORT=8000 \
     APP_ENV=production \
-    DATABASE_URL=sqlite:////app/data/fintrack.db \
     MODEL_ARTIFACT_DIR=/app/artifacts
 
 WORKDIR /app

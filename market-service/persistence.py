@@ -1,36 +1,115 @@
-"""Persistent market-data storage for PostgreSQL with a local SQLite fallback."""
+"""Persistent market-data storage with MySQL as the primary application database."""
 
 from __future__ import annotations
 
 from contextlib import contextmanager
 from datetime import datetime, timezone
+import hashlib
 import json
 import os
 from pathlib import Path
+from queue import Empty, Full, LifoQueue
 import sqlite3
+import ssl
+from threading import Lock
 from typing import Any, Dict, Iterable, Iterator, List, Optional, Sequence
+from urllib.parse import parse_qs, quote, unquote, urlparse
 
 
-DEFAULT_SQLITE_PATH = Path(__file__).resolve().parent / "data" / "fintrack.db"
-LATEST_SCHEMA_VERSION = 4
+LATEST_SCHEMA_VERSION = 5
+_MYSQL_POOLS: Dict[str, LifoQueue[Any]] = {}
+_MYSQL_POOLS_LOCK = Lock()
+
+
+def _mysql_pool(database_url: str) -> LifoQueue[Any]:
+    """Return a small process-local pool without retaining a plaintext URL key."""
+    key = hashlib.sha256(database_url.encode("utf-8")).hexdigest()
+    try:
+        configured_size = int(os.getenv("MYSQL_POOL_SIZE", "8"))
+    except ValueError:
+        configured_size = 8
+    pool_size = max(1, min(configured_size, 32))
+    with _MYSQL_POOLS_LOCK:
+        pool = _MYSQL_POOLS.get(key)
+        if pool is None:
+            pool = LifoQueue(maxsize=pool_size)
+            _MYSQL_POOLS[key] = pool
+        return pool
 
 
 def utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def mysql_url_from_environment() -> str:
+    """Build a URL without requiring credentials to be written into project files."""
+    host = os.getenv("MYSQL_HOST", "127.0.0.1").strip() or "127.0.0.1"
+    port = os.getenv("MYSQL_PORT", "3306").strip() or "3306"
+    user = quote(os.getenv("MYSQL_USER", "fintrack").strip() or "fintrack", safe="")
+    password = quote(os.getenv("MYSQL_PASSWORD", "fintrack_local_only"), safe="")
+    database_name = quote(os.getenv("MYSQL_DATABASE", "fintrack").strip() or "fintrack", safe="")
+    return f"mysql://{user}:{password}@{host}:{port}/{database_name}"
+
+
 class Database:
-    """Small DB-API repository that keeps SQL portable across SQLite/PostgreSQL."""
+    """Small DB-API repository with a production-ready MySQL path.
+
+    The older adapters remain temporarily readable so existing data can be
+    migrated safely before they are removed. New local and hosted setups use
+    MySQL.
+    """
 
     def __init__(self, url: Optional[str] = None):
-        self.url = str(url or os.getenv("DATABASE_URL") or f"sqlite:///{DEFAULT_SQLITE_PATH}")
-        self.backend = "postgresql" if self.url.startswith(("postgresql://", "postgres://")) else "sqlite"
+        self.url = str(url or os.getenv("DATABASE_URL") or mysql_url_from_environment())
+        if self.url.startswith(("mysql://", "mysql+pymysql://")):
+            self.backend = "mysql"
+        elif self.url.startswith(("postgresql://", "postgres://")):
+            self.backend = "postgresql"
+        elif self.url.startswith("sqlite:///"):
+            self.backend = "sqlite"
+        else:
+            raise ValueError(
+                "DATABASE_URL must use mysql://. Legacy postgresql:// and sqlite:/// URLs "
+                "are accepted only for verified migration and compatibility tests."
+            )
 
     @property
     def location(self) -> str:
-        if self.backend == "postgresql":
+        if self.backend in {"mysql", "postgresql"}:
             return "DATABASE_URL"
         return str(self._sqlite_path())
+
+    def _mysql_connection_options(self) -> Dict[str, Any]:
+        normalized = self.url.replace("mysql+pymysql://", "mysql://", 1)
+        parsed = urlparse(normalized)
+        database_name = unquote(parsed.path.lstrip("/"))
+        if not parsed.hostname or not parsed.username or not database_name:
+            raise ValueError(
+                "MySQL DATABASE_URL must include user, host and database name: "
+                "mysql://USER:PASSWORD@HOST:3306/DATABASE"
+            )
+        query = parse_qs(parsed.query)
+        options: Dict[str, Any] = {
+            "host": parsed.hostname,
+            "port": parsed.port or 3306,
+            "user": unquote(parsed.username),
+            "password": unquote(parsed.password or ""),
+            "database": database_name,
+            "charset": query.get("charset", ["utf8mb4"])[0],
+            "connect_timeout": int(query.get("connect_timeout", ["10"])[0]),
+            "read_timeout": int(query.get("read_timeout", ["30"])[0]),
+            "write_timeout": int(query.get("write_timeout", ["30"])[0]),
+            "autocommit": False,
+        }
+        ssl_mode = query.get("ssl-mode", query.get("sslmode", [""]))[0].lower()
+        ssl_enabled = query.get("ssl", [""])[0].lower() in {"1", "true", "yes", "required"}
+        if ssl_enabled or ssl_mode in {"required", "verify_ca", "verify_identity"}:
+            # An empty dict is falsey and lets PyMySQL treat TLS as optional.
+            # Require encrypted, verified transport for hosted connections.
+            context = ssl.create_default_context(cafile=query.get("ssl-ca", [None])[0])
+            context.check_hostname = ssl_mode != "verify_ca"
+            options["ssl"] = context
+        return options
 
     def _sqlite_path(self) -> Path:
         prefix = "sqlite:///"
@@ -40,7 +119,28 @@ class Database:
 
     @contextmanager
     def connect(self) -> Iterator[Any]:
-        if self.backend == "postgresql":
+        pool: Optional[LifoQueue[Any]] = None
+        if self.backend == "mysql":
+            try:
+                import pymysql
+            except ImportError as error:
+                raise RuntimeError(
+                    "MySQL requires PyMySQL. Install market-service/requirements-runtime.txt first."
+                ) from error
+            pool = _mysql_pool(self.url)
+            connection = None
+            while connection is None:
+                try:
+                    candidate = pool.get_nowait()
+                except Empty:
+                    connection = pymysql.connect(**self._mysql_connection_options())
+                    break
+                try:
+                    candidate.ping(reconnect=False)
+                    connection = candidate
+                except Exception:
+                    candidate.close()
+        elif self.backend == "postgresql":
             try:
                 import psycopg
             except ImportError as error:
@@ -61,10 +161,16 @@ class Database:
             connection.rollback()
             raise
         finally:
-            connection.close()
+            if pool is not None and getattr(connection, "open", False):
+                try:
+                    pool.put_nowait(connection)
+                except Full:
+                    connection.close()
+            else:
+                connection.close()
 
     def _sql(self, statement: str) -> str:
-        return statement.replace("?", "%s") if self.backend == "postgresql" else statement
+        return statement.replace("?", "%s") if self.backend in {"mysql", "postgresql"} else statement
 
     def ping(self) -> None:
         """Verify that the configured database accepts a minimal read query."""
@@ -81,7 +187,216 @@ class Database:
         columns = [column.name if hasattr(column, "name") else column[0] for column in description]
         return [dict(zip(columns, row)) for row in cursor.fetchall()]
 
+    @staticmethod
+    def _mysql_schema_statements() -> List[str]:
+        """Return MySQL 8 schema statements in migration-version order."""
+        table_options = " ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci"
+        return [
+            """
+            CREATE TABLE IF NOT EXISTS companies (
+                symbol VARCHAR(32) PRIMARY KEY,
+                name VARCHAR(255) NOT NULL,
+                exchange VARCHAR(64),
+                sector VARCHAR(191),
+                industry VARCHAR(191),
+                region VARCHAR(64),
+                currency VARCHAR(16),
+                source VARCHAR(191) NOT NULL,
+                metadata_json LONGTEXT NOT NULL,
+                updated_at VARCHAR(40) NOT NULL
+            )
+            """ + table_options,
+            """
+            CREATE TABLE IF NOT EXISTS market_bars (
+                symbol VARCHAR(32) NOT NULL,
+                session_date VARCHAR(10) NOT NULL,
+                open DOUBLE NOT NULL,
+                high DOUBLE NOT NULL,
+                low DOUBLE NOT NULL,
+                close DOUBLE NOT NULL,
+                adjusted_close DOUBLE,
+                volume DOUBLE NOT NULL,
+                source VARCHAR(191) NOT NULL,
+                ingested_at VARCHAR(40) NOT NULL,
+                PRIMARY KEY (symbol, session_date)
+            )
+            """ + table_options,
+            """
+            CREATE TABLE IF NOT EXISTS ingestion_runs (
+                id VARCHAR(64) PRIMARY KEY,
+                started_at VARCHAR(40) NOT NULL,
+                completed_at VARCHAR(40),
+                status VARCHAR(32) NOT NULL,
+                period VARCHAR(32) NOT NULL,
+                symbols_requested INT NOT NULL,
+                bars_written INT NOT NULL DEFAULT 0,
+                dataset_version VARCHAR(128),
+                errors_json LONGTEXT NOT NULL
+            )
+            """ + table_options,
+            """
+            CREATE TABLE IF NOT EXISTS model_runs (
+                id VARCHAR(64) PRIMARY KEY,
+                symbol VARCHAR(32) NOT NULL,
+                model_name VARCHAR(191) NOT NULL,
+                artifact_path TEXT NOT NULL,
+                dataset_version VARCHAR(128) NOT NULL,
+                training_start VARCHAR(10) NOT NULL,
+                training_end VARCHAR(10) NOT NULL,
+                training_rows INT NOT NULL,
+                holdout_start VARCHAR(10) NOT NULL,
+                holdout_end VARCHAR(10) NOT NULL,
+                holdout_rows INT NOT NULL,
+                balanced_accuracy DOUBLE NOT NULL,
+                roc_auc DOUBLE,
+                brier_score DOUBLE NOT NULL,
+                metrics_json LONGTEXT NOT NULL,
+                baselines_json LONGTEXT NOT NULL,
+                features_json LONGTEXT NOT NULL,
+                status VARCHAR(32) NOT NULL,
+                created_at VARCHAR(40) NOT NULL
+            )
+            """ + table_options,
+            """
+            CREATE TABLE IF NOT EXISTS predictions (
+                id VARCHAR(96) PRIMARY KEY,
+                symbol VARCHAR(32) NOT NULL,
+                model_run_id VARCHAR(64),
+                model_data_date VARCHAR(10) NOT NULL,
+                generated_at VARCHAR(40) NOT NULL,
+                probability_up DOUBLE NOT NULL,
+                outlook VARCHAR(24) NOT NULL,
+                reference_close DOUBLE NOT NULL,
+                expected_low DOUBLE,
+                expected_high DOUBLE,
+                actual_close DOUBLE,
+                actual_direction VARCHAR(16),
+                correct TINYINT,
+                evaluated_at VARCHAR(40)
+            )
+            """ + table_options,
+            """
+            CREATE TABLE IF NOT EXISTS model_feature_baselines (
+                model_run_id VARCHAR(64) NOT NULL,
+                symbol VARCHAR(32) NOT NULL,
+                feature_name VARCHAR(128) NOT NULL,
+                sample_count INT NOT NULL,
+                mean_value DOUBLE NOT NULL,
+                std_value DOUBLE NOT NULL,
+                bin_edges_json LONGTEXT NOT NULL,
+                bin_proportions_json LONGTEXT NOT NULL,
+                created_at VARCHAR(40) NOT NULL,
+                PRIMARY KEY (model_run_id, feature_name)
+            )
+            """ + table_options,
+            """
+            CREATE TABLE IF NOT EXISTS prediction_features (
+                prediction_id VARCHAR(96) NOT NULL,
+                symbol VARCHAR(32) NOT NULL,
+                model_run_id VARCHAR(64) NOT NULL,
+                feature_name VARCHAR(128) NOT NULL,
+                feature_value DOUBLE NOT NULL,
+                observed_at VARCHAR(40) NOT NULL,
+                PRIMARY KEY (prediction_id, feature_name),
+                CONSTRAINT fk_prediction_features_prediction
+                    FOREIGN KEY (prediction_id) REFERENCES predictions(id) ON DELETE CASCADE
+            )
+            """ + table_options,
+            """
+            CREATE TABLE IF NOT EXISTS drift_snapshots (
+                id VARCHAR(96) PRIMARY KEY,
+                symbol VARCHAR(32) NOT NULL,
+                model_run_id VARCHAR(64) NOT NULL,
+                evaluated_at VARCHAR(40) NOT NULL,
+                recent_observations INT NOT NULL,
+                mean_psi DOUBLE,
+                max_psi DOUBLE,
+                status VARCHAR(32) NOT NULL,
+                recommendation VARCHAR(64) NOT NULL,
+                details_json LONGTEXT NOT NULL
+            )
+            """ + table_options,
+            """
+            CREATE TABLE IF NOT EXISTS document_sources (
+                id VARCHAR(96) PRIMARY KEY,
+                symbol VARCHAR(32) NOT NULL,
+                title VARCHAR(512) NOT NULL,
+                document_type VARCHAR(64) NOT NULL,
+                reporting_period VARCHAR(64),
+                source_url TEXT,
+                file_sha256 VARCHAR(64) NOT NULL,
+                page_count INT NOT NULL,
+                chunk_count INT NOT NULL,
+                embedding_provider VARCHAR(64) NOT NULL,
+                created_at VARCHAR(40) NOT NULL
+            )
+            """ + table_options,
+            """
+            CREATE TABLE IF NOT EXISTS document_chunks (
+                id VARCHAR(96) PRIMARY KEY,
+                document_id VARCHAR(96) NOT NULL,
+                symbol VARCHAR(32) NOT NULL,
+                page_number INT NOT NULL,
+                chunk_index INT NOT NULL,
+                text LONGTEXT NOT NULL,
+                embedding_json LONGTEXT NOT NULL,
+                embedding_provider VARCHAR(64) NOT NULL,
+                created_at VARCHAR(40) NOT NULL,
+                CONSTRAINT fk_document_chunks_source
+                    FOREIGN KEY (document_id) REFERENCES document_sources(id) ON DELETE CASCADE
+            )
+            """ + table_options,
+            "CREATE INDEX idx_market_bars_symbol_date ON market_bars(symbol, session_date)",
+            "CREATE INDEX idx_model_runs_symbol_created ON model_runs(symbol, created_at)",
+            "CREATE INDEX idx_predictions_symbol_date ON predictions(symbol, model_data_date)",
+            "CREATE INDEX idx_prediction_features_model ON prediction_features(symbol, model_run_id, observed_at)",
+            "CREATE INDEX idx_drift_snapshots_symbol ON drift_snapshots(symbol, evaluated_at)",
+            "CREATE INDEX idx_document_sources_symbol ON document_sources(symbol, created_at)",
+            "CREATE INDEX idx_document_chunks_symbol ON document_chunks(symbol, embedding_provider)",
+            "ALTER TABLE document_sources MODIFY reporting_period VARCHAR(64)",
+        ]
+
+    def _initialize_mysql_schema(self) -> None:
+        statements = self._mysql_schema_statements()
+        migrations = [
+            (1, "core-market-and-model-registry", statements[:5]),
+            (2, "prediction-feature-and-drift-monitoring", statements[5:8]),
+            (3, "document-rag-storage", statements[8:10]),
+            (4, "query-performance-indexes", statements[10:17]),
+            (5, "document-reporting-period-capacity", statements[17:]),
+        ]
+        migration_table = """
+            CREATE TABLE IF NOT EXISTS schema_migrations (
+                version INT PRIMARY KEY,
+                name VARCHAR(191) NOT NULL,
+                applied_at VARCHAR(40) NOT NULL
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+        """
+        with self.connect() as connection:
+            cursor = connection.cursor()
+            cursor.execute(migration_table)
+            cursor.execute("SELECT version FROM schema_migrations")
+            applied = {int(row[0]) for row in cursor.fetchall()}
+            for version, name, migration_statements in migrations:
+                if version in applied:
+                    continue
+                for statement in migration_statements:
+                    try:
+                        cursor.execute(statement)
+                    except Exception as error:
+                        # MySQL error 1061 means an index from an interrupted
+                        # migration already exists. Continuing is idempotent.
+                        if version != 4 or not error.args or int(error.args[0]) != 1061:
+                            raise
+                cursor.execute(
+                    "INSERT IGNORE INTO schema_migrations (version, name, applied_at) VALUES (%s, %s, %s)",
+                    (version, name, utc_now()),
+                )
+
     def initialize_schema(self) -> None:
+        if self.backend == "mysql":
+            self._initialize_mysql_schema()
+            return
         timestamp_type = "TIMESTAMPTZ" if self.backend == "postgresql" else "TEXT"
         statements = [
             f"""
@@ -249,6 +564,7 @@ class Database:
             (2, "prediction-feature-and-drift-monitoring", statements[5:8]),
             (3, "document-rag-storage", statements[8:10]),
             (4, "query-performance-indexes", statements[10:]),
+            (5, "document-reporting-period-capacity", []),
         ]
         migration_table = f"""
             CREATE TABLE IF NOT EXISTS schema_migrations (
@@ -295,7 +611,12 @@ class Database:
         }
 
     def user_table_count(self) -> int:
-        if self.backend == "postgresql":
+        if self.backend == "mysql":
+            statement = """
+                SELECT COUNT(*) FROM information_schema.tables
+                WHERE table_schema = DATABASE() AND table_type = 'BASE TABLE'
+            """
+        elif self.backend == "postgresql":
             statement = """
                 SELECT COUNT(*) FROM information_schema.tables
                 WHERE table_schema = 'public' AND table_type = 'BASE TABLE'
@@ -312,22 +633,40 @@ class Database:
             return int(row[0]) if row else 0
 
     def upsert_company(self, company: Dict[str, Any]) -> None:
-        statement = self._sql("""
-            INSERT INTO companies (
-                symbol, name, exchange, sector, industry, region, currency,
-                source, metadata_json, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(symbol) DO UPDATE SET
-                name = excluded.name,
-                exchange = excluded.exchange,
-                sector = excluded.sector,
-                industry = excluded.industry,
-                region = excluded.region,
-                currency = excluded.currency,
-                source = excluded.source,
-                metadata_json = excluded.metadata_json,
-                updated_at = excluded.updated_at
-        """)
+        if self.backend == "mysql":
+            statement = """
+                INSERT INTO companies (
+                    symbol, name, exchange, sector, industry, region, currency,
+                    source, metadata_json, updated_at
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                ON DUPLICATE KEY UPDATE
+                    name = VALUES(name),
+                    exchange = VALUES(exchange),
+                    sector = VALUES(sector),
+                    industry = VALUES(industry),
+                    region = VALUES(region),
+                    currency = VALUES(currency),
+                    source = VALUES(source),
+                    metadata_json = VALUES(metadata_json),
+                    updated_at = VALUES(updated_at)
+            """
+        else:
+            statement = self._sql("""
+                INSERT INTO companies (
+                    symbol, name, exchange, sector, industry, region, currency,
+                    source, metadata_json, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(symbol) DO UPDATE SET
+                    name = excluded.name,
+                    exchange = excluded.exchange,
+                    sector = excluded.sector,
+                    industry = excluded.industry,
+                    region = excluded.region,
+                    currency = excluded.currency,
+                    source = excluded.source,
+                    metadata_json = excluded.metadata_json,
+                    updated_at = excluded.updated_at
+            """)
         values = (
             company["symbol"], company.get("name") or company["symbol"], company.get("exchange"),
             company.get("sector"), company.get("industry"), company.get("region"),
@@ -341,21 +680,38 @@ class Database:
         rows = list(bars)
         if not rows:
             return 0
-        statement = self._sql("""
-            INSERT INTO market_bars (
-                symbol, session_date, open, high, low, close, adjusted_close,
-                volume, source, ingested_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(symbol, session_date) DO UPDATE SET
-                open = excluded.open,
-                high = excluded.high,
-                low = excluded.low,
-                close = excluded.close,
-                adjusted_close = excluded.adjusted_close,
-                volume = excluded.volume,
-                source = excluded.source,
-                ingested_at = excluded.ingested_at
-        """)
+        if self.backend == "mysql":
+            statement = """
+                INSERT INTO market_bars (
+                    symbol, session_date, open, high, low, close, adjusted_close,
+                    volume, source, ingested_at
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                ON DUPLICATE KEY UPDATE
+                    open = VALUES(open),
+                    high = VALUES(high),
+                    low = VALUES(low),
+                    close = VALUES(close),
+                    adjusted_close = VALUES(adjusted_close),
+                    volume = VALUES(volume),
+                    source = VALUES(source),
+                    ingested_at = VALUES(ingested_at)
+            """
+        else:
+            statement = self._sql("""
+                INSERT INTO market_bars (
+                    symbol, session_date, open, high, low, close, adjusted_close,
+                    volume, source, ingested_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(symbol, session_date) DO UPDATE SET
+                    open = excluded.open,
+                    high = excluded.high,
+                    low = excluded.low,
+                    close = excluded.close,
+                    adjusted_close = excluded.adjusted_close,
+                    volume = excluded.volume,
+                    source = excluded.source,
+                    ingested_at = excluded.ingested_at
+            """)
         values = [(
             row["symbol"], row["session_date"], row["open"], row["high"], row["low"],
             row["close"], row.get("adjusted_close"), row["volume"],
@@ -520,23 +876,42 @@ class Database:
                 raise ValueError("Only a quality-gate candidate model can be approved.")
 
     def upsert_prediction(self, prediction: Dict[str, Any]) -> None:
-        statement = self._sql("""
-            INSERT INTO predictions (
-                id, symbol, model_run_id, model_data_date, generated_at,
-                probability_up, outlook, reference_close, expected_low, expected_high,
-                actual_close, actual_direction, correct, evaluated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(id) DO UPDATE SET
-                probability_up = excluded.probability_up,
-                outlook = excluded.outlook,
-                reference_close = excluded.reference_close,
-                expected_low = excluded.expected_low,
-                expected_high = excluded.expected_high,
-                actual_close = COALESCE(predictions.actual_close, excluded.actual_close),
-                actual_direction = COALESCE(predictions.actual_direction, excluded.actual_direction),
-                correct = COALESCE(predictions.correct, excluded.correct),
-                evaluated_at = COALESCE(predictions.evaluated_at, excluded.evaluated_at)
-        """)
+        if self.backend == "mysql":
+            statement = """
+                INSERT INTO predictions (
+                    id, symbol, model_run_id, model_data_date, generated_at,
+                    probability_up, outlook, reference_close, expected_low, expected_high,
+                    actual_close, actual_direction, correct, evaluated_at
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                ON DUPLICATE KEY UPDATE
+                    probability_up = VALUES(probability_up),
+                    outlook = VALUES(outlook),
+                    reference_close = VALUES(reference_close),
+                    expected_low = VALUES(expected_low),
+                    expected_high = VALUES(expected_high),
+                    actual_close = COALESCE(predictions.actual_close, VALUES(actual_close)),
+                    actual_direction = COALESCE(predictions.actual_direction, VALUES(actual_direction)),
+                    correct = COALESCE(predictions.correct, VALUES(correct)),
+                    evaluated_at = COALESCE(predictions.evaluated_at, VALUES(evaluated_at))
+            """
+        else:
+            statement = self._sql("""
+                INSERT INTO predictions (
+                    id, symbol, model_run_id, model_data_date, generated_at,
+                    probability_up, outlook, reference_close, expected_low, expected_high,
+                    actual_close, actual_direction, correct, evaluated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(id) DO UPDATE SET
+                    probability_up = excluded.probability_up,
+                    outlook = excluded.outlook,
+                    reference_close = excluded.reference_close,
+                    expected_low = excluded.expected_low,
+                    expected_high = excluded.expected_high,
+                    actual_close = COALESCE(predictions.actual_close, excluded.actual_close),
+                    actual_direction = COALESCE(predictions.actual_direction, excluded.actual_direction),
+                    correct = COALESCE(predictions.correct, excluded.correct),
+                    evaluated_at = COALESCE(predictions.evaluated_at, excluded.evaluated_at)
+            """)
         values = (
             prediction["id"], prediction["symbol"], prediction.get("model_run_id"),
             prediction["model_data_date"], prediction["generated_at"],
@@ -602,14 +977,24 @@ class Database:
             ))
         if not rows:
             return 0
-        statement = self._sql("""
-            INSERT INTO prediction_features (
-                prediction_id, symbol, model_run_id, feature_name, feature_value, observed_at
-            ) VALUES (?, ?, ?, ?, ?, ?)
-            ON CONFLICT(prediction_id, feature_name) DO UPDATE SET
-                feature_value = excluded.feature_value,
-                observed_at = excluded.observed_at
-        """)
+        if self.backend == "mysql":
+            statement = """
+                INSERT INTO prediction_features (
+                    prediction_id, symbol, model_run_id, feature_name, feature_value, observed_at
+                ) VALUES (%s, %s, %s, %s, %s, %s)
+                ON DUPLICATE KEY UPDATE
+                    feature_value = VALUES(feature_value),
+                    observed_at = VALUES(observed_at)
+            """
+        else:
+            statement = self._sql("""
+                INSERT INTO prediction_features (
+                    prediction_id, symbol, model_run_id, feature_name, feature_value, observed_at
+                ) VALUES (?, ?, ?, ?, ?, ?)
+                ON CONFLICT(prediction_id, feature_name) DO UPDATE SET
+                    feature_value = excluded.feature_value,
+                    observed_at = excluded.observed_at
+            """)
         with self.connect() as connection:
             connection.cursor().executemany(statement, rows)
         return len(rows)
@@ -641,20 +1026,36 @@ class Database:
         return [row for row in rows if row["prediction_id"] in allowed]
 
     def save_drift_snapshot(self, snapshot: Dict[str, Any]) -> None:
-        statement = self._sql("""
-            INSERT INTO drift_snapshots (
-                id, symbol, model_run_id, evaluated_at, recent_observations,
-                mean_psi, max_psi, status, recommendation, details_json
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(id) DO UPDATE SET
-                evaluated_at = excluded.evaluated_at,
-                recent_observations = excluded.recent_observations,
-                mean_psi = excluded.mean_psi,
-                max_psi = excluded.max_psi,
-                status = excluded.status,
-                recommendation = excluded.recommendation,
-                details_json = excluded.details_json
-        """)
+        if self.backend == "mysql":
+            statement = """
+                INSERT INTO drift_snapshots (
+                    id, symbol, model_run_id, evaluated_at, recent_observations,
+                    mean_psi, max_psi, status, recommendation, details_json
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                ON DUPLICATE KEY UPDATE
+                    evaluated_at = VALUES(evaluated_at),
+                    recent_observations = VALUES(recent_observations),
+                    mean_psi = VALUES(mean_psi),
+                    max_psi = VALUES(max_psi),
+                    status = VALUES(status),
+                    recommendation = VALUES(recommendation),
+                    details_json = VALUES(details_json)
+            """
+        else:
+            statement = self._sql("""
+                INSERT INTO drift_snapshots (
+                    id, symbol, model_run_id, evaluated_at, recent_observations,
+                    mean_psi, max_psi, status, recommendation, details_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(id) DO UPDATE SET
+                    evaluated_at = excluded.evaluated_at,
+                    recent_observations = excluded.recent_observations,
+                    mean_psi = excluded.mean_psi,
+                    max_psi = excluded.max_psi,
+                    status = excluded.status,
+                    recommendation = excluded.recommendation,
+                    details_json = excluded.details_json
+            """)
         values = (
             snapshot["id"], snapshot["symbol"], snapshot["modelRunId"],
             snapshot["evaluatedAt"], snapshot["recentObservations"],
@@ -742,23 +1143,42 @@ class Database:
     def replace_document(self, source: Dict[str, Any], chunks: Iterable[Dict[str, Any]]) -> None:
         chunk_rows = list(chunks)
         delete_chunks = self._sql("DELETE FROM document_chunks WHERE document_id = ?")
-        source_statement = self._sql("""
-            INSERT INTO document_sources (
-                id, symbol, title, document_type, reporting_period, source_url,
-                file_sha256, page_count, chunk_count, embedding_provider, created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(id) DO UPDATE SET
-                symbol = excluded.symbol,
-                title = excluded.title,
-                document_type = excluded.document_type,
-                reporting_period = excluded.reporting_period,
-                source_url = excluded.source_url,
-                file_sha256 = excluded.file_sha256,
-                page_count = excluded.page_count,
-                chunk_count = excluded.chunk_count,
-                embedding_provider = excluded.embedding_provider,
-                created_at = excluded.created_at
-        """)
+        if self.backend == "mysql":
+            source_statement = """
+                INSERT INTO document_sources (
+                    id, symbol, title, document_type, reporting_period, source_url,
+                    file_sha256, page_count, chunk_count, embedding_provider, created_at
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                ON DUPLICATE KEY UPDATE
+                    symbol = VALUES(symbol),
+                    title = VALUES(title),
+                    document_type = VALUES(document_type),
+                    reporting_period = VALUES(reporting_period),
+                    source_url = VALUES(source_url),
+                    file_sha256 = VALUES(file_sha256),
+                    page_count = VALUES(page_count),
+                    chunk_count = VALUES(chunk_count),
+                    embedding_provider = VALUES(embedding_provider),
+                    created_at = VALUES(created_at)
+            """
+        else:
+            source_statement = self._sql("""
+                INSERT INTO document_sources (
+                    id, symbol, title, document_type, reporting_period, source_url,
+                    file_sha256, page_count, chunk_count, embedding_provider, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(id) DO UPDATE SET
+                    symbol = excluded.symbol,
+                    title = excluded.title,
+                    document_type = excluded.document_type,
+                    reporting_period = excluded.reporting_period,
+                    source_url = excluded.source_url,
+                    file_sha256 = excluded.file_sha256,
+                    page_count = excluded.page_count,
+                    chunk_count = excluded.chunk_count,
+                    embedding_provider = excluded.embedding_provider,
+                    created_at = excluded.created_at
+            """)
         chunk_statement = self._sql("""
             INSERT INTO document_chunks (
                 id, document_id, symbol, page_number, chunk_index, text,

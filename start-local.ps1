@@ -11,6 +11,22 @@ $serviceRoot = Join-Path $projectRoot "market-service"
 $gatewayRoot = Join-Path $projectRoot "gateway-service"
 $frontendRoot = Join-Path $projectRoot "frontend"
 
+if (-not [string]::IsNullOrWhiteSpace($env:DATABASE_URL) -and -not $env:DATABASE_URL.StartsWith('mysql')) {
+    Write-Warning 'Ignoring the previous non-MySQL DATABASE_URL for this FinTrack process.'
+    Remove-Item Env:DATABASE_URL
+}
+
+# Pull the one-time MySQL installer settings into this process without
+# printing them or writing credentials into the repository.
+foreach ($name in @('DATABASE_URL', 'MYSQL_HOST', 'MYSQL_PORT', 'MYSQL_DATABASE', 'MYSQL_USER', 'MYSQL_PASSWORD')) {
+    if ([string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable($name, 'Process'))) {
+        $savedValue = [Environment]::GetEnvironmentVariable($name, 'User')
+        if (-not [string]::IsNullOrWhiteSpace($savedValue) -and ($name -ne 'DATABASE_URL' -or $savedValue.StartsWith('mysql'))) {
+            [Environment]::SetEnvironmentVariable($name, $savedValue, 'Process')
+        }
+    }
+}
+
 function Test-FinTrackEndpoint([string]$Uri, [int]$TimeoutSeconds = 3) {
     try {
         $response = Invoke-RestMethod -Uri $Uri -TimeoutSec $TimeoutSeconds
@@ -107,6 +123,17 @@ if ($InstallDependencies) {
 $pythonExe = if (Test-Path $venvPython) { $venvPython } else { $basePython }
 & $pythonExe -c "import fastapi, uvicorn, pandas, sklearn" 2>$null
 if ($LASTEXITCODE -ne 0) { throw "Python dependencies are missing. Connect once and run: .\start-local.ps1 -InstallDependencies" }
+
+Push-Location $serviceRoot
+try {
+    & $pythonExe -c "from runtime_health import initialize_runtime, readiness_report; initialize_runtime(); report=readiness_report(); assert report['status'] == 'ready' and report['checks']['database']['backend'] == 'mysql', report"
+    $databaseCheckExitCode = $LASTEXITCODE
+} finally {
+    Pop-Location
+}
+if ($databaseCheckExitCode -ne 0) {
+    throw 'FinTrack MySQL is not ready. Run .\configure-local-mysql.ps1 once, then retry.'
+}
 
 if (-not (Get-Command npm -ErrorAction SilentlyContinue)) {
     throw 'Node.js and npm are required for the local FinTrack interface.'

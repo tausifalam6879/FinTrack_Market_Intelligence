@@ -2,8 +2,9 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
+from unittest.mock import Mock
 
-from database_cutover import migrate_sqlite_to_postgresql, write_cutover_manifest
+from database_cutover import migrate_legacy_to_mysql, write_cutover_manifest
 from persistence import Database
 
 
@@ -43,12 +44,12 @@ class DatabaseCutoverTests(unittest.TestCase):
             target = self._database(root, "target.db")
             self._seed_source(source)
 
-            result = migrate_sqlite_to_postgresql(
+            result = migrate_legacy_to_mysql(
                 source,
                 target,
                 confirm_empty_target=True,
                 batch_size=1,
-                allow_sqlite_target_for_tests=True,
+                allow_legacy_target_for_tests=True,
             )
 
             self.assertEqual("verified", result["status"])
@@ -71,19 +72,19 @@ class DatabaseCutoverTests(unittest.TestCase):
             self._seed_source(source)
 
             with self.assertRaisesRegex(ValueError, "confirm-empty-target"):
-                migrate_sqlite_to_postgresql(
-                    source, target, allow_sqlite_target_for_tests=True
+                migrate_legacy_to_mysql(
+                    source, target, allow_legacy_target_for_tests=True
                 )
 
             target.upsert_company({
                 "symbol": "EXISTING.NS", "name": "Existing", "source": "test"
             })
             with self.assertRaisesRegex(ValueError, "will not be overwritten"):
-                migrate_sqlite_to_postgresql(
+                migrate_legacy_to_mysql(
                     source,
                     target,
                     confirm_empty_target=True,
-                    allow_sqlite_target_for_tests=True,
+                    allow_legacy_target_for_tests=True,
                 )
 
     def test_manifest_contains_evidence_but_no_database_credentials(self):
@@ -92,11 +93,11 @@ class DatabaseCutoverTests(unittest.TestCase):
             source = self._database(root, "source.db")
             target = self._database(root, "target.db")
             self._seed_source(source)
-            result = migrate_sqlite_to_postgresql(
+            result = migrate_legacy_to_mysql(
                 source,
                 target,
                 confirm_empty_target=True,
-                allow_sqlite_target_for_tests=True,
+                allow_legacy_target_for_tests=True,
             )
             manifest_path = write_cutover_manifest(result, root / "cutover.json")
             serialized = manifest_path.read_text(encoding="utf-8")
@@ -106,6 +107,26 @@ class DatabaseCutoverTests(unittest.TestCase):
             self.assertNotIn("password", serialized.lower())
             with self.assertRaisesRegex(ValueError, "already exists"):
                 write_cutover_manifest(result, manifest_path)
+
+    def test_source_schema_is_not_modified_during_migration(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = self._database(root, "source.db")
+            target = self._database(root, "target.db")
+            self._seed_source(source)
+            source.initialize_schema = Mock(
+                side_effect=AssertionError("source schema must remain untouched")
+            )
+
+            result = migrate_legacy_to_mysql(
+                source,
+                target,
+                confirm_empty_target=True,
+                allow_legacy_target_for_tests=True,
+            )
+
+            self.assertEqual("verified", result["status"])
+            source.initialize_schema.assert_not_called()
 
 
 if __name__ == "__main__":

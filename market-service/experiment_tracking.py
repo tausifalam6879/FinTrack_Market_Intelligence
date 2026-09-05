@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 import re
 from typing import Any, Dict, Optional
+from urllib.parse import urlparse, urlunparse
 
 from data_pipeline import normalize_symbol
 from persistence import Database, utc_now
@@ -17,7 +18,6 @@ from persistence import Database, utc_now
 os.environ.setdefault("GIT_PYTHON_REFRESH", "quiet")
 
 
-DEFAULT_MLFLOW_DATABASE = Path(__file__).resolve().parent / "data" / "mlflow.db"
 DEFAULT_MLFLOW_ARTIFACTS = Path(__file__).resolve().parent / "data" / "mlartifacts"
 DEFAULT_EXPERIMENT_NAME = "fintrack-market-models"
 
@@ -26,14 +26,20 @@ def _enabled(value: Optional[str]) -> bool:
     return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
 
 
+def _default_mysql_tracking_uri() -> str:
+    database_url = Database().url.replace("mysql://", "mysql+pymysql://", 1)
+    parsed = urlparse(database_url)
+    return urlunparse(parsed._replace(path="/fintrack_mlflow"))
+
+
 def mlflow_configuration() -> Dict[str, Any]:
     configured_uri = os.getenv("MLFLOW_TRACKING_URI", "").strip()
-    tracking_uri = configured_uri or f"sqlite:///{DEFAULT_MLFLOW_DATABASE.resolve().as_posix()}"
+    tracking_uri = configured_uri or _default_mysql_tracking_uri()
     parsed_scheme = tracking_uri.split(":", 1)[0].lower() if ":" in tracking_uri else "file"
     artifact_root = os.getenv("MLFLOW_ARTIFACT_ROOT", "").strip() or DEFAULT_MLFLOW_ARTIFACTS.resolve().as_uri()
     return {
         "trackingUri": tracking_uri,
-        "backend": "local-sqlite" if tracking_uri.startswith("sqlite:") else "legacy-file" if parsed_scheme == "file" else "remote",
+        "backend": "mysql" if tracking_uri.startswith(("mysql:", "mysql+pymysql:")) else "file" if parsed_scheme == "file" else "remote",
         "artifactRoot": artifact_root,
         "experimentName": os.getenv("MLFLOW_EXPERIMENT_NAME", DEFAULT_EXPERIMENT_NAME).strip() or DEFAULT_EXPERIMENT_NAME,
         "required": _enabled(os.getenv("MLFLOW_REQUIRED")),
@@ -95,7 +101,7 @@ def log_training_experiment(
                 configuration["experimentName"],
                 artifact_location=(
                     configuration["artifactRoot"]
-                    if configuration["backend"] in {"local-sqlite", "legacy-file"}
+                    if configuration["backend"] == "file"
                     else None
                 ),
             )

@@ -183,7 +183,7 @@ def main() -> None:
     parser.add_argument("--symbols", nargs="*", default=[], help="Ticker list; comma-separated values are accepted.")
     parser.add_argument("--symbols-file", help="Text file containing one ticker per line.")
     parser.add_argument("--period", default="2y", help="Yahoo Finance history period, for example 1y, 2y or 5y.")
-    parser.add_argument("--database-url", help="PostgreSQL URL or sqlite:///path override.")
+    parser.add_argument("--database-url", help="MySQL URL override.")
     arguments = parser.parse_args()
     symbols = _read_symbols(arguments.symbols, arguments.symbols_file)
     result = ingest_symbols(symbols, period=arguments.period, database=Database(arguments.database_url))

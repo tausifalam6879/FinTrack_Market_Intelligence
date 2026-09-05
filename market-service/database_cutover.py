@@ -1,4 +1,4 @@
-"""Atomic, evidence-backed SQLite-to-PostgreSQL cutover support."""
+"""Atomic, evidence-backed migration from a legacy database into MySQL."""
 
 from __future__ import annotations
 
@@ -163,29 +163,34 @@ def _application_row_counts(database: Database) -> Dict[str, int]:
     return counts
 
 
-def migrate_sqlite_to_postgresql(
+def migrate_legacy_to_mysql(
     source: Database,
     target: Database,
     *,
     confirm_empty_target: bool = False,
     batch_size: int = 1000,
-    allow_sqlite_target_for_tests: bool = False,
+    allow_legacy_target_for_tests: bool = False,
 ) -> Dict[str, Any]:
-    """Copy an existing SQLite database into an empty PostgreSQL schema atomically."""
+    """Copy existing application rows into an empty MySQL schema atomically."""
     if not confirm_empty_target:
         raise ValueError("Migration requires --confirm-empty-target.")
-    if source.backend != "sqlite":
-        raise ValueError("Migration source must be SQLite.")
-    if target.backend != "postgresql" and not allow_sqlite_target_for_tests:
-        raise ValueError("Migration target must be PostgreSQL.")
+    if source.backend == "mysql":
+        raise ValueError("Migration source must be the previous non-MySQL database.")
+    if target.backend != "mysql" and not allow_legacy_target_for_tests:
+        raise ValueError("Migration target must be MySQL.")
     if batch_size < 1 or batch_size > 10000:
         raise ValueError("Migration batch size must be between 1 and 10000.")
-    if not source._sqlite_path().is_file():
+    if source.backend == "sqlite" and not source._sqlite_path().is_file():
         raise ValueError("SQLite source database does not exist.")
-    if source.backend == target.backend and source._sqlite_path() == target._sqlite_path():
+    if (
+        source.backend == "sqlite"
+        and target.backend == "sqlite"
+        and source._sqlite_path() == target._sqlite_path()
+    ):
         raise ValueError("Migration source and target must be different databases.")
 
-    source.initialize_schema()
+    # The legacy database is the recovery source. Never run schema migrations
+    # against it during a cutover; the copy must be read-only on that side.
     target.initialize_schema()
     populated_tables = {
         table: count for table, count in _application_row_counts(target).items() if count > 0
@@ -195,8 +200,14 @@ def migrate_sqlite_to_postgresql(
 
     table_results: Dict[str, Dict[str, Any]] = {}
     with source.connect() as source_connection, target.connect() as target_connection:
-        # The first read establishes a stable SQLite snapshot; all target writes share one transaction.
-        source_connection.execute("BEGIN")
+        # The first read establishes a stable source snapshot; all target writes
+        # share one transaction until row-count and checksum verification passes.
+        if source.backend == "sqlite":
+            source_connection.execute("BEGIN")
+        elif source.backend == "postgresql":
+            source_connection.execute(
+                "SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY"
+            )
         for spec in APPLICATION_TABLES:
             source_cursor = source_connection.cursor()
             source_cursor.execute(_select_statement(spec))
@@ -233,7 +244,7 @@ def migrate_sqlite_to_postgresql(
     total_rows = sum(result["rowCount"] for result in table_results.values())
     return {
         "status": "verified",
-        "sourceBackend": "sqlite",
+        "sourceBackend": source.backend,
         "targetBackend": target.backend,
         "schemaVersion": LATEST_SCHEMA_VERSION,
         "tablesVerified": len(table_results),

@@ -91,7 +91,7 @@ def main() -> None:
         description="Persist FinTrack drift snapshots without training or promoting a model."
     )
     parser.add_argument("--symbols", nargs="+", required=True)
-    parser.add_argument("--database-url", help="PostgreSQL URL or sqlite:///path override.")
+    parser.add_argument("--database-url", help="MySQL URL override.")
     parser.add_argument(
         "--no-baseline-backfill",
         action="store_true",

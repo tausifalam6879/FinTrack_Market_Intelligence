@@ -242,7 +242,7 @@ def monitoring_snapshot(symbol: str, database: Optional[Database] = None) -> Dic
 def main() -> None:
     parser = argparse.ArgumentParser(description="Approve a trusted FinTrack model artifact for serving.")
     parser.add_argument("--approve", required=True, help="Candidate model-run ID to approve.")
-    parser.add_argument("--database-url", help="PostgreSQL URL or sqlite:///path override.")
+    parser.add_argument("--database-url", help="MySQL URL override.")
     parser.add_argument("--artifact-dir", help="Trusted artifact directory override.")
     arguments = parser.parse_args()
     result = approve_model(

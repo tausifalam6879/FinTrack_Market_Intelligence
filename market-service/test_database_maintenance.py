@@ -3,7 +3,12 @@ import unittest
 from pathlib import Path
 import sqlite3
 
-from database_maintenance import create_backup, restore_empty_target, verify_backup
+from database_maintenance import (
+    _mysql_environment,
+    create_backup,
+    restore_empty_target,
+    verify_backup,
+)
 from persistence import Database, LATEST_SCHEMA_VERSION
 
 
@@ -77,6 +82,19 @@ class DatabaseMaintenanceTests(unittest.TestCase):
 
         with self.assertRaises(ValueError):
             restore_empty_target(backup, self.source, confirm_empty_target=True)
+
+    def test_mysql_backup_arguments_include_tls_ca(self):
+        environment, arguments, database_name = _mysql_environment(
+            "mysql://user:secret@example.com:13837/defaultdb"
+            "?ssl-mode=VERIFY_IDENTITY&ssl-ca=C%3A%5Csecure%5Cca.pem"
+        )
+
+        self.assertEqual("defaultdb", database_name)
+        self.assertEqual("secret", environment["MYSQL_PWD"])
+        self.assertIn("--ssl-mode", arguments)
+        self.assertIn("VERIFY_IDENTITY", arguments)
+        self.assertIn("--ssl-ca", arguments)
+        self.assertIn(r"C:\secure\ca.pem", arguments)
 
 
 if __name__ == "__main__":

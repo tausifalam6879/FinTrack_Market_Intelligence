@@ -1,0 +1,4 @@
+# Optional one-time tooling for importing rows from the previous database.
+# The running FinTrack application uses requirements-runtime.txt and MySQL only.
+-r requirements-runtime.txt
+psycopg[binary]>=3.2,<4.0

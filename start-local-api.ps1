@@ -14,6 +14,20 @@ if (-not $pythonExe -or -not (Test-Path $pythonExe)) {
     throw 'Python 3.12 is required to start the local research API.'
 }
 
+if (-not [string]::IsNullOrWhiteSpace($env:DATABASE_URL) -and -not $env:DATABASE_URL.StartsWith('mysql')) {
+    Write-Warning 'Ignoring the previous non-MySQL DATABASE_URL for this FinTrack process.'
+    Remove-Item Env:DATABASE_URL
+}
+
+foreach ($name in @('DATABASE_URL', 'MYSQL_HOST', 'MYSQL_PORT', 'MYSQL_DATABASE', 'MYSQL_USER', 'MYSQL_PASSWORD')) {
+    if ([string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable($name, 'Process'))) {
+        $savedValue = [Environment]::GetEnvironmentVariable($name, 'User')
+        if (-not [string]::IsNullOrWhiteSpace($savedValue) -and ($name -ne 'DATABASE_URL' -or $savedValue.StartsWith('mysql'))) {
+            [Environment]::SetEnvironmentVariable($name, $savedValue, 'Process')
+        }
+    }
+}
+
 # Local-only defaults. Explicit provider choices and credentials are preserved.
 $defaults = @{
     LLM_PROVIDER = 'hybrid'
