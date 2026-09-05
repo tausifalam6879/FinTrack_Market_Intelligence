@@ -64,10 +64,9 @@ def readiness_report() -> Dict[str, Any]:
     try:
         database.ping()
         schema = database.schema_status()
-        # PostgreSQL remains a durable, supported transition source until the
-        # hosted DATABASE_URL is switched to the already verified MySQL copy.
-        # SQLite is still rejected when durable storage is required.
-        durable_database_ready = database.backend in {"mysql", "postgresql"}
+        # Hosted production is cut over to MySQL. Legacy adapters remain
+        # available only to the separate migration toolchain.
+        durable_database_ready = database.backend == "mysql"
         if not schema["upToDate"]:
             database_status = "migration-required"
         elif durable_database_required and not durable_database_ready:

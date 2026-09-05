@@ -29,15 +29,17 @@ try {
     Get-Content -LiteralPath $certificatePath -Raw | Set-Clipboard
     Write-Host 'STEP 1: The Aiven CA certificate is copied to the clipboard.' -ForegroundColor Cyan
     Write-Host 'In Render > fintrack-market-intelligence-api > Environment > Secret Files:'
-    Write-Host 'Add a secret file named ca.pem, paste its Contents, then save.'
-    Read-Host 'After the CA secret file is saved, press Enter here'
+    Write-Host 'Add a secret file named ca.pem and paste its Contents. Do not save yet.'
+    Read-Host 'After the CA contents are pasted in Render, press Enter here'
 
     Set-Clipboard -Value $renderUri
     Write-Host 'STEP 2: The complete Render MySQL DATABASE_URL is copied to the clipboard.' -ForegroundColor Cyan
     Write-Host 'Replace only the DATABASE_URL value in the same Render Environment page.'
-    Write-Host 'Choose Save, rebuild, and deploy. Do not paste the value into chat.'
+    Write-Host 'Now choose Save, rebuild, and deploy so both changes apply together.'
+    Write-Host 'Do not paste the value into chat.'
     Read-Host 'After saving DATABASE_URL in Render, press Enter here'
-    Set-Clipboard -Value ''
+    # Windows PowerShell 5 treats an empty string as a null clipboard value.
+    Set-Clipboard -Value ' '
     Write-Host 'Cutover settings submitted. The clipboard has been cleared.' -ForegroundColor Green
 } catch {
     Write-Host $_.Exception.Message -ForegroundColor Red

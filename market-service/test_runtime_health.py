@@ -60,7 +60,7 @@ class RuntimeHealthTests(unittest.TestCase):
         self.assertNotIn(database_url, json.dumps(report))
 
     @patch("runtime_health.Database")
-    def test_durable_guard_allows_postgresql_during_verified_cutover(self, factory):
+    def test_durable_guard_rejects_legacy_postgresql_after_cutover(self, factory):
         database = factory.return_value
         database.backend = "postgresql"
         database.schema_status.return_value = {
@@ -71,9 +71,9 @@ class RuntimeHealthTests(unittest.TestCase):
         with patch.dict(os.environ, {"REQUIRE_DURABLE_DATABASE": "true"}, clear=False):
             report = readiness_report()
 
-        self.assertEqual("ready", report["status"])
-        self.assertEqual("ready", report["checks"]["database"]["status"])
-        self.assertTrue(report["checks"]["database"]["durableAcrossDeploys"])
+        self.assertEqual("not-ready", report["status"])
+        self.assertEqual("durability-required", report["checks"]["database"]["status"])
+        self.assertFalse(report["checks"]["database"]["durableAcrossDeploys"])
 
     def test_liveness_does_not_depend_on_external_market_or_llm_providers(self):
         report = liveness_report()
