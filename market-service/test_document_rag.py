@@ -6,6 +6,7 @@ from unittest.mock import Mock, patch
 
 from document_rag import (
     LOCAL_EMBEDDING_PROVIDER,
+    GEMINI_EMBEDDING_PROVIDER,
     OfficialDocumentRequest,
     answer_document_question,
     chunk_pages,
@@ -78,6 +79,43 @@ class DocumentRagTests(unittest.TestCase):
         answer = answer_document_question("INFY.NS", "What is the revenue?", 3, self.database)
         self.assertEqual([], answer["citations"])
         self.assertIn("No ingested company document", answer["answer"])
+
+    def test_cloud_embedding_failure_searches_stored_text_offline(self):
+        from document_rag import _local_embeddings
+        with patch("document_rag._gemini_embeddings", side_effect=_local_embeddings):
+            ingest_text_evidence(
+                "INFY.NS", "Annual report", "Revenue increased through software services. " * 12,
+                "annual-report", "2025", "https://example.test/report",
+                embedding_provider=GEMINI_EMBEDDING_PROVIDER, database=self.database,
+            )
+        with patch("document_rag._gemini_embeddings", side_effect=RuntimeError("Network unavailable")):
+            answer = answer_document_question("INFY.NS", "How did revenue increase?", 3, self.database)
+        self.assertEqual("local-tfidf-fallback", answer["embeddingProvider"])
+        self.assertTrue(answer["citations"])
+        self.assertEqual("https://example.test/report", answer["citations"][0]["sourceUrl"])
+        self.assertEqual(GEMINI_EMBEDDING_PROVIDER, self.database.document_sources("INFY.NS")[0]["embedding_provider"])
+
+    def test_unrelated_question_does_not_return_citations_or_call_ai(self):
+        ingest_text_evidence(
+            "INFY.NS", "Annual report", "Revenue increased through software services. " * 12,
+            "annual-report", "2025", "https://example.test/report", database=self.database,
+        )
+        with patch.dict(os.environ, {"RAG_USE_LLM": "true"}), patch("document_rag._provider_chat") as chat:
+            answer = answer_document_question("INFY.NS", "How do astronauts bake pizza?", 3, self.database)
+        self.assertEqual([], answer["citations"])
+        chat.assert_not_called()
+
+    def test_offline_search_rejects_unrelated_question(self):
+        from document_rag import _local_embeddings
+        with patch("document_rag._gemini_embeddings", side_effect=_local_embeddings):
+            ingest_text_evidence(
+                "INFY.NS", "Annual report", "Revenue increased through software services. " * 12,
+                "annual-report", "2025", "https://example.test/report",
+                embedding_provider=GEMINI_EMBEDDING_PROVIDER, database=self.database,
+            )
+        with patch("document_rag._gemini_embeddings", side_effect=RuntimeError("Network unavailable")):
+            answer = answer_document_question("INFY.NS", "How do astronauts bake pizza?", 3, self.database)
+        self.assertEqual([], answer["citations"])
 
     def test_global_symbol_supports_market_evidence_instead_of_fake_annual_report(self):
         support = document_preparation_support("510370.SS")

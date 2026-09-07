@@ -21,7 +21,7 @@ import yfinance as yf
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
 from pypdf import PdfReader
-from sklearn.feature_extraction.text import HashingVectorizer
+from sklearn.feature_extraction.text import HashingVectorizer, TfidfVectorizer, ENGLISH_STOP_WORDS
 
 from data_pipeline import normalize_symbol
 from market_intelligence import _provider_chat
@@ -517,15 +517,40 @@ def retrieve_chunks(
     rows = repository.document_chunks(normalized, provider)
     if not rows:
         return {"symbol": normalized, "question": clean_question, "matches": [], "provider": provider}
-    query_vector = embed_texts([clean_question], provider)[0]
-    matrix = np.asarray([json.loads(row["embedding_json"]) for row in rows], dtype=np.float32)
+    try:
+        query_vector = embed_texts([clean_question], provider)[0]
+        matrix = np.asarray([json.loads(row["embedding_json"]) for row in rows], dtype=np.float32)
+    except RuntimeError:
+        if provider != GEMINI_EMBEDDING_PROVIDER:
+            raise
+        # Stored text remains usable without the cloud embedding service. Rebuild
+        # both sides in one local vector space; never compare unlike embeddings.
+        rows = [row for source_provider in dict.fromkeys(providers)
+                for row in repository.document_chunks(normalized, source_provider)]
+        vectorizer = TfidfVectorizer(stop_words="english", ngram_range=(1, 2))
+        try:
+            matrix = vectorizer.fit_transform([row["text"] for row in rows]).toarray()
+            query_vector = vectorizer.transform([clean_question]).toarray()[0]
+        except ValueError:
+            return {"symbol": normalized, "question": clean_question, "matches": [], "provider": "local-tfidf-fallback"}
+        provider = "local-tfidf-fallback"
     matrix_norms = np.linalg.norm(matrix, axis=1)
     scores = matrix @ query_vector / np.maximum(matrix_norms * np.linalg.norm(query_vector), 1e-12)
     ranked = np.argsort(scores)[::-1][:max(1, min(int(limit), 8))]
     matches = []
-    for rank, row_index in enumerate(ranked, start=1):
+    query_terms = set(re.findall(r"\b\w\w+\b", clean_question.lower())) - ENGLISH_STOP_WORDS
+    for row_index in ranked:
         row = rows[int(row_index)]
         text = row["text"]
+        # Similarity alone can include hash collisions or unrelated top-k rows.
+        # Lexical search must also share an actual non-stopword with the question.
+        local_search = provider != GEMINI_EMBEDDING_PROVIDER
+        minimum_score = 0.08 if local_search else 0.30
+        if not np.isfinite(scores[int(row_index)]) or scores[int(row_index)] < minimum_score:
+            continue
+        if local_search and not query_terms.intersection(re.findall(r"\b\w\w+\b", text.lower())):
+            continue
+        rank = len(matches) + 1
         matches.append({
             "citation": f"S{rank}",
             "documentId": row["document_id"],
