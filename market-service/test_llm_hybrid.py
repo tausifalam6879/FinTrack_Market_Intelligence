@@ -10,6 +10,21 @@ MESSAGES = [{"role": "user", "content": "Explain the verified evidence."}]
 
 
 class HybridLlmTests(unittest.TestCase):
+    @patch("market_intelligence.urlopen")
+    def test_gemini_uses_short_total_budget_for_fast_local_failover(self, urlopen):
+        urlopen.return_value.__enter__.return_value.read.return_value = json.dumps({
+            "candidates": [{"content": {"parts": [{"text": "Grounded answer"}]}}]
+        }).encode("utf-8")
+        with patch.dict(os.environ, {
+            "GEMINI_API_KEY": "test-key",
+            "GEMINI_MODEL": "gemini-test",
+            "GEMINI_TIMEOUT_MS": "8000",
+        }, clear=False):
+            answer = market._gemini_chat(MESSAGES)
+
+        self.assertEqual("Grounded answer", answer)
+        self.assertLessEqual(urlopen.call_args.kwargs["timeout"], 8.0)
+
     @patch("market_intelligence._ollama_chat")
     @patch("market_intelligence._gemini_chat")
     def test_hybrid_prefers_gemini(self, gemini_chat, ollama_chat):

@@ -415,8 +415,8 @@ export default function IntelligenceDesk({ initialSymbol = "^NSEI", onProviderCh
     } catch {
       const localApi = /(?:localhost|127\.0\.0\.1)/i.test(marketApi.baseUrl);
       const offlineHelp = !window.navigator.onLine && !localApi
-        ? "Offline Ollama cannot be reached from the hosted website. Run start-local.ps1 and open http://127.0.0.1:5173, then ask again."
-        : "The local gateway or research API is unavailable. Open the FinTrack Market Intelligence desktop shortcut, wait for startup, and retry; the displayed price analytics remain independent.";
+        ? "Local AI runs in the installed FinTrack desktop app. Open FinTrack from the desktop to continue offline; no command or port entry is required."
+        : "Local AI is starting or temporarily unavailable. Wait a moment and ask again; verified market analytics remain available.";
       setMessages((current) => [...current, { role: "assistant", content: offlineHelp, meta: { llmStatus: "offline" } }]);
     } finally { setAsking(false); }
   };

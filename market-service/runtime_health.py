@@ -111,7 +111,7 @@ def readiness_report() -> Dict[str, Any]:
         checks["languageModel"].update({
             "primaryProvider": "gemini",
             "fallbackProvider": "ollama",
-            "geminiRequestTimeoutMs": max(10000, int(os.getenv("GEMINI_TIMEOUT_MS", "60000"))),
+            "geminiRequestTimeoutMs": max(3000, int(os.getenv("GEMINI_TIMEOUT_MS", "8000"))),
             "fallbackPolicy": "actual-failure-or-unusable-answer-only",
             "geminiTriedForEveryQuestion": True,
         })

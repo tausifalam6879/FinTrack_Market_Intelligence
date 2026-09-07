@@ -14,7 +14,9 @@ If the frontend and gateway are already running, start only the research API fro
 .\start-local-api.ps1
 ```
 
-Use `.\start-local.ps1` when starting the entire local stack. The API launcher defaults to Gemini-first hybrid routing with the faster `llama3.2:1b` model as the local Ollama fallback, preserving explicit environment overrides. Stop an existing API on port 8002 before starting another copy.
+Use `.\start-local.ps1` when starting the entire local stack. The API launcher defaults to Gemini-first hybrid routing and automatically prefers the faster installed `llama3.2:1b` model for responsive offline answers. A larger installed model remains available through an explicit `OLLAMA_MODEL` override. Stop an existing API on port 8002 before starting another copy.
+
+For normal use, run `Install FinTrack for Windows.cmd` once instead of starting scripts manually. The installer creates a desktop shortcut and a sign-in startup entry. The shortcut starts Ollama, FastAPI, Spring Boot and the production frontend in the background, then opens FinTrack in a desktop-style browser window without showing localhost ports. In this installed local app, a sudden network loss routes questions to Ollama automatically; if Ollama is also unavailable, the verified deterministic fallback remains available.
 
 Configure `GEMINI_API_KEY` privately in the local process or Windows user environment for local Gemini. Render environment variables do not apply to localhost. The launcher warns when the local key is absent, without printing credentials. Ollama must be running with the configured model installed. A bare `uvicorn app:app` does not apply these local AI defaults and can leave the service in deterministic-only mode.
 

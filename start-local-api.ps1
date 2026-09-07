@@ -29,15 +29,29 @@ foreach ($name in @('DATABASE_URL', 'MYSQL_HOST', 'MYSQL_PORT', 'MYSQL_DATABASE'
 }
 
 # Local-only defaults. Explicit provider choices and credentials are preserved.
+$detectedOllamaModel = 'llama3.2:1b'
+if ([string]::IsNullOrWhiteSpace($env:OLLAMA_MODEL)) {
+    try {
+        $ollamaTags = Invoke-RestMethod -Uri 'http://127.0.0.1:11434/api/tags' -TimeoutSec 3
+        $installedOllamaModels = @($ollamaTags.models | ForEach-Object { $_.name })
+        $detectedOllamaModel = @('llama3.2:1b', 'llama3.2:latest') |
+            Where-Object { $_ -in $installedOllamaModels } |
+            Select-Object -First 1
+        if (-not $detectedOllamaModel) { $detectedOllamaModel = 'llama3.2:1b' }
+    } catch {
+        # The background launcher starts Ollama before this script. Keep a
+        # lightweight default for direct developer launches where it is absent.
+    }
+}
 $defaults = @{
     LLM_PROVIDER = 'hybrid'
-    GEMINI_TIMEOUT_MS = '60000'
-    OLLAMA_MODEL = 'llama3.2:1b'
+    GEMINI_TIMEOUT_MS = '8000'
+    OLLAMA_MODEL = $detectedOllamaModel
     OLLAMA_BASE_URL = 'http://127.0.0.1:11434'
     OLLAMA_TIMEOUT_MS = '45000'
     OLLAMA_KEEP_ALIVE = '30m'
     OLLAMA_NUM_CTX = '2048'
-    OLLAMA_NUM_PREDICT = '80'
+    OLLAMA_NUM_PREDICT = '50'
 }
 foreach ($entry in $defaults.GetEnumerator()) {
     if ([string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable($entry.Key, 'Process'))) {

@@ -29,7 +29,8 @@ function Test-FinTrackReadyEndpoint([string]$Uri) {
 function Test-FinTrackOfflineModel {
     try {
         $response = Invoke-RestMethod -Uri 'http://127.0.0.1:11434/api/tags' -TimeoutSec 3
-        return 'llama3.2:1b' -in @($response.models | ForEach-Object { $_.name })
+        $installedModels = @($response.models | ForEach-Object { $_.name })
+        return @('llama3.2:latest', 'llama3.2:1b') | Where-Object { $_ -in $installedModels } | Select-Object -First 1
     } catch {
         return $false
     }
@@ -42,6 +43,29 @@ function Test-FinTrackStack {
         (Test-FinTrackReadyEndpoint 'http://127.0.0.1:8081/health/ready') -and
         (Test-FinTrackOfflineModel)
     )
+}
+
+function Open-FinTrackApp {
+    $browserCandidates = @(
+        (Get-Command msedge.exe -ErrorAction SilentlyContinue).Source,
+        (Join-Path ${env:ProgramFiles(x86)} 'Microsoft\Edge\Application\msedge.exe'),
+        (Join-Path $env:ProgramFiles 'Microsoft\Edge\Application\msedge.exe'),
+        (Join-Path $env:LOCALAPPDATA 'Microsoft\Edge\Application\msedge.exe'),
+        (Get-Command chrome.exe -ErrorAction SilentlyContinue).Source,
+        (Join-Path ${env:ProgramFiles(x86)} 'Google\Chrome\Application\chrome.exe'),
+        (Join-Path $env:ProgramFiles 'Google\Chrome\Application\chrome.exe'),
+        (Join-Path $env:LOCALAPPDATA 'Google\Chrome\Application\chrome.exe')
+    ) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) -and (Test-Path $_) } | Select-Object -Unique
+
+    $appBrowser = $browserCandidates | Select-Object -First 1
+    if ($appBrowser) {
+        # App mode keeps localhost and internal service ports out of the user interface.
+        Start-Process -FilePath $appBrowser -ArgumentList "--app=$localUrl", '--start-maximized'
+        return
+    }
+
+    # Fall back to the default browser when Edge or Chrome is unavailable.
+    Start-Process $localUrl
 }
 
 try {
@@ -82,5 +106,5 @@ if (-not (Test-FinTrackStack)) {
 }
 
 if (-not $NoBrowser) {
-    Start-Process $localUrl
+    Open-FinTrackApp
 }

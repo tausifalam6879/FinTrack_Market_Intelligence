@@ -4009,7 +4009,7 @@ def _gemini_chat(messages: List[Dict[str, str]]) -> str:
     configured_model = os.getenv("GEMINI_MODEL", "").strip() or os.getenv("LLM_MODEL", "").strip() or "gemini-3.5-flash-lite"
     # This is only a transport safety ceiling. Hybrid routing no longer treats
     # a short response budget as a reason to skip Gemini on later questions.
-    timeout = max(10.0, int(os.getenv("GEMINI_TIMEOUT_MS", "60000")) / 1000)
+    timeout = max(3.0, int(os.getenv("GEMINI_TIMEOUT_MS", "8000")) / 1000)
     deadline = time.monotonic() + timeout
     system_text = "\n".join(item["content"] for item in messages if item.get("role") == "system")
     contents = []

@@ -56,22 +56,57 @@ function Test-FinTrackOllama {
     }
 }
 
-$basePython = $null
-if (Get-Command py -ErrorAction SilentlyContinue) {
-    $basePython = (& py -3.12 -c "import sys; print(sys.executable)" 2>$null | Select-Object -First 1)
-}
-if (-not $basePython -and (Get-Command python -ErrorAction SilentlyContinue)) {
-    $basePython = (Get-Command python).Source
-}
-if (-not $basePython -or -not (Test-Path $basePython)) {
-    throw "Python 3.12 is not available. The project could not resolve an installed interpreter."
+function Test-FinTrackPython([string]$Path) {
+    if ([string]::IsNullOrWhiteSpace($Path) -or -not (Test-Path -LiteralPath $Path)) {
+        return $false
+    }
+    try {
+        # Native-launch failures do not always replace a previous successful
+        # LASTEXITCODE in Windows PowerShell, so seed and capture it explicitly.
+        $global:LASTEXITCODE = 1
+        & $Path -c "import sys; assert sys.version_info >= (3, 12)" *> $null
+        $pythonExitCode = $global:LASTEXITCODE
+        return $pythonExitCode -eq 0
+    } catch {
+        return $false
+    }
 }
 
-$requiredOllamaModel = 'llama3.2:1b'
+$pythonCandidates = @()
+if (Get-Command py -ErrorAction SilentlyContinue) {
+    $resolvedByLauncher = (& py -3.12 -c "import sys; print(sys.executable)" 2>$null | Select-Object -First 1)
+    if ($resolvedByLauncher) { $pythonCandidates += $resolvedByLauncher }
+}
+if (Get-Command python -ErrorAction SilentlyContinue) {
+    $pythonCandidates += (Get-Command python).Source
+}
+$pythonCandidates += @(
+    (Join-Path $projectRoot 'runtime\python\python.exe'),
+    (Join-Path $env:LOCALAPPDATA 'Programs\Python\Python312\python.exe'),
+    (Join-Path $env:ProgramFiles 'Python312\python.exe')
+)
+$basePython = $pythonCandidates |
+    Where-Object { Test-FinTrackPython $_ } |
+    Select-Object -First 1
+if (-not $basePython) {
+    throw "Python 3.12 or newer is not available. Install Python once while online, then run Install FinTrack for Windows.cmd again."
+}
+
+$fallbackOllamaModel = 'llama3.2:1b'
+$preferredOllamaModels = @($fallbackOllamaModel, 'llama3.2:latest')
 $ollamaCommand = Get-Command ollama -ErrorAction SilentlyContinue
+if (-not $ollamaCommand) {
+    $knownOllamaPaths = @(
+        (Join-Path $env:LOCALAPPDATA 'Programs\Ollama\ollama.exe'),
+        (Join-Path $env:ProgramFiles 'Ollama\ollama.exe')
+    ) | Where-Object { Test-Path -LiteralPath $_ }
+    $knownOllamaPath = $knownOllamaPaths | Select-Object -First 1
+    if ($knownOllamaPath) { $ollamaCommand = Get-Item -LiteralPath $knownOllamaPath }
+}
 $ollamaTags = Test-FinTrackOllama
 if (-not $ollamaTags -and $ollamaCommand) {
-    Start-Process -FilePath $ollamaCommand.Source -ArgumentList 'serve' -WindowStyle Hidden
+    $ollamaExecutable = if ($ollamaCommand.Source) { $ollamaCommand.Source } else { $ollamaCommand.FullName }
+    Start-Process -FilePath $ollamaExecutable -ArgumentList 'serve' -WindowStyle Hidden
     for ($attempt = 1; $attempt -le 15 -and -not $ollamaTags; $attempt++) {
         Start-Sleep -Seconds 1
         $ollamaTags = Test-FinTrackOllama
@@ -81,32 +116,41 @@ if (-not $ollamaTags -and $ollamaCommand) {
 $ollamaReady = [bool]$ollamaTags
 if ($ollamaReady) {
     $installedModels = @($ollamaTags.models | ForEach-Object { $_.name })
-    if ($requiredOllamaModel -notin $installedModels -and $InstallDependencies) {
+    if (-not ($preferredOllamaModels | Where-Object { $_ -in $installedModels }) -and $InstallDependencies) {
         if (-not $ollamaCommand) {
-            throw "Ollama is running, but its command is not available in PATH, so $requiredOllamaModel cannot be downloaded automatically. Reinstall Ollama or add it to PATH, then retry."
+            throw "Ollama is running, but its command is not available in PATH, so $fallbackOllamaModel cannot be downloaded automatically. Reinstall Ollama or add it to PATH, then retry."
         }
-        & $ollamaCommand.Source pull $requiredOllamaModel
-        if ($LASTEXITCODE -ne 0) { throw "Ollama model download failed: $requiredOllamaModel" }
+        $ollamaExecutable = if ($ollamaCommand.Source) { $ollamaCommand.Source } else { $ollamaCommand.FullName }
+        & $ollamaExecutable pull $fallbackOllamaModel
+        if ($LASTEXITCODE -ne 0) { throw "Ollama model download failed: $fallbackOllamaModel" }
         $ollamaTags = Test-FinTrackOllama
         $installedModels = @($ollamaTags.models | ForEach-Object { $_.name })
     }
-    if ($requiredOllamaModel -notin $installedModels -and $RequireOfflineAi) {
-        throw "Ollama model $requiredOllamaModel is missing. Connect once and run Install FinTrack for Windows.cmd."
+    $selectedOllamaModel = $preferredOllamaModels |
+        Where-Object { $_ -in $installedModels } |
+        Select-Object -First 1
+    if (-not $selectedOllamaModel -and $RequireOfflineAi) {
+        throw "A supported Ollama model is missing. Connect once and run Install FinTrack for Windows.cmd."
     }
-    $warmBody = @{
-        model = $requiredOllamaModel
-        prompt = 'ready'
-        stream = $false
-        keep_alive = '30m'
-        options = @{ num_predict = 1 }
-    } | ConvertTo-Json -Compress -Depth 4
-    try {
-        Invoke-RestMethod -Uri 'http://127.0.0.1:11434/api/generate' -Method Post -ContentType 'application/json' -Body $warmBody -TimeoutSec 90 | Out-Null
-    } catch {
-        if ($RequireOfflineAi) {
-            throw "Ollama model $requiredOllamaModel is installed but could not be loaded for offline use. Restart Ollama and retry."
+    if ($selectedOllamaModel) {
+        $env:OLLAMA_MODEL = $selectedOllamaModel
+        $warmBody = @{
+            model = $selectedOllamaModel
+            prompt = 'ready'
+            stream = $false
+            keep_alive = '30m'
+            options = @{ num_predict = 1 }
+        } | ConvertTo-Json -Compress -Depth 4
+        try {
+            Invoke-RestMethod -Uri 'http://127.0.0.1:11434/api/generate' -Method Post -ContentType 'application/json' -Body $warmBody -TimeoutSec 90 | Out-Null
+        } catch {
+            if ($RequireOfflineAi) {
+                throw "Ollama model $selectedOllamaModel is installed but could not be loaded for offline use. Restart Ollama and retry."
+            }
+            Write-Warning "Ollama model $selectedOllamaModel could not be warmed up."
         }
-        Write-Warning "Ollama model $requiredOllamaModel could not be warmed up."
+    } else {
+        Write-Warning 'Ollama is running, but no supported FinTrack model is installed.'
     }
 } elseif ($RequireOfflineAi) {
     throw 'Ollama is required for offline questions but could not be started. Install Ollama once while online, then run the FinTrack installer again.'
@@ -116,11 +160,26 @@ if ($ollamaReady) {
 
 $venvPython = Join-Path $serviceRoot ".venv\Scripts\python.exe"
 if ($InstallDependencies) {
-    if (-not (Test-Path $venvPython)) { & $basePython -m venv (Join-Path $serviceRoot ".venv") }
+    $venvRoot = Join-Path $serviceRoot '.venv'
+    if ((Test-Path -LiteralPath $venvRoot) -and -not (Test-FinTrackPython $venvPython)) {
+        $resolvedVenvRoot = [System.IO.Path]::GetFullPath($venvRoot)
+        $resolvedServiceRoot = [System.IO.Path]::GetFullPath($serviceRoot)
+        if (-not $resolvedVenvRoot.StartsWith($resolvedServiceRoot + [System.IO.Path]::DirectorySeparatorChar, [System.StringComparison]::OrdinalIgnoreCase)) {
+            throw "Refusing to replace a Python environment outside the FinTrack market-service directory."
+        }
+        Write-Warning 'The existing FinTrack Python environment is broken or points to a removed interpreter. Rebuilding it now.'
+        Remove-Item -LiteralPath $resolvedVenvRoot -Recurse -Force
+    }
+    if (-not (Test-FinTrackPython $venvPython)) {
+        & $basePython -m venv $venvRoot
+        if ($LASTEXITCODE -ne 0 -or -not (Test-FinTrackPython $venvPython)) {
+            throw 'FinTrack could not create a working Python virtual environment.'
+        }
+    }
     & $venvPython -m pip install -r (Join-Path $serviceRoot "requirements-runtime.txt")
     if ($LASTEXITCODE -ne 0) { throw 'Python runtime dependency installation failed.' }
 }
-$pythonExe = if (Test-Path $venvPython) { $venvPython } else { $basePython }
+$pythonExe = if (Test-FinTrackPython $venvPython) { $venvPython } else { $basePython }
 & $pythonExe -c "import fastapi, uvicorn, pandas, sklearn" 2>$null
 if ($LASTEXITCODE -ne 0) { throw "Python dependencies are missing. Connect once and run: .\start-local.ps1 -InstallDependencies" }
 
