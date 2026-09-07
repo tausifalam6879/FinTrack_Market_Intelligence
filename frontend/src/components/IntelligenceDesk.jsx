@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import StatusBadge from "./StatusBadge";
+import PortfolioPanel from "./PortfolioPanel";
 import { marketApi } from "../services/marketApi";
 
 const presets = [
@@ -105,6 +106,7 @@ export default function IntelligenceDesk({ initialSymbol = "^NSEI", onProviderCh
   const [comparisonLoading, setComparisonLoading] = useState(false);
   const [comparisonError, setComparisonError] = useState("");
   const [comparisonOpen, setComparisonOpen] = useState(false);
+  const [portfolioOpen, setPortfolioOpen] = useState(false);
   const [operationsStatus, setOperationsStatus] = useState(null);
   const [operationsStatusError, setOperationsStatusError] = useState("");
   const loadSequenceRef = useRef(0);
@@ -515,7 +517,9 @@ export default function IntelligenceDesk({ initialSymbol = "^NSEI", onProviderCh
             Compare saved ({savedResearch.length}) {comparisonOpen ? "↑" : "↓"}
           </button>
           <button type="button" onClick={printResearchReport}>Print / Save PDF</button>
+          <button type="button" aria-expanded={portfolioOpen} onClick={()=>setPortfolioOpen(value=>!value)}>My portfolio</button>
         </div>
+        {portfolioOpen && <PortfolioPanel analysis={analysis} mode={result.mode} />}
         {comparisonOpen && <SavedResearchPanel
           items={savedResearch}
           selected={comparisonSymbols}

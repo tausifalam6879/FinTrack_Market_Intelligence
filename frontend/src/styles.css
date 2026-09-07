@@ -1501,3 +1501,13 @@ footer p { margin: 5px 0 0; }
   .market-ribbon-track { animation: none; transform: none; }
   .market-ribbon-track > div:last-child { display: none; }
 }
+.portfolio-panel { margin: 20px 0; padding: 22px; border: 1px solid #b6d9df; border-radius: 18px; background: #f5fbfc; color: #193444; }
+.portfolio-panel p { line-height: 1.6; overflow-wrap: anywhere; }
+.portfolio-form { display: flex; flex-wrap: wrap; align-items: end; gap: 14px; margin: 18px 0; }
+.portfolio-form strong { flex-basis: 100%; }
+.portfolio-form label { display: grid; gap: 6px; }
+.portfolio-form input { padding: 10px; border: 1px solid #aac5cf; border-radius: 8px; max-width: 100%; min-width: 0; }
+.portfolio-panel button { padding: 9px 13px; border: 1px solid #aac5cf; border-radius: 8px; background: white; color: #124952; cursor: pointer; }
+.portfolio-panel button:disabled { opacity: .6; cursor: default; }
+.portfolio-panel small { display: block; }
+@media (max-width: 600px) { .portfolio-panel { padding: 14px; } .portfolio-form label { width: 100%; } }

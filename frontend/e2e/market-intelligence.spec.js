@@ -50,6 +50,29 @@ test.beforeEach(async ({ page }) => {
   await page.goto("/");
 });
 
+test("portfolio holdings persist, update without duplication and can be removed", async ({ page }) => {
+  await page.getByRole('tab',{name:/Intelligence & MLOps/i}).click();
+  await page.getByRole('button',{name:'Reliance',exact:true}).click();
+  await page.getByRole('button',{name:'My portfolio',exact:true}).click();
+  const panel=page.getByRole('region',{name:'My portfolio',exact:true});
+  await panel.getByLabel('Quantity',{exact:true}).fill('10');
+  await panel.getByLabel('Average buy price',{exact:true}).fill('1200');
+  await panel.getByRole('button',{name:'Save holding'}).click();
+  await expect(panel.getByRole('button',{name:'Remove holding RELIANCE.NS'})).toBeVisible();
+  await panel.getByLabel('Quantity',{exact:true}).fill('20');
+  await panel.getByRole('button',{name:'Save holding'}).click();
+  await expect(panel.locator('tbody tr')).toHaveCount(1);
+  await expect.poll(()=>page.evaluate(()=>JSON.parse(localStorage.getItem('fintrack.portfolio.v1'))[0].quantity)).toBe(20);
+  await page.reload();
+  await page.getByRole('tab',{name:/Intelligence & MLOps/i}).click();
+  await page.getByRole('button',{name:'My portfolio',exact:true}).click();
+  await expect(panel.getByRole('button',{name:'Remove holding RELIANCE.NS'})).toBeVisible();
+  const overflow=await page.evaluate(()=>document.documentElement.scrollWidth-document.documentElement.clientWidth);
+  expect(overflow).toBeLessThanOrEqual(1);
+  await panel.getByRole('button',{name:'Remove holding RELIANCE.NS'}).click();
+  await expect(panel).toContainText('No holdings saved yet');
+});
+
 test("market pulse opens with a clean live ribbon and an inspectable daily chart", async ({ page }) => {
   await expect(page.locator(".brand-mark")).toHaveAttribute("src", "./fintrack-mark.svg");
   await expect(page.locator(".public-chip")).toBeVisible();
