@@ -1,5 +1,10 @@
 export const PORTFOLIO_KEY = 'fintrack.portfolio.v1';
 
+export const portfolioQuote = result => ({price:result.data.price ?? result.data.lastClose,
+  currency:result.data.expectedRange?.currency,
+  asOf:result.data.price!=null ? result.data.dataAsOf : result.data.modelDataDate || result.data.dataAsOf,
+  mode:result.mode, history:result.data.history || []});
+
 export function validateHolding(input) {
   const quantity = Number(input.quantity);
   const buyPrice = Number(input.buyPrice);
@@ -29,4 +34,45 @@ export function portfolioSummary(holdings, quotes) {
   return Object.values(groups).map(g => ({...g, value:g.missing ? null : g.value,
     pnl:g.missing ? null : g.value-g.investment,
     returnPercent:g.missing ? null : (g.value/g.investment-1)*100}));
+}
+
+export function portfolioScenario(group, target, changePercent) {
+  const shock=Number(changePercent);
+  if(!Number.isFinite(shock)||shock < -100||shock > 1000) throw new Error('Enter a price change between -100% and 1000%.');
+  if(group.value==null) return null;
+  const affected=group.rows.filter(r=>target==='all'||r.symbol===target);
+  if(!affected.length) return null;
+  const impact=affected.reduce((sum,r)=>sum+r.value*shock/100,0);
+  return {value:group.value+impact,impact,impactPercent:impact/group.value*100};
+}
+
+const mean=xs=>xs.reduce((a,b)=>a+b,0)/xs.length;
+const covariance=(a,b)=>{
+  const ma=mean(a),mb=mean(b);
+  return a.reduce((sum,x,i)=>sum+(x-ma)*(b[i]-mb),0)/(a.length-1);
+};
+
+export function portfolioRisk(group) {
+  if(group.value==null||!group.rows.length) return {status:'missing_quotes'};
+  const series=group.rows.map(row=>new Map((row.quote?.history||[])
+    .filter(p=>/^\d{4}-\d{2}-\d{2}$/.test(p.date)&&p.close!=null&&Number.isFinite(Number(p.close))&&Number(p.close)>0)
+    .map(p=>[p.date,Number(p.close)])));
+  const dates=[...series[0].keys()].filter(date=>series.every(s=>s.has(date))).sort();
+  if(dates.length<21) return {status:'insufficient_history',observations:Math.max(0,dates.length-1)};
+  const returns=series.map(s=>dates.slice(1).map((date,i)=>s.get(date)/s.get(dates[i])-1));
+  const weights=group.rows.map(r=>r.value/group.value);
+  const aggregate=dates.slice(1).map((_,i)=>returns.reduce((sum,r,j)=>sum+r[i]*weights[j],0));
+  let wealth=1,peak=1,drawdown=0;
+  for(const r of aggregate){wealth*=1+r;peak=Math.max(peak,wealth);drawdown=Math.min(drawdown,wealth/peak-1);}
+  const sorted=[...aggregate].sort((a,b)=>a-b);
+  const qIndex=(sorted.length-1)*0.05,lower=Math.floor(qIndex),upper=Math.ceil(qIndex);
+  const quantile=sorted[lower]+(sorted[upper]-sorted[lower])*(qIndex-lower);
+  return {status:'available',observations:aggregate.length,from:dates[0],through:dates.at(-1),
+    volatilityPercent:Math.sqrt(Math.max(0,covariance(aggregate,aggregate))*252)*100,
+    maxDrawdownPercent:drawdown*100,historicalVar95Percent:Math.max(0,-quantile)*100,
+    symbols:group.rows.map(r=>r.symbol),
+    correlation:returns.map(a=>returns.map(b=>{
+      const denominator=Math.sqrt(covariance(a,a)*covariance(b,b));
+      return denominator>1e-15?Math.max(-1,Math.min(1,covariance(a,b)/denominator)):null;
+    }))};
 }

@@ -61,7 +61,10 @@ test("portfolio holdings persist, update without duplication and can be removed"
   await expect(panel.getByRole('button',{name:'Remove holding RELIANCE.NS'})).toBeVisible();
   await panel.getByLabel('Quantity',{exact:true}).fill('20');
   await panel.getByRole('button',{name:'Save holding'}).click();
-  await expect(panel.locator('tbody tr')).toHaveCount(1);
+  await expect(panel.getByRole('button',{name:'Remove holding RELIANCE.NS',exact:true})).toHaveCount(1);
+  await expect(panel).toContainText('What-if price scenario');
+  await panel.getByLabel('Price change (%)',{exact:true}).fill('-10');
+  await expect(panel).toContainText('Scenario value:');
   await expect.poll(()=>page.evaluate(()=>JSON.parse(localStorage.getItem('fintrack.portfolio.v1'))[0].quantity)).toBe(20);
   await page.reload();
   await page.getByRole('tab',{name:/Intelligence & MLOps/i}).click();
@@ -71,6 +74,19 @@ test("portfolio holdings persist, update without duplication and can be removed"
   expect(overflow).toBeLessThanOrEqual(1);
   await panel.getByRole('button',{name:'Remove holding RELIANCE.NS'}).click();
   await expect(panel).toContainText('No holdings saved yet');
+});
+
+test('backtest displays returned metrics and recovers from API errors',async({page})=>{
+  await page.getByRole('tab',{name:/Intelligence & MLOps/i}).click();
+  await page.getByRole('button',{name:'Advanced model details',exact:true}).click();
+  const panel=page.getByRole('region',{name:'Historical backtest'});
+  await page.route('**/market/backtest?*',r=>r.fulfill({status:503,body:'unavailable'}));
+  await panel.getByRole('button',{name:'Run backtest'}).click();
+  await expect(panel.getByRole('alert')).toContainText('Backtest unavailable');
+  await page.route('**/market/backtest?*',r=>r.fulfill({status:200,contentType:'application/json',body:JSON.stringify({symbol:'^NSEI',model:'Fixed logistic regression',observations:80,from:'2025-01-01',through:'2025-05-01',strategyReturnPercent:4,benchmarkReturnPercent:6,maximumDrawdownPercent:-3,sharpeZeroRiskFree:0.4,accuracyPercent:52,exposurePercent:40,audit:[],method:'Chronological training',limitations:'Research simulation'})}));
+  await panel.getByRole('button',{name:'Run backtest'}).click();
+  await expect(panel).toContainText('80 evaluated intervals');
+  await expect(panel).toContainText('Fixed logistic regression');
 });
 
 test("market pulse opens with a clean live ribbon and an inspectable daily chart", async ({ page }) => {

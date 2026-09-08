@@ -17,13 +17,14 @@ public class GatewayRequestValidator {
     private static final Pattern SYMBOL = Pattern.compile("^[A-Za-z0-9.^=_:-]{1,40}$");
     private static final Pattern REQUEST_ID = Pattern.compile("^[A-Za-z0-9._:-]{1,80}$");
     private static final Set<String> SYMBOL_REQUIRED = Set.of(
-            "/market/analysis", "/market/predictions", "/market/company", "/market/peer-comparison",
+            "/market/analysis", "/market/backtest", "/market/predictions", "/market/company", "/market/peer-comparison",
             "/market/model-status", "/market/model-drift", "/market/data-operations",
             "/market/experiments", "/market/documents", "/market/documents/discover");
     private static final Map<String, Set<String>> GET_ROUTES = Map.ofEntries(
             Map.entry("/market/overview", Set.of("refresh")),
             Map.entry("/market/currencies", Set.of("refresh")),
             Map.entry("/market/analysis", Set.of("symbol", "refresh")),
+            Map.entry("/market/backtest", Set.of("symbol")),
             Map.entry("/market/predictions", Set.of("symbol", "limit")),
             Map.entry("/market/news", Set.of("symbol", "limit")),
             Map.entry("/market/factors", Set.of("refresh")),

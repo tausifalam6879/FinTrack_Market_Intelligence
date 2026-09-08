@@ -159,6 +159,7 @@ const query = (params) => {
 
 export const marketApi = {
   baseUrl: API_BASE,
+  backtest: (symbol) => request(`/market/backtest${query({symbol})}`, {timeout:90000,retry:false}),
   seed: {
     overview: () => seedResult("overview"),
     newsFeed: () => seedResult("news-feed"),

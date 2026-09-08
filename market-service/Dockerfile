@@ -14,6 +14,7 @@ RUN pip install --no-cache-dir -r requirements-runtime.txt \
     && useradd --uid 10001 --gid fintrack --create-home --shell /usr/sbin/nologin fintrack
 
 COPY --chown=fintrack:fintrack app.py runtime_health.py runtime_metrics.py market_intelligence.py agent_orchestrator.py company_catalog.py persistence.py data_pipeline.py data_operations.py offline_training.py deep_learning.py experiment_tracking.py model_registry.py model_monitoring.py drift_monitoring.py document_rag.py official_documents.py sec_filings.py ./
+COPY --chown=fintrack:fintrack research_backtest.py ./
 RUN mkdir -p /app/data /app/artifacts \
     && chown -R fintrack:fintrack /app
 
