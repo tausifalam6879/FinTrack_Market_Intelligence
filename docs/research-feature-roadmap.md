@@ -13,7 +13,7 @@ This tracks the requested research extensions without rebuilding existing capabi
 | Correlation matrix | Added multi-holding return correlations on common dates | Longer histories and date-window selection |
 | Model performance dashboard | Registry, experiments, drift and outcome panels | Review time-series performance visualization gaps |
 | Prediction confidence | Calibration and neutral thresholds; added separation from 50% alongside measured balanced accuracy | No unvalidated probability-to-confidence label mapping |
-| Event impact | Added user-selected event-date windows, exact-date benchmark comparison and explicit non-causal limitations | Automatic verified event-date discovery and after-hours release handling |
+| Event impact | User-selected windows, benchmark comparison and provider calendar/reported earnings date suggestions; invalid dates filtered, future events disabled and stale results cleared | Independent announcement verification and after-hours release handling; provider dates are not independently verified |
 | News intelligence | Existing keyword themes and tone; added similar-headline grouping retaining original sources, dates, numbers and negations | Entity extraction and evaluated relevance classifier remain unimplemented; no invented confidence percentage |
 | Bull / bear case | Added positive/negative factors from reported growth, model thresholds and current ratio, with uncertainties | Broader field coverage |
 | Peer scorecard | Extended existing table with provider-supplied ROE, revenue growth and operating margin; missing values remain blank | Provider coverage and period alignment; no unsupported financial score |

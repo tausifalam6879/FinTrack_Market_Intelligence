@@ -107,7 +107,7 @@ jobs:
 
       - name: Test frontend research calculations
         working-directory: frontend
-        run: node --test src/services/portfolio.test.js src/services/newsGroups.test.js src/services/smartAlerts.test.js
+        run: node --test src/services/portfolio.test.js src/services/newsGroups.test.js src/services/smartAlerts.test.js src/services/eventDates.test.js
 
       - name: Build production frontend
         working-directory: frontend

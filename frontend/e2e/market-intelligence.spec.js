@@ -99,6 +99,8 @@ test('event study shows returned windows without inventing missing benchmark dat
   await panel.getByRole('button',{name:'Analyze event window'}).click();
   await expect(panel).toContainText('Benchmark: Unavailable');
   await expect(panel).toContainText('10%');
+  await panel.getByLabel('Event date',{exact:true}).fill('2024-03-01');
+  await expect(panel).not.toContainText('Baseline session:');
 });
 
 test('structured report explains missing evidence and prints only the report',async({page})=>{

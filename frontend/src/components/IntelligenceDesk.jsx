@@ -564,7 +564,7 @@ export default function IntelligenceDesk({ initialSymbol = "^NSEI", onProviderCh
         {activeView === "mlops" && analysis.riskBenchmark && <RiskBenchmarkPanel data={analysis.riskBenchmark} symbol={analysis.symbol} onExplain={explainMetric} />}
         {activeView === "mlops" && localExplanation && <PredictionExplanation explanation={localExplanation} outlook={analysis.outlook} />}
         {activeView === "mlops" && <BacktestPanel symbol={analysis.symbol} />}
-        {activeView === "mlops" && <EventImpactPanel symbol={analysis.symbol} />}
+        {activeView === "mlops" && <EventImpactPanel symbol={analysis.symbol} catalysts={companyResearch?.symbol===analysis.symbol?companyResearch.catalysts:null} />}
         {activeView === "mlops" && <OperationsSummary status={modelStatus} loading={modelStatusLoading} error={modelStatusError} />}
         {activeView === "mlops" && <PredictionOutcomeSummary status={modelStatus} loading={modelStatusLoading} onOpen={() => setActiveView("mlops")} />}
         {activeView === "mlops" && <ModelRegistryPanel status={modelStatus} loading={modelStatusLoading} error={modelStatusError} activeModel={analysis.model} operationsStatus={operationsStatus} operationsError={operationsStatusError} />}
