@@ -76,6 +76,49 @@ test("portfolio holdings persist, update without duplication and can be removed"
   await expect(panel).toContainText('No holdings saved yet');
 });
 
+test('smart alert rules evaluate, reject duplicates and can be removed',async({page})=>{
+  await page.getByRole('tab',{name:/Intelligence & MLOps/i}).click();
+  await page.getByRole('button',{name:'Smart alerts',exact:true}).click();
+  const panel=page.getByRole('region',{name:'Smart research alerts'});
+  await panel.getByLabel('Alert threshold',{exact:true}).fill('999999');
+  await panel.getByRole('button',{name:'Add alert rule'}).click();
+  await expect(panel).toContainText('Condition met');
+  await panel.getByRole('button',{name:'Add alert rule'}).click();
+  await expect(panel).toContainText('This rule already exists');
+  await expect(panel.getByRole('button',{name:/Remove alert/})).toHaveCount(1);
+  await panel.getByRole('button',{name:/Remove alert/}).click();
+  await expect(panel.getByRole('button',{name:/Remove alert/})).toHaveCount(0);
+});
+
+test('event study shows returned windows without inventing missing benchmark data',async({page})=>{
+  await page.getByRole('tab',{name:/Intelligence & MLOps/i}).click();
+  await page.getByRole('button',{name:'Advanced model details',exact:true}).click();
+  await page.route('**/market/event-impact?*',r=>r.fulfill({status:200,contentType:'application/json',body:JSON.stringify({eventDate:'2024-02-01',baselineDate:'2024-01-31',baselinePrice:100,benchmarkSymbol:null,windows:[{sessions:1,status:'available',date:'2024-02-01',price:110,returnPercent:10,benchmarkReturnPercent:null,excessReturnPoints:null}],method:'Matched dates',limitations:'No causal claim'})}));
+  const panel=page.getByRole('region',{name:'Event impact analysis'});
+  await panel.getByLabel('Event date',{exact:true}).fill('2024-02-01');
+  await panel.getByRole('button',{name:'Analyze event window'}).click();
+  await expect(panel).toContainText('Benchmark: Unavailable');
+  await expect(panel).toContainText('10%');
+});
+
+test('structured report explains missing evidence and prints only the report',async({page})=>{
+  await page.getByRole('tab',{name:/Intelligence & MLOps/i}).click();
+  await page.getByRole('button',{name:'Research report',exact:true}).click();
+  const report=page.getByRole('region',{name:'Structured research report'});
+  await expect(report.getByRole('heading',{name:'13. Sources and dates'})).toBeVisible();
+  await expect(report).toContainText('Company profile unavailable');
+  await report.getByRole('button',{name:'Generate AI explanation'}).click();
+  await expect(report).toContainText('Explanation provider: gemini');
+  await page.evaluate(()=>{window.print=()=>{};});
+  await report.getByRole('button',{name:'Print / Save report PDF'}).click();
+  await page.emulateMedia({media:'print'});
+  await expect(page.locator('#root')).toBeHidden();
+  await expect(page.locator('.fintrack-report-print-copy')).toBeVisible();
+  await expect(page.locator('.fintrack-report-print-copy button')).toHaveCount(0);
+  await page.evaluate(()=>window.dispatchEvent(new Event('afterprint')));
+  await expect(page.locator('.fintrack-report-print-copy')).toHaveCount(0);
+});
+
 test('backtest displays returned metrics and recovers from API errors',async({page})=>{
   await page.getByRole('tab',{name:/Intelligence & MLOps/i}).click();
   await page.getByRole('button',{name:'Advanced model details',exact:true}).click();

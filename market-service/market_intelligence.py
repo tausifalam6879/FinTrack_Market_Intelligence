@@ -2871,6 +2871,9 @@ def _peer_quote(raw: Dict[str, Any], selected_symbol: str) -> Dict[str, Any]:
         "fiftyTwoWeekReturnPercent": _round(raw.get("fiftyTwoWeekChangePercent")),
         "dailyChangePercent": _round(raw.get("regularMarketChangePercent")),
         "analystRating": raw.get("averageAnalystRating"),
+        "returnOnEquityPercent": _percentage_from_fraction(raw.get("returnOnEquity")),
+        "revenueGrowthPercent": _percentage_from_fraction(raw.get("revenueGrowth")),
+        "operatingMarginPercent": _percentage_from_fraction(raw.get("operatingMargins")),
         "isSelected": symbol == selected_symbol,
     }
 

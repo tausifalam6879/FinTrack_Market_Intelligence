@@ -2,12 +2,20 @@ import unittest
 
 from market_intelligence import (
     _build_sector_peer_payload,
+    _peer_quote,
     _peer_region_and_suffix,
     sector_peer_intelligence,
 )
 
 
 class SectorPeerIntelligenceTests(unittest.TestCase):
+    def test_financial_scorecard_converts_fractions_without_filling_missing_data(self):
+        row=_peer_quote({'symbol':'AAPL','returnOnEquity':.2,'revenueGrowth':-.1,'operatingMargins':0},'AAPL')
+        self.assertEqual(20,row['returnOnEquityPercent'])
+        self.assertEqual(-10,row['revenueGrowthPercent'])
+        self.assertEqual(0,row['operatingMarginPercent'])
+        self.assertIsNone(_peer_quote({'symbol':'MSFT'},'AAPL')['returnOnEquityPercent'])
+
     def test_exchange_metadata_resolves_region_without_company_allowlist(self):
         self.assertEqual(("in", ".NS"), _peer_region_and_suffix("TOTALLYNEW.NS"))
         self.assertEqual(("jp", ".T"), _peer_region_and_suffix("9999.T"))

@@ -3,6 +3,7 @@ import MarketPulse from "./components/MarketPulse";
 import CurrencyDesk from "./components/CurrencyDesk";
 import IntelligenceDesk from "./components/IntelligenceDesk";
 import NewsDesk from "./components/NewsDesk";
+import {useSmartAlertMonitor} from './components/SmartAlerts';
 import { marketApi } from "./services/marketApi";
 
 const tabs = [
@@ -136,6 +137,7 @@ const deskMenus = {
 };
 
 export default function App() {
+  useSmartAlertMonitor();
   const [activeTab, setActiveTab] = useState("markets");
   const [researchSymbol, setResearchSymbol] = useState("^NSEI");
   const [draggingTab, setDraggingTab] = useState(false);

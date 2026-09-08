@@ -1511,3 +1511,10 @@ footer p { margin: 5px 0 0; }
 .portfolio-panel button:disabled { opacity: .6; cursor: default; }
 .portfolio-panel small { display: block; }
 @media (max-width: 600px) { .portfolio-panel { padding: 14px; } .portfolio-form label { width: 100%; } }
+.research-report section { margin-top: 20px; }
+.fintrack-report-print-copy { display: none; }
+@media print {
+  body.print-fintrack-report #root { display: none !important; }
+  body.print-fintrack-report .fintrack-report-print-copy { display: block; width: 100%; color: black; background: white; }
+  .fintrack-report-print-copy section { break-inside: avoid; }
+}

@@ -2,6 +2,10 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import StatusBadge from "./StatusBadge";
 import PortfolioPanel from "./PortfolioPanel";
 import BacktestPanel from "./BacktestPanel";
+import ResearchReport from "./ResearchReport";
+import EvidenceOverview from "./EvidenceOverview";
+import EventImpactPanel from "./EventImpactPanel";
+import SmartAlerts from './SmartAlerts';
 import { marketApi } from "../services/marketApi";
 
 const presets = [
@@ -108,6 +112,8 @@ export default function IntelligenceDesk({ initialSymbol = "^NSEI", onProviderCh
   const [comparisonError, setComparisonError] = useState("");
   const [comparisonOpen, setComparisonOpen] = useState(false);
   const [portfolioOpen, setPortfolioOpen] = useState(false);
+  const [reportOpen,setReportOpen] = useState(false);
+  const [alertsOpen,setAlertsOpen] = useState(false);
   const [operationsStatus, setOperationsStatus] = useState(null);
   const [operationsStatusError, setOperationsStatusError] = useState("");
   const loadSequenceRef = useRef(0);
@@ -276,7 +282,7 @@ export default function IntelligenceDesk({ initialSymbol = "^NSEI", onProviderCh
         : marketApi.documents(normalized)
           .then((response) => {
             if (loadSequenceRef.current === requestId) {
-              setDocuments(response.items || []);
+              setDocuments((response.items || []).map(item=>({...item,symbol:response.symbol})));
               setDocumentPreparation(response.preparation || null);
             }
           })
@@ -376,7 +382,7 @@ export default function IntelligenceDesk({ initialSymbol = "^NSEI", onProviderCh
     try {
       await marketApi.prepareDocuments(symbol);
       const response = await marketApi.documents(symbol);
-      setDocuments(response.items || []);
+      setDocuments((response.items || []).map(item=>({...item,symbol:response.symbol})));
       setDocumentPreparation(response.preparation || documentPreparation);
     } catch {
       setRagPrepareError(`Official report for ${symbol} could not be indexed right now. Please retry.`);
@@ -519,8 +525,12 @@ export default function IntelligenceDesk({ initialSymbol = "^NSEI", onProviderCh
           </button>
           <button type="button" onClick={printResearchReport}>Print / Save PDF</button>
           <button type="button" aria-expanded={portfolioOpen} onClick={()=>setPortfolioOpen(value=>!value)}>My portfolio</button>
+          <button type="button" aria-expanded={reportOpen} onClick={()=>setReportOpen(value=>!value)}>Research report</button>
+          <button type="button" aria-expanded={alertsOpen} onClick={()=>setAlertsOpen(value=>!value)}>Smart alerts</button>
         </div>
         {portfolioOpen && <PortfolioPanel analysis={analysis} mode={result.mode} />}
+        {alertsOpen && <SmartAlerts symbol={analysis.symbol} currency={analysis.expectedRange?.currency} />}
+        {reportOpen && <ResearchReport analysis={analysis} company={companyResearch?.symbol===analysis.symbol?companyResearch:null} peers={peerComparison?.symbol===analysis.symbol?peerComparison:null} documents={documents.filter(d=>d.symbol===analysis.symbol)} mode={result.mode} />}
         {comparisonOpen && <SavedResearchPanel
           items={savedResearch}
           selected={comparisonSymbols}
@@ -549,10 +559,12 @@ export default function IntelligenceDesk({ initialSymbol = "^NSEI", onProviderCh
           <button type="button" onClick={openContextAgent}>Ask FinTrack</button>
         </div>
         {activeView === "company" && !analysis.symbol.startsWith("^") && <CompanyFundamentalsPanel data={companyResearch} loading={companyResearchLoading} error={companyResearchError} />}
+        {activeView === "overview" && <EvidenceOverview analysis={analysis} company={companyResearch?.symbol===analysis.symbol?companyResearch:null} mode={result.mode} />}
         {activeView === "company" && !analysis.symbol.startsWith("^") && <SectorPeerPanel data={peerComparison} loading={peerComparisonLoading} error={peerComparisonError} />}
         {activeView === "mlops" && analysis.riskBenchmark && <RiskBenchmarkPanel data={analysis.riskBenchmark} symbol={analysis.symbol} onExplain={explainMetric} />}
         {activeView === "mlops" && localExplanation && <PredictionExplanation explanation={localExplanation} outlook={analysis.outlook} />}
         {activeView === "mlops" && <BacktestPanel symbol={analysis.symbol} />}
+        {activeView === "mlops" && <EventImpactPanel symbol={analysis.symbol} />}
         {activeView === "mlops" && <OperationsSummary status={modelStatus} loading={modelStatusLoading} error={modelStatusError} />}
         {activeView === "mlops" && <PredictionOutcomeSummary status={modelStatus} loading={modelStatusLoading} onOpen={() => setActiveView("mlops")} />}
         {activeView === "mlops" && <ModelRegistryPanel status={modelStatus} loading={modelStatusLoading} error={modelStatusError} activeModel={analysis.model} operationsStatus={operationsStatus} operationsError={operationsStatusError} />}
@@ -1553,18 +1565,21 @@ function SectorPeerPanel({ data, loading, error }) {
     </div>
     <div className="peer-table-wrap">
       <table className="peer-table">
-        <thead><tr><th>Company</th><th>Market cap</th><th>P/E</th><th>P/B</th><th>Dividend</th><th>52-week</th></tr></thead>
+        <thead><tr><th>Company</th><th>Market cap</th><th>P/E</th><th>P/B</th><th>ROE</th><th>Revenue growth</th><th>Operating margin</th><th>Dividend</th><th>52-week</th></tr></thead>
         <tbody>{rows.map((row) => <tr key={row.symbol} className={row.isSelected ? "selected" : ""}>
           <td><strong>{row.name}</strong><small>{row.symbol} · {row.exchange}{row.isSelected ? " · Selected" : ""}</small></td>
           <td>{formatCompactMoney(row.marketCap, row.currency || selected.currency)}</td>
           <td>{metricValue(row.trailingPE, "x")}</td>
           <td>{metricValue(row.priceToBook, "x")}</td>
+          <td>{metricValue(row.returnOnEquityPercent, "%")}</td>
+          <td>{metricValue(row.revenueGrowthPercent, "%")}</td>
+          <td>{metricValue(row.operatingMarginPercent, "%")}</td>
           <td>{metricValue(row.dividendYield, "%")}</td>
           <td className={Number(row.fiftyTwoWeekReturnPercent) >= 0 ? "positive" : "negative"}>{metricValue(row.fiftyTwoWeekReturnPercent, "%")}</td>
         </tr>)}</tbody>
       </table>
     </div>
-    <p className="peer-method"><strong>Method:</strong> {data.method} Provider coverage: {data.providerCoverage || rows.length} listings. {data.disclaimer}</p>
+    <p className="peer-method"><strong>Method:</strong> {data.method} Provider coverage: {data.providerCoverage || rows.length} listings. {data.disclaimer} Missing financial fields remain blank; reporting periods may differ across companies.</p>
   </section>;
 }
 

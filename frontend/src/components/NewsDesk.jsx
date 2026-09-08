@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import StatusBadge from "./StatusBadge";
 import { marketApi } from "../services/marketApi";
+import { groupHeadlines } from '../services/newsGroups';
 
 const filters = ["All", "India", "United States", "Commodities", "Technology"];
 
@@ -54,6 +55,7 @@ export default function NewsDesk({ onResearch, onDataChange }) {
       return categoryMatches && queryMatches;
     });
   }, [result, activeFilter, search]);
+  const groups=useMemo(()=>groupHeadlines(articles),[articles]);
 
   return (
     <section id="news-overview" className="page-section" aria-labelledby="news-title">
@@ -80,9 +82,11 @@ export default function NewsDesk({ onResearch, onDataChange }) {
         <input id="news-search" className="search-input" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search headlines, publisher or company…" aria-label="Search market news" />
       </div>
 
+      <p>{articles.length} headlines · {groups.length} headline groups. Similar wording is grouped by company and publication day; this is not verified event classification.</p>
       {loading && !result ? <NewsSkeleton /> : articles.length > 0 ? (
         <div id="news-headlines" className="news-grid">
-          {articles.map((article, index) => {
+          {groups.map((group, index) => {
+            const article=group.primary;
             const symbol = article.relatedSymbol || "^NSEI";
             const label = sentimentLabel(article.sentiment);
             const category = categoryFor(symbol);
@@ -96,6 +100,7 @@ export default function NewsDesk({ onResearch, onDataChange }) {
               </div>
               <div className="news-card-meta"><span>{category}</span><span className={`sentiment sentiment-${label.toLowerCase()}`}>{label}</span></div>
               <h3>{article.title}</h3>
+              {group.articles.length>1&&<details><summary>{group.articles.length} similar headlines / sources</summary>{group.articles.map((other,i)=><p key={i}>{other.title} · {other.publisher||'Unknown publisher'} {/^https?:\/\//i.test(other.url||'')&&<a href={other.url} target="_blank" rel="noreferrer">Open source</a>}</p>)}</details>}
               <div className="news-source"><strong>{article.publisher || "Unknown publisher"}</strong><span>{article.publishedAt ? new Date(article.publishedAt).toLocaleString("en-IN") : "Publication time unavailable"}</span></div>
               <div className="news-card-actions">
                 <button className="text-button" onClick={() => onResearch(symbol)}>Research {relatedLabel(symbol)} →</button>

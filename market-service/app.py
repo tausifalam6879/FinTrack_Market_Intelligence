@@ -12,6 +12,7 @@ from model_monitoring import router as model_monitoring_router
 from runtime_health import initialize_runtime, liveness_report, readiness_report
 from runtime_metrics import record_request
 from research_backtest import router as research_backtest_router
+from event_impact import router as event_impact_router
 
 
 @asynccontextmanager
@@ -56,6 +57,7 @@ app.include_router(company_catalog_router)
 app.include_router(model_monitoring_router)
 app.include_router(document_rag_router)
 app.include_router(research_backtest_router)
+app.include_router(event_impact_router)
 
 
 @app.get("/")
