@@ -1,3 +1,4 @@
+import hashlib
 import json
 import logging
 import math
@@ -337,6 +338,13 @@ QUOTE_CACHE_TTL_SECONDS = int(os.getenv("MARKET_QUOTE_CACHE_TTL_SECONDS", "15"))
 OVERVIEW_CACHE_TTL_SECONDS = int(os.getenv("MARKET_OVERVIEW_CACHE_TTL_SECONDS", "900"))
 PREDICTION_CACHE_TTL_SECONDS = int(os.getenv("MARKET_PREDICTION_CACHE_TTL_SECONDS", "900"))
 PEER_CACHE_TTL_SECONDS = int(os.getenv("MARKET_PEER_CACHE_TTL_SECONDS", "1800"))
+# Keep only exact, standalone repeat questions briefly.  The cache key is a
+# one-way digest, so the in-memory cache never uses the visitor's question as
+# a key.  Conversational follow-ups are deliberately excluded below because
+# their answer can depend on prior messages.
+AGENT_RESPONSE_CACHE_TTL_SECONDS = max(
+    0, int(os.getenv("MARKET_AGENT_CACHE_TTL_SECONDS", "120"))
+)
 _cache: Dict[str, Dict[str, Any]] = {}
 _overview_lock = Lock()
 _prediction_audit: Dict[str, List[Dict[str, Any]]] = {}
@@ -374,6 +382,13 @@ def clear_market_cache() -> None:
 def clear_market_cache_prefix(prefix: str) -> None:
     for key in [item for item in _cache if item.startswith(prefix)]:
         _cache.pop(key, None)
+
+
+def _agent_response_cache_key(message: str, symbol: str, prefer_local: bool) -> str:
+    """Build a privacy-preserving key for one exact standalone agent request."""
+    normalized_message = " ".join(str(message or "").split()).lower()
+    material = f"{symbol}|{int(prefer_local)}|{normalized_message}".encode("utf-8")
+    return "agent-response:" + hashlib.sha256(material).hexdigest()
 
 
 def _sanitize_symbol(symbol: str) -> str:
@@ -5356,6 +5371,17 @@ async def market_agent(request: FastApiRequest):
         raise HTTPException(status_code=422, detail=f"Invalid market agent request: {error}") from error
 
     symbol = _infer_symbol(payload.message, payload.symbol)
+    cache_key = None
+    # Do not cache follow-up conversations: their meaning can depend on the
+    # preceding user/assistant messages.  This keeps a cached answer both
+    # correct and isolated to the exact standalone request that produced it.
+    if AGENT_RESPONSE_CACHE_TTL_SECONDS and not payload.recent_messages:
+        cache_key = _agent_response_cache_key(payload.message, symbol, payload.prefer_local)
+        cached_response = _cache_get(cache_key, AGENT_RESPONSE_CACHE_TTL_SECONDS)
+        if cached_response is not None:
+            response = dict(cached_response)
+            response["responseCache"] = "hit"
+            return response
     lowered = payload.message.lower()
     requested_date = _extract_requested_date(payload.message)
     plan = build_agent_plan(
@@ -5781,7 +5807,7 @@ async def market_agent(request: FastApiRequest):
         })
 
     record_llm(llm_status, llm_answer_accepted)
-    return {
+    response = {
         "answer": answer,
         "symbol": symbol,
         "llmUsed": llm_used,
@@ -5796,6 +5822,7 @@ async def market_agent(request: FastApiRequest):
         "evidenceSources": evidence_sources,
         "citations": citations,
         "usedLiveContext": True,
+        "responseCache": "miss",
         "suggestedQuestions": [
             f"Why is {symbol} outlook {context['prediction']['outlook'].lower()}?",
             f"Show recent news factors for {symbol}",
@@ -5803,3 +5830,8 @@ async def market_agent(request: FastApiRequest):
         ],
         "disclaimer": context["prediction"]["disclaimer"],
     }
+    # Cache only grounded, accepted answers.  Provider failures must be able
+    # to recover on the next request rather than serving a stale fallback.
+    if cache_key and llm_answer_accepted:
+        _cache_put(cache_key, response)
+    return response
