@@ -35,7 +35,7 @@ jobs:
       - name: Build frontend with Render API
         working-directory: frontend
         env:
-          VITE_MARKET_API_BASE_URL: https://fintrack-market-intelligence-api.onrender.com
+          VITE_MARKET_API_BASE_URL: https://fintrack-gateway-304232323336.asia-south1.run.app
         run: npm run build
 
       - name: Configure GitHub Pages
