@@ -1,0 +1,44 @@
+name: fintrack-portable
+
+# Keep Aiven MySQL when moving the application to another Docker host.
+services:
+  api:
+    build:
+      context: ./market-service
+    env_file:
+      - path: .env.portable
+        format: raw
+    environment:
+      PORT: "8000"
+      APP_ENV: production
+      REQUIRE_DURABLE_DATABASE: "true"
+      MODEL_ARTIFACT_DIR: /app/artifacts
+    volumes:
+      - type: bind
+        source: ./secrets/aiven-ca.pem
+        target: /etc/secrets/ca.pem
+        read_only: true
+        bind:
+          create_host_path: false
+      - api_data:/app/data
+      - model_artifacts:/app/artifacts
+    restart: unless-stopped
+
+  gateway:
+    build:
+      context: ./gateway-service
+    environment:
+      PORT: "8080"
+      FINTRACK_GATEWAY_UPSTREAM_BASE_URL: http://api:8000
+      FINTRACK_GATEWAY_REQUEST_TIMEOUT: 75s
+      FINTRACK_GATEWAY_READINESS_TIMEOUT: 4s
+    ports:
+      - "127.0.0.1:8081:8080"
+    depends_on:
+      api:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  api_data:
+  model_artifacts:
