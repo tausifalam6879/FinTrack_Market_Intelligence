@@ -3,7 +3,10 @@
 Current production: GitHub Pages -> Cloud Run Spring gateway -> Cloud Run
 Python API -> Aiven MySQL. Retain Aiven; no Cloud SQL migration is needed.
 The Google trial console showed expiry on 11 December 2026. Credits can run out
-earlier. This guide is a migration runbook, not a completed restore rehearsal.
+earlier. SQL restore was rehearsed on 13 September 2026 using MySQL 8.4.11:
+11 tables passed integrity checks, including 6,047 market bars and 25 predictions.
+The temporary test database was removed; the private backup and report remain
+under backups/cloud-mysql. Full application migration is still a separate test.
 
 ## Keep the current deployment running
 
@@ -58,6 +61,18 @@ Aiven still requires internet. Gemini also requires internet. This stack does
 not install Ollama or guarantee offline AI answers.
 
 ## Backup and recovery
+
+For a repeatable SQL restore rehearsal with Docker running:
+
+```sh
+docker pull mysql:8.4
+python scripts/rehearse_mysql_restore.py backups/cloud-mysql/YOUR_BACKUP.sql
+```
+
+This verifies the checksum, restores into a new network-isolated MySQL container,
+checks every restored table, and saves a private `.restore-report.json` beside
+the backup. Its temporary database is removed when the test finishes. It does
+not connect to Aiven or perform a full application/UI migration test.
 
 Existing scripts/backup_cloud_mysql.py creates a logical dump and checksum
 manifest using FINTRACK_CLOUD_MYSQL_URI supplied privately in the environment.
