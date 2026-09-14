@@ -7,23 +7,25 @@ The repository supports two honest deployment modes with the same public API con
 ```mermaid
 flowchart LR
     U[Public user] --> R[React dashboard]
-    R -->|current direct-compatible mode| F[FastAPI data and ML service]
-    R -.->|full gateway mode| S[Spring Boot API gateway]
+    R -->|production API calls| S[Cloud Run Spring Boot gateway]
     S -->|validated WebClient calls| F
     F --> Y[Yahoo Finance / market providers]
     F --> D[Official NSE / SEC documents]
     F --> ML[scikit-learn inference]
     F --> G[Optional grounded Gemini]
-    F --> DB[(MySQL application database)]
+    F --> VPC[Direct VPC egress]
+    VPC --> NAT[Cloud NAT + reserved IP]
+    NAT --> DB[(Aiven MySQL application database)]
     T[Offline training] --> MF[MLflow experiment tracking]
     T --> A[Checksummed model artifacts]
     A --> F
 ```
 
 - GitHub Pages hosts only React static files and never receives a Gemini or database secret.
-- The current public frontend can call FastAPI directly while the separate Spring service is deployed.
-- In full gateway mode, the frontend base URL changes to Spring Boot. Route validation, request IDs, retry, circuit breaking, batch orchestration and Micrometer metrics happen there.
-- FastAPI remains the Python data/ML boundary in both modes, so Python libraries do not leak into Java business code.
+- The production frontend calls the Spring gateway on Cloud Run. Route validation, request IDs, retry, circuit breaking, batch orchestration and Micrometer metrics happen there.
+- The gateway calls the separate FastAPI Cloud Run service; FastAPI remains the Python data/ML boundary.
+- FastAPI reaches Aiven MySQL through Direct VPC egress and Cloud NAT. The database allowlist contains the reserved `/32` address instead of an open `0.0.0.0/0` rule.
+- The direct FastAPI contract remains available for health checks and rollback diagnostics, but it is not the frontend's normal production route.
 
 ## Single-symbol analysis
 

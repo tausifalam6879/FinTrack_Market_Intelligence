@@ -145,7 +145,7 @@ For each live prediction, FinTrack also produces a local sensitivity explanation
 
 The public `/market/agent` route uses a `plan -> execute -> synthesize` workflow. `agent_orchestrator.py` deterministically classifies the question and selects only the required read-only tools: current quote, ML/technical outlook, requested historical session, company fundamentals, financial-statement, profitability/returns/capital-efficiency, earnings-quality/capital-allocation, liquidity/debt-capacity, ownership, analyst-estimate and dividend/corporate-action evidence, indexed document RAG, recent headlines, macro factors, market breadth or global indices. The LLM does not choose tools and no mutation-capable tool is exposed, so prompt text cannot approve a model, upload a document or alter project data.
 
-For annual-report, filing, debt, revenue or citation questions, the agent retrieves existing indexed chunks and requires exact `[S# p.#]` citations in any accepted generated answer. When there is no indexed evidence, the trace reports `no_evidence` and the deterministic fallback refuses to invent a filing claim. The API returns `agentPlan`, `toolTrace`, `evidenceSources` and `citations`; the chat UI exposes these behind an expandable evidence trace so an interviewer or user can audit why each tool ran and what it returned.
+For annual-report, filing, debt, revenue or citation questions, the agent retrieves existing indexed chunks and requires exact `[S# p.#]` citations in any accepted generated answer. When there is no indexed evidence, the trace reports `no_evidence` and the deterministic fallback refuses to invent a filing claim. The API returns `agentPlan`, `toolTrace`, `evidenceSources` and `citations`; the chat UI exposes these behind an expandable evidence trace so a reviewer or user can audit why each tool ran and what it returned.
 
 This remains an educational next-session probability experiment, not a guaranteed return, target price or buy/sell recommendation. Feature importance describes model dependency and does not prove market causality.
 
@@ -176,7 +176,7 @@ frontend/        React + Vite public website
 gateway-service/ Java 21 + Spring Boot public API boundary
 market-service/  FastAPI API, persistence, data ingestion and offline ML training
 scripts/         Release-snapshot maintenance utility
-docs/            Architecture, production database and interview handoff
+docs/            Architecture, deployment and production database guides
 ```
 
 ## Run locally
@@ -223,7 +223,9 @@ The runtime container runs as the unprivileged `fintrack` user, writes only to d
 - Model artifact storage, optional LLM configuration and external training-toolchain availability are reported separately and do not incorrectly restart the public API during an upstream-provider outage.
 - Responses expose environment/version/short commit metadata but never return database URLs, passwords, API keys or local artifact paths.
 
-Render now uses `/health/ready` as its deployment health check.
+Cloud Run uses `/health/ready` as the API deployment readiness check. The
+endpoint verifies the required MySQL connection and schema without calling a
+market-data provider or language model.
 
 ## Continuous integration
 
@@ -272,7 +274,7 @@ OLLAMA_NUM_CTX=2048
 OLLAMA_NUM_PREDICT=50
 ```
 
-Download the smaller, faster Ollama model before going offline (`ollama pull llama3.2:1b`). When FastAPI runs inside Docker Desktop on Windows, use `OLLAMA_BASE_URL=http://host.docker.internal:11434`. Render cannot call Ollama on a user's laptop, so the hosted service remains Gemini with deterministic verified fallback; hybrid Ollama failover is for the local/offline stack.
+Download the smaller, faster Ollama model before going offline (`ollama pull llama3.2:1b`). When FastAPI runs inside Docker Desktop on Windows, use `OLLAMA_BASE_URL=http://host.docker.internal:11434`. Cloud Run cannot call Ollama on a user's laptop, so the hosted service remains Gemini with deterministic verified fallback; hybrid Ollama failover is for the local/offline stack.
 
 When a live market provider is unreachable, the local API reads previously validated OHLCV bars from its database. Offline price research therefore works for symbols already persisted on that computer; a never-seen symbol needs one online ingestion before its evidence can be used offline.
 
@@ -342,27 +344,40 @@ $env:DATABASE_URL = "mysql://USER:PASSWORD@HOST:3306/DATABASE?ssl-mode=REQUIRED"
 python database_maintenance.py migrate --confirm-empty-target --manifest-path ../backups/mysql-cutover.json
 ```
 
-See [Production MySQL](docs/production-mysql.md) and the explicit opt-in [Render database example](docs/render-mysql-opt-in.example.yaml) before connecting Render and GitHub Actions to a shared database. The current public demo is intentionally not changed automatically.
+See [Production MySQL](docs/production-mysql.md) and [Portable deployment](docs/PORTABLE_DEPLOYMENT.md) for verified backup, restore and provider-migration procedures. The Render configuration remains available only as a rollback option.
 
 The persistence schema contains public-company metadata, OHLCV bars, ingestion audits, model runs, prediction outcomes, served-feature snapshots and model-drift history. It does not store user accounts or personal financial data.
 
 ## Deployment
 
-For a public demo, keep this focused application in its own GitHub repository. Deploy `frontend/` to GitHub Pages and deploy `market-service/` as a separate Render web service using the included `render.yaml`. A new Render account is not required, but the Python API needs its own service because GitHub Pages can host only the static frontend.
-
-The zero-cost public frontend workflow currently builds directly against the existing Render FastAPI service:
+The production demo uses this request path:
 
 ```text
-https://fintrack-market-intelligence-api.onrender.com
+GitHub Pages -> Cloud Run Spring gateway -> Cloud Run FastAPI -> Aiven MySQL
 ```
 
-The active Blueprint now also contains an independently deployable free Spring gateway service pointed at FastAPI. Keep GitHub Pages on the direct FastAPI URL until `https://fintrack-market-gateway.onrender.com/health/ready` passes; then change `VITE_MARKET_API_BASE_URL` to the gateway URL. The same `/market/compare` contract works in direct FastAPI compatibility mode and full Spring orchestration mode.
+- Frontend: `https://tausifalam6879.github.io/FinTrack_Market_Intelligence/`
+- Gateway: `https://fintrack-gateway-304232323336.asia-south1.run.app`
+- API: `https://fintrack-market-api-304232323336.asia-south1.run.app`
+- Region: Google Cloud `asia-south1`
 
-Run the read-only release check with `python scripts/production_smoke_test.py`; add `--gateway https://fintrack-market-gateway.onrender.com` after the gateway is live and `--require-mysql` only after durable MySQL is deliberately connected.
+The API routes all outbound traffic through a dedicated VPC, Cloud NAT and a
+reserved address. Aiven accepts database connections only from that `/32`
+address and retained rollback-provider ranges; it is not open to
+`0.0.0.0/0`. Database credentials and the Gemini key remain server-side.
+
+Run the non-mutating release check with:
+
+```powershell
+python scripts/production_smoke_test.py `
+  --api https://fintrack-market-api-304232323336.asia-south1.run.app `
+  --gateway https://fintrack-gateway-304232323336.asia-south1.run.app `
+  --require-mysql
+```
 
 Technical architecture: [system architecture](docs/system-architecture.md).
 
-GitHub Pages publishes the frontend from `.github/workflows/deploy-pages.yml`. The bundled verified snapshot renders immediately, then the page replaces it with the newest Render response in the background.
+GitHub Pages publishes the frontend from `.github/workflows/deploy-pages.yml`. The bundled verified snapshot renders immediately, then the page replaces it with the newest Cloud Run response in the background.
 
 ## Scope
 
