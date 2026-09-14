@@ -6,7 +6,10 @@ The Google trial console showed expiry on 11 December 2026. Credits can run out
 earlier. SQL restore was rehearsed on 13 September 2026 using MySQL 8.4.11:
 11 tables passed integrity checks, including 6,047 market bars and 25 predictions.
 The temporary test database was removed; the private backup and report remain
-under backups/cloud-mysql. Full application migration is still a separate test.
+under backups/cloud-mysql. On 14 September 2026, application rehearsal also
+passed: restored MySQL, Python API and Spring gateway were ready, and the
+gateway returned all 507 restored Reliance bars. External AI, public HTTPS
+cutover and browser-to-migrated-backend tests remain separate checks.
 
 ## Keep the current deployment running
 
@@ -73,6 +76,19 @@ This verifies the checksum, restores into a new network-isolated MySQL container
 checks every restored table, and saves a private `.restore-report.json` beside
 the backup. Its temporary database is removed when the test finishes. It does
 not connect to Aiven or perform a full application/UI migration test.
+
+To also rehearse API and gateway operation against the restored database:
+
+```sh
+docker build -t fintrack-rehearsal-api:local market-service
+docker build -t fintrack-rehearsal-gateway:local gateway-service
+python scripts/rehearse_mysql_restore.py backups/cloud-mysql/YOUR_BACKUP.sql --application
+```
+
+This uses an internal Docker network, no host ports, and disposable credentials.
+It checks readiness and matches the gateway's Reliance history count against
+restored SQL data. External AI and browser UI are not tested. Test containers
+and network are removed on completion; built images remain for future tests.
 
 Existing scripts/backup_cloud_mysql.py creates a logical dump and checksum
 manifest using FINTRACK_CLOUD_MYSQL_URI supplied privately in the environment.
