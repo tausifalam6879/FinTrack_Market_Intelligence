@@ -78,3 +78,19 @@ counts and hashes, never credentials.
 and generates a checksum manifest. Restore requires `--confirm-empty-target`
 and refuses a database that already contains project tables. Always test a
 restore against a separate empty MySQL database.
+# Cloud Run fixed egress (Aiven allowlist)
+
+The deployed API can be given one stable outbound IP with Direct VPC egress and
+Cloud NAT. Run the following from Google Cloud Shell:
+
+```bash
+cd ~/FinTrack_Market_Intelligence
+git pull
+bash scripts/configure_cloudrun_static_egress.sh
+```
+
+The script prints the reserved IP without exposing database credentials. Add
+that IP as `/32` in Aiven **Allowed IP addresses**. Keep `0.0.0.0/0` until the
+Cloud Run `/health` check succeeds through the new route, then remove the open
+entry. Cloud NAT and the reserved address are billable Google Cloud resources;
+while the Free Trial is active their cost is deducted from trial credit.
