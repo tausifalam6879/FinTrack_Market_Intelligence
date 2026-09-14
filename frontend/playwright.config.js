@@ -5,6 +5,9 @@ export default defineConfig({
   timeout: 45_000,
   expect: { timeout: 8_000 },
   fullyParallel: false,
+  // Keep desktop/mobile browser processes from competing on small demo/CI hosts.
+  // Override explicitly with --workers when running on a larger machine.
+  workers: 1,
   forbidOnly: Boolean(process.env.CI),
   retries: process.env.CI ? 1 : 0,
   reporter: process.env.CI ? [["line"], ["html", { open: "never" }]] : "list",
