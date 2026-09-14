@@ -94,3 +94,4 @@ that IP as `/32` in Aiven **Allowed IP addresses**. Keep `0.0.0.0/0` until the
 Cloud Run `/health` check succeeds through the new route, then remove the open
 entry. Cloud NAT and the reserved address are billable Google Cloud resources;
 while the Free Trial is active their cost is deducted from trial credit.
+The subnet is `/26`, the minimum size required by Cloud Run Direct VPC egress.

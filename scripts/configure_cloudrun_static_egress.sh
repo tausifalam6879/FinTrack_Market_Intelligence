@@ -7,7 +7,7 @@ REGION="${REGION:-asia-south1}"
 SERVICE="${SERVICE:-fintrack-market-api}"
 NETWORK="${NETWORK:-fintrack-egress}"
 SUBNET="${SUBNET:-fintrack-egress-asia-south1}"
-SUBNET_RANGE="${SUBNET_RANGE:-10.20.0.0/28}"
+SUBNET_RANGE="${SUBNET_RANGE:-10.20.0.0/26}"
 ROUTER="${ROUTER:-fintrack-egress-router}"
 NAT="${NAT:-fintrack-egress-nat}"
 ADDRESS="${ADDRESS:-fintrack-egress-ip}"
@@ -24,6 +24,16 @@ if ! gcloud compute networks subnets describe "$SUBNET" --region="$REGION" >/dev
     --network="$NETWORK" \
     --region="$REGION" \
     --range="$SUBNET_RANGE"
+fi
+
+# Cloud Run Direct VPC egress reserves addresses in /28 blocks and requires a
+# /26 or larger subnet. Upgrade the /28 created by the first script revision.
+CURRENT_RANGE="$(gcloud compute networks subnets describe "$SUBNET" --region="$REGION" --format='value(ipCidrRange)')"
+if [[ "$CURRENT_RANGE" == */28 ]]; then
+  gcloud compute networks subnets expand-ip-range "$SUBNET" \
+    --region="$REGION" \
+    --prefix-length=26 \
+    --quiet
 fi
 
 if ! gcloud compute addresses describe "$ADDRESS" --region="$REGION" >/dev/null 2>&1; then
