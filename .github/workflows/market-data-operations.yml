@@ -1,9 +1,10 @@
 name: Scheduled market data operations
 
 on:
-  schedule:
-    # Weekdays at 19:00 India time. The holiday/weekend buffer is handled by the API policy.
-    - cron: "30 13 * * 1-5"
+  # Production scheduling runs as a Google Cloud Run Job so database traffic
+  # leaves through the project's fixed Cloud NAT address. Keep this workflow
+  # manual-only for local/CI diagnostics; GitHub runner IPs are intentionally
+  # not allowed to connect directly to the production database.
   workflow_dispatch:
     inputs:
       symbols:
