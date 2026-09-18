@@ -48,11 +48,25 @@ if not secret.get("name"):
         "plain-text database URLs are intentionally not copied."
     )
 
+mounts = {item["name"]: item["mountPath"] for item in container.get("volumeMounts", [])}
+file_secrets = []
+for volume in spec.get("volumes", []):
+    secret_volume = volume.get("secret")
+    mount_path = mounts.get(volume.get("name"))
+    if not secret_volume or not mount_path:
+        continue
+    for item in secret_volume.get("items", []):
+        target = f"{mount_path.rstrip('/')}/{item['path']}"
+        file_secrets.append(
+            f"{target}={secret_volume['secretName']}:{item.get('key', 'latest')}"
+        )
+
 values = {
     "IMAGE": container["image"],
     "SERVICE_ACCOUNT": spec.get("serviceAccountName", ""),
     "DB_SECRET": secret["name"],
     "DB_SECRET_VERSION": secret.get("key", "latest"),
+    "FILE_SECRETS": ",".join(file_secrets),
     "NETWORK": annotations.get("run.googleapis.com/network-interfaces", ""),
     "VPC_EGRESS": annotations.get("run.googleapis.com/vpc-access-egress", "all-traffic"),
 }
@@ -100,7 +114,7 @@ JOB_ARGS=(
   --cpu=1
   --memory=1Gi
   --set-env-vars=REQUIRE_DURABLE_DATABASE=true
-  --set-secrets="DATABASE_URL=${DB_SECRET}:${DB_SECRET_VERSION}"
+  --set-secrets="DATABASE_URL=${DB_SECRET}:${DB_SECRET_VERSION}${FILE_SECRETS:+,${FILE_SECRETS}}"
   --network="$NETWORK_NAME"
   --subnet="$SUBNET_NAME"
   --vpc-egress="$VPC_EGRESS"
