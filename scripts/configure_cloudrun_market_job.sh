@@ -9,7 +9,7 @@ SERVICE="${SERVICE:-fintrack-market-api}"
 JOB="${JOB:-fintrack-market-operations}"
 SCHEDULER_JOB="${SCHEDULER_JOB:-fintrack-market-operations-weekdays}"
 SCHEDULER_REGION="${SCHEDULER_REGION:-asia-south1}"
-SCHEDULE="${SCHEDULE:-30 13 * * 1-5}"
+SCHEDULE="${SCHEDULE:-0 19 * * 1-5}"
 TIME_ZONE="${TIME_ZONE:-Asia/Kolkata}"
 REBUILD_SERVICE="${REBUILD_SERVICE:-true}"
 
