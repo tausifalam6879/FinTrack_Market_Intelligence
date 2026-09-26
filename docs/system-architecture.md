@@ -1,4 +1,35 @@
-# FinTrack Market Intelligence architecture
+# System design — FinTrack Market Intelligence
+
+[Back to README](../README.md) · [Technical guide](technical-guide.md)
+
+## Start here
+
+This is a public research system, not a banking application. React shows the evidence, Spring Boot validates requests, FastAPI performs research and inference, and MySQL stores durable research history.
+
+There are two separate paths: **serving** answers user requests; **offline operations** refresh data, evaluate models and monitor outcomes. A page visit does not retrain the model.
+
+| Component | Main responsibility |
+| --- | --- |
+| React / GitHub Pages | Charts, research workspace and labelled cached snapshots |
+| Spring Boot / Cloud Run | Public API validation, routing and resilience |
+| FastAPI / Cloud Run | Provider data, analytics, inference and document retrieval |
+| Aiven MySQL | Historical bars, predictions, model records and monitoring evidence |
+| Offline training / MLflow | Candidate evaluation and experiment tracking |
+| Cloud Run job / Scheduler | Scheduled data operations |
+
+## Scheduled operations
+
+```mermaid
+flowchart LR
+    Scheduler[Cloud Scheduler] --> Job[Cloud Run operations job]
+    Job --> Refresh[Refresh historical data]
+    Refresh --> DB[(Shared MySQL)]
+    Job --> Monitor[Evaluate outcomes and drift]
+    Monitor --> DB
+    DB --> API[Research API]
+```
+
+The configuration script schedules weekdays at **19:00 Asia/Kolkata**. The job shares database connectivity, including the required TLS certificate and fixed NAT egress. Job completion and service health are separate checks. Drift can recommend retraining; it does not automatically approve a replacement model.
 
 ## Production request paths
 
