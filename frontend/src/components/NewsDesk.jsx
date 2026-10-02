@@ -32,10 +32,11 @@ export default function NewsDesk({ onResearch, onDataChange }) {
     if (!silent) setError("");
     try {
       const response = await marketApi.newsFeed(refresh);
+      setError("");
       setResult(response);
       onDataChange?.(response);
     } catch {
-      if (!silent) setError("The headline provider is temporarily unavailable. The packaged verified snapshot remains visible.");
+      setError("Fresh headlines are unavailable. Any headlines shown below are previously saved, timestamped data—not a current feed.");
     } finally {
       if (!silent) setLoading(false);
     }

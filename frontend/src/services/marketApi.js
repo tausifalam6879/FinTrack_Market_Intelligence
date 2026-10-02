@@ -21,7 +21,11 @@ const isUsableCurrencyData = (data) => (
   && data.currencies.some((item) => isPositiveNumber(item?.inrValue))
 );
 
-const isUsableData = (name, data) => name !== "currencies" || isUsableCurrencyData(data);
+const isUsableData = (name, data) => {
+  if (name === "currencies") return isUsableCurrencyData(data);
+  if (name === "news-feed") return Array.isArray(data?.articles) && data.articles.some((article) => article?.title);
+  return true;
+};
 
 const readCache = (name) => {
   try {
@@ -60,7 +64,7 @@ const seedResult = (name) => {
   }
 
   const data = bundledData(name);
-  if (!data) return null;
+  if (!data || !isUsableData(name, data)) return null;
   return {
     data,
     mode: "snapshot",
@@ -139,7 +143,7 @@ const withCache = async (name, loader) => {
   try {
     const data = await loader();
     if (!isUsableData(name, data)) {
-      throw new Error("The currency provider returned no usable positive INR rates.");
+      throw new Error(name === "news-feed" ? "The headline provider returned no usable headlines." : "The currency provider returned no usable positive INR rates.");
     }
     writeCache(name, data);
     return { data, mode: "live", savedAt: data.generatedAt || new Date().toISOString() };

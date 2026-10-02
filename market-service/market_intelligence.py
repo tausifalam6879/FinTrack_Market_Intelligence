@@ -11,6 +11,9 @@ from fractions import Fraction
 from threading import Lock
 from typing import Any, Dict, List, Optional
 from urllib.error import HTTPError, URLError
+from urllib.parse import urlencode
+from email.utils import parsedate_to_datetime
+import xml.etree.ElementTree as ET
 from urllib.request import Request as UrlRequest, urlopen
 
 # All estimators in this public service use one worker. Some minimal Windows/CI
@@ -1099,6 +1102,29 @@ def _normalize_news_item(item: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     }
 
 
+def _rss_news(symbol: str) -> List[Dict[str, Any]]:
+    """Public fixed-host RSS fallback with bounded time and response size."""
+    request = UrlRequest("https://finance.yahoo.com/rss/headline?" + urlencode({"s": symbol}),
+                         headers={"User-Agent": "FinTrack/1.0"})
+    with urlopen(request, timeout=8) as response:
+        payload = response.read(1024 * 1024 + 1)
+    if len(payload) > 1024 * 1024 or b"<!DOCTYPE" in payload.upper() or b"<!ENTITY" in payload.upper():
+        raise ValueError("Unsupported RSS payload")
+    articles = []
+    for item in ET.fromstring(payload).findall("./channel/item")[:20]:
+        title, link = item.findtext("title"), item.findtext("link")
+        if not title or not str(link or "").startswith(("https://", "http://")):
+            continue
+        try:
+            published = parsedate_to_datetime(item.findtext("pubDate") or "").isoformat()
+        except (ValueError, TypeError, OverflowError):
+            published = None
+        articles.append({"content": {"title": title, "pubDate": published,
+            "canonicalUrl": {"url": link},
+            "provider": {"displayName": item.findtext("source") or "Yahoo Finance RSS"}}})
+    return articles
+
+
 def market_news(symbol: str, limit: int = 8) -> Dict[str, Any]:
     symbol = _sanitize_symbol(symbol)
     key = f"news:{symbol}:{limit}"
@@ -1107,15 +1133,24 @@ def market_news(symbol: str, limit: int = 8) -> Dict[str, Any]:
         return cached
     try:
         raw_news = yf.Ticker(symbol).news or []
-    except Exception:
+    except Exception as exc:
+        logger.warning("Headline provider failed (%s)", type(exc).__name__)
         raw_news = []
     articles = []
     for item in raw_news:
+        if not isinstance(item, dict):
+            continue
         normalized = _normalize_news_item(item)
         if normalized:
             articles.append(normalized)
         if len(articles) >= limit:
             break
+    if not articles:
+        try:
+            articles = [article for item in _rss_news(symbol)
+                        if (article := _normalize_news_item(item))][:limit]
+        except Exception as exc:
+            logger.warning("Headline RSS fallback failed (%s)", type(exc).__name__)
     intelligence = _news_intelligence(articles)
     result = {
         "symbol": symbol,
@@ -3099,7 +3134,8 @@ def market_news_feed(limit: int = 12) -> Dict[str, Any]:
             "Media", "Gold", "Crude oil", "USD/INR",
         ],
         "generatedAt": datetime.now(timezone.utc).isoformat(),
-        "source": "Yahoo Finance headlines via yfinance",
+        "source": "Yahoo Finance headlines via yfinance / RSS fallback",
+        "status": "available" if articles else "unavailable",
     }
 
 
