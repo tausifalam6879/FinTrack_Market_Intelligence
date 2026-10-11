@@ -684,7 +684,7 @@ function PredictionOutcomeSummary({ status, loading, onOpen }) {
 }
 
 function SimpleMeaningCard({ analysis }) {
-  if (analysis.predictionAvailable === false) return <aside className="simple-meaning-card" aria-label="Research availability"><h4>Company research is available; prediction is not.</h4><p>{analysis.predictionStatus?.message}</p><p>Explore price history, company health, news and available annual reports. No rise or fall probability has been invented.</p></aside>;
+  if (analysis.predictionAvailable === false) return <aside className="simple-meaning-card" aria-label="Research availability"><h4>Company research is available; prediction is not.</h4><p>{analysis.predictionStatus?.message}</p><p>Explore price history, company health, news and available annual reports. No rise or fall probability has been invented.</p><p>Background preparation: {analysis.preparation?.status || "not requested"}. Candidate models require separate approval before serving.</p></aside>;
   const probabilityUp = Number(analysis.probabilityUp);
   const probabilityDown = Number(analysis.probabilityDown);
   const rsi = Number(analysis.technicalIndicators?.rsi14);

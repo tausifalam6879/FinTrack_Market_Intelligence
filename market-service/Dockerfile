@@ -17,6 +17,7 @@ COPY --chown=fintrack:fintrack app.py runtime_health.py runtime_metrics.py marke
 COPY --chown=fintrack:fintrack research_backtest.py ./
 COPY --chown=fintrack:fintrack event_impact.py ./
 COPY --chown=fintrack:fintrack artifact_storage.py request_budget.py ./
+COPY --chown=fintrack:fintrack preparation_queue.py ./
 RUN mkdir -p /app/data /app/artifacts \
     && chown -R fintrack:fintrack /app
 

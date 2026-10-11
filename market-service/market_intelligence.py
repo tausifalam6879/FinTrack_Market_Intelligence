@@ -5351,6 +5351,16 @@ def market_research_analysis(symbol: str) -> Dict[str, Any]:
         "disclaimer": "Observed market research only; no approved prediction is available.",
     }
     payload["persistentHistoryBars"] = _persist_research_history(symbol, snapshot["name"], frame)
+    payload["preparation"] = {"status": "disabled", "automaticApproval": False}
+    if os.getenv("ENABLE_COMPANY_PREPARATION_QUEUE", "false").lower() == "true" and payload["persistentHistoryBars"]:
+        try:
+            from preparation_queue import PreparationQueue
+            queue = PreparationQueue(Database())
+            queue.initialize()
+            payload["preparation"] = {**queue.enqueue(symbol), "automaticApproval": False}
+        except Exception as error:
+            logger.warning("Preparation enqueue unavailable for %s (%s)", symbol, type(error).__name__)
+            payload["preparation"] = {"status": "unavailable", "automaticApproval": False}
     return payload
 
 
