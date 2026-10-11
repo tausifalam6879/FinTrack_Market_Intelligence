@@ -111,13 +111,16 @@ def main() -> None:
 
             api_health = ready("http://127.0.0.1:8000")
             gateway_health = ready("http://" + gateway + ":8080")
-            data = request("http://" + gateway + ":8080", "/market/data-operations?symbol=RELIANCE.NS")
-            expected_bars = int(query("SELECT COUNT(*) FROM market_bars WHERE symbol='RELIANCE.NS'"))
+            # Select any restored company instead of hard-coding a particular listing.
+            symbol = query("SELECT symbol FROM market_bars GROUP BY symbol ORDER BY COUNT(*) DESC, symbol LIMIT 1")
+            from urllib.parse import quote
+            data = request("http://" + gateway + ":8080", "/market/data-operations?symbol=" + quote(symbol, safe=""))
+            expected_bars = int(query("SELECT COUNT(*) FROM market_bars WHERE symbol='" + symbol.replace("'", "''") + "'"))
             if expected_bars == 0 or data.get("storedBars") != expected_bars:
                 raise RuntimeError("Gateway data does not match restored history.")
             report["application"] = {"api": api_health["status"],
                 "database": api_health["checks"]["database"]["status"],
-                "gateway": gateway_health["status"], "verifiedRelianceBars": expected_bars}
+                "gateway": gateway_health["status"], "verifiedSymbol": symbol, "verifiedStoredBars": expected_bars}
             report["scope"] = "Restored database + API + gateway + stored history route; external AI and browser UI not tested"
             report["status"] = "application_restore_verified"
         report_path = backup.with_suffix(backup.suffix + ".restore-report.json")
