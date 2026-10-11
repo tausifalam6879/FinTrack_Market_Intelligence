@@ -10,6 +10,11 @@ import time
 import uuid
 
 
+def decode_model_record(record: str) -> dict:
+    """HEX transport avoids mysql --batch escaping nested JSON backslashes."""
+    return json.loads(bytes.fromhex(record).decode("utf-8"))
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("backup", type=Path)
@@ -85,13 +90,13 @@ def main() -> None:
             gateway = name + "-gateway"
             recovered_models = []
             if args.models:
-                records = query("SELECT JSON_OBJECT('symbol',symbol,'uri',artifact_path,'metrics',metrics_json) FROM model_runs WHERE status='approved'").splitlines()
+                records = query("SELECT HEX(JSON_OBJECT('symbol',symbol,'uri',artifact_path,'metrics',metrics_json)) FROM model_runs WHERE status='approved'").splitlines()
                 if not records or len(records) > 50:
                     raise RuntimeError("Expected between 1 and 50 approved model records in backup.")
                 artifact_dir = backup.parent / (name + "-artifacts")
                 artifact_dir.mkdir(mode=0o700)
                 for record in records:
-                    row = json.loads(record)
+                    row = decode_model_record(record)
                     metrics = json.loads(row["metrics"]) if isinstance(row["metrics"], str) else row["metrics"]
                     checksum = metrics.get("artifactSha256", "")
                     uri = row["uri"]
