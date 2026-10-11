@@ -5283,12 +5283,59 @@ def get_inr_currency_rates(refresh: bool = False):
         raise HTTPException(status_code=503, detail=str(error)) from error
 
 
+def market_research_analysis(symbol: str) -> Dict[str, Any]:
+    """Keep observed research available without manufacturing an unapproved forecast."""
+    symbol = _sanitize_symbol(symbol)
+    try:
+        return market_prediction(symbol)
+    except HTTPException as error:
+        if not isinstance(error.detail, dict) or error.detail.get("code") != "MODEL_UNAVAILABLE":
+            raise
+        message = error.detail["message"]
+    except ValueError as error:
+        if str(error) not in {
+            "At least 100 daily observations are required for a next-session outlook.",
+            "Not enough clean historical data for direction analysis.",
+        }:
+            raise
+        message = "Prediction unavailable: insufficient historical evidence. Observed company research remains available."
+    frame = _history(symbol, "2y")
+    snapshot = market_snapshot(symbol)
+    close = frame["Close"].dropna()
+    payload = {
+        "symbol": symbol, "name": snapshot["name"],
+        "outlook": "UNAVAILABLE", "predictionAvailable": False,
+        "predictionStatus": {"code": "MODEL_UNAVAILABLE", "message": message},
+        "probabilityUp": None, "probabilityDown": None,
+        "expectedRange": {"low": None, "high": None, "currency": snapshot["currency"]},
+        "lastClose": _round(close.iloc[-1]),
+        "technicalIndicators": {
+            "rsi14": None,
+            "sma20": _round(close.rolling(20).mean().iloc[-1]),
+            "sma50": _round(close.rolling(50).mean().iloc[-1]),
+            "dailyVolatility20d": _round(close.pct_change().rolling(20).std().iloc[-1] * 100),
+        },
+        "model": {"type": "Unavailable", "servingMode": "unavailable", "modelsCompared": [], "featureImportance": []},
+        "newsFactor": {}, "macroFactor": {"factors": []},
+        "riskBenchmark": market_risk_context(symbol, frame),
+        "dataAsOf": snapshot["dataAsOf"], "modelDataDate": None,
+        "generatedAt": datetime.now(timezone.utc).isoformat(),
+        "history": [{"date": index.strftime("%Y-%m-%d"), "close": _round(row["Close"])}
+                    for index, row in frame.tail(90).iterrows()],
+        "disclaimer": "Observed market research only; no approved prediction is available.",
+    }
+    payload["persistentHistoryBars"] = _persist_research_history(symbol, snapshot["name"], frame)
+    return payload
+
+
 @router.get("/analysis")
 def get_market_analysis(symbol: str = "^NSEI", refresh: bool = False):
     try:
         if refresh:
             clear_market_cache()
-        return market_prediction(symbol)
+        return market_research_analysis(symbol)
+    except HTTPException:
+        raise
     except ValueError as error:
         raise HTTPException(status_code=422, detail=str(error)) from error
     except Exception as error:
@@ -5312,7 +5359,7 @@ def compare_market_analyses(request: MarketComparisonRequest):
     rows: Dict[str, Dict[str, Any]] = {}
     errors: Dict[str, str] = {}
     with ThreadPoolExecutor(max_workers=min(4, len(normalized))) as executor:
-        pending = {executor.submit(market_prediction, symbol): symbol for symbol in normalized}
+        pending = {executor.submit(market_research_analysis, symbol): symbol for symbol in normalized}
         for future in as_completed(pending):
             symbol = pending[future]
             try:

@@ -545,7 +545,7 @@ export default function IntelligenceDesk({ initialSymbol = "^NSEI", onProviderCh
           <div className="notice warning">Model: {analysis.model?.type || "Unavailable"} · Serving: {analysis.model?.servingMode || "not reported"} · Evaluation: {analysis.model?.evaluatedAt || "not reported"}. Market data can be delayed; evidence date is shown above.</div>
           <SimpleMeaningCard analysis={analysis} />
         <div className="metric-grid essential-metric-grid">
-          <Metric label="Chance of rise" value={`${analysis.probabilityUp}%`} hint={`${analysis.probabilityDown}% chance of fall · not a guarantee`} onExplain={explainMetric} />
+          <Metric label="Chance of rise" value={analysis.probabilityUp == null ? "Unavailable" : `${analysis.probabilityUp}%`} hint={analysis.probabilityUp == null ? "No approved model. Company research remains available." : `${analysis.probabilityDown}% chance of fall · not a guarantee`} onExplain={explainMetric} />
             <Metric label="Volatility-based price range" value={`${formatNumber(analysis.expectedRange?.low)} – ${formatNumber(analysis.expectedRange?.high)}`} hint={`${analysis.expectedRange?.currency || "Local currency"} · not a calibrated confidence interval; price can move outside it`} onExplain={explainMetric} />
           <Metric label="Momentum (RSI)" value={formatNumber(analysis.technicalIndicators?.rsi14)} hint="30–70 usually means no extreme momentum" onExplain={explainMetric} />
         </div>
@@ -684,6 +684,7 @@ function PredictionOutcomeSummary({ status, loading, onOpen }) {
 }
 
 function SimpleMeaningCard({ analysis }) {
+  if (analysis.predictionAvailable === false) return <aside className="simple-meaning-card" aria-label="Research availability"><h4>Company research is available; prediction is not.</h4><p>{analysis.predictionStatus?.message}</p><p>Explore price history, company health, news and available annual reports. No rise or fall probability has been invented.</p></aside>;
   const probabilityUp = Number(analysis.probabilityUp);
   const probabilityDown = Number(analysis.probabilityDown);
   const rsi = Number(analysis.technicalIndicators?.rsi14);
