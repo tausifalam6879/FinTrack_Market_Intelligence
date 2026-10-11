@@ -13,6 +13,22 @@ class ResearchAvailabilityTests(unittest.TestCase):
         self.assertIsNone(brief["probabilityDown"])
         self.assertNotIn("expectedUpsidePoints", brief)
 
+    def test_company_summary_labels_values_and_preserves_zero_and_negative_returns(self):
+        answer = market._verified_tool_answer(
+            "Explain fundamentals", {"name": "Example", "currency": "INR"},
+            {"symbol": "INFY.NS", "predictionAvailable": False}, [], {},
+            company_profile={"fundamentals": {"marketCap": 1000000, "trailingPE": 13.94,
+                "earningsGrowth": 0, "dividendYield": None, "returnOnEquity": float("nan")},
+                "performance": {"oneMonth": -5.89}},
+        )
+        self.assertIn("Market capitalization: 1,000,000.00 INR", answer)
+        self.assertIn("Trailing price-to-earnings ratio: 13.94×", answer)
+        self.assertIn("Reported earnings growth: 0.00%", answer)
+        self.assertIn("One month: -5.89%", answer)
+        self.assertNotIn("Dividend yield:", answer)
+        self.assertNotIn("Return on equity:", answer)
+        self.assertNotIn('"fundamentals"', answer)
+
     def test_evidence_only_answer_includes_company_and_news_without_forecast(self):
         answer = market._verified_tool_answer(
             "Explain this company", {"name": "Example", "price": 125, "currency": "USD", "dataAsOf": "2026-10-11"},

@@ -4249,7 +4249,35 @@ def _verified_tool_answer(
         if snapshot.get("price") is not None:
             lines.append(f"Observed price: {snapshot['price']} {snapshot.get('currency', '')}; as of {snapshot.get('dataAsOf', 'not reported')}.")
         if company_profile:
-            lines.append("Available company evidence: " + json.dumps({key: company_profile.get(key) for key in ("sector", "industry", "fundamentals", "performance")}, default=str))
+            identity = [str(company_profile[key]) for key in ("sector", "industry") if company_profile.get(key)]
+            if identity:
+                lines.append("Company profile: " + " — ".join(identity) + ".")
+            fundamentals = company_profile.get("fundamentals") or {}
+            metric_labels = (
+                ("marketCap", "Market capitalization", snapshot.get("currency") or "listing currency"),
+                ("trailingPE", "Trailing price-to-earnings ratio", "×"),
+                ("priceToBook", "Price-to-book ratio", "×"),
+                ("returnOnEquity", "Return on equity", "%"),
+                ("earningsGrowth", "Reported earnings growth", "%"),
+                ("revenueGrowth", "Reported revenue growth", "%"),
+                ("debtToEquity", "Provider-reported debt-to-equity ratio", ""),
+                ("dividendYield", "Dividend yield", "%"),
+            )
+            metrics = []
+            for key, label, unit in metric_labels:
+                value = _round(fundamentals.get(key))
+                if value is not None:
+                    metrics.append(f"- {label}: {value:,.2f}{unit if unit in {'%', '×'} else ' ' + unit if unit else ''}.")
+            lines.append("Available financial metrics\n" + "\n".join(metrics) if metrics else "Financial metrics are unavailable in the retrieved evidence.")
+            performance = company_profile.get("performance") or {}
+            returns = []
+            for key, label in (("oneDay", "One day"), ("oneMonth", "One month"), ("threeMonths", "Three months"), ("sixMonths", "Six months"), ("oneYear", "One year")):
+                value = _round(performance.get(key))
+                if value is not None:
+                    returns.append(f"- {label}: {value:+.2f}%.")
+            if returns:
+                lines.append("Historical price performance\n" + "\n".join(returns))
+            lines.append("Financial fields can use different reporting periods and may be delayed. Historical returns are not forecasts; these metrics alone do not establish investment quality.")
         for article in (news_payload or {}).get("articles", [])[:3]:
             lines.append(f"Headline: {article.get('title')} (publisher: {article.get('publisher')}; published: {article.get('publishedAt')}).")
         if document_requested:
