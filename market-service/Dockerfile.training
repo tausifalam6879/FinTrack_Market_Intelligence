@@ -1,0 +1,10 @@
+# A dedicated offline-training layer on the lightweight serving image.
+ARG RUNTIME_IMAGE
+FROM ${RUNTIME_IMAGE}
+USER root
+COPY requirements-training.txt ./
+RUN pip install --no-cache-dir torch==2.12.1 --index-url https://download.pytorch.org/whl/cpu \
+    && pip install --no-cache-dir -r requirements-training.txt \
+    && python -c "import torch, mlflow, offline_training; assert not torch.version.cuda; print('Training dependencies verified')"
+USER fintrack
+CMD ["python", "offline_training.py", "--all-stored", "--list-only"]
