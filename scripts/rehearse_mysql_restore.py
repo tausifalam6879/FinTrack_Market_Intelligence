@@ -15,7 +15,10 @@ def main() -> None:
     parser.add_argument("backup", type=Path)
     parser.add_argument("--application", action="store_true",
                         help="Also test prebuilt fintrack-rehearsal-api/gateway:local images.")
+    parser.add_argument("--models", action="store_true", help="Recover approved GCS artifacts and test inference in the isolated API.")
     args = parser.parse_args()
+    if args.models and not args.application:
+        parser.error("--models requires --application")
     backup = args.backup.resolve(strict=True)
     manifest = json.loads(backup.with_suffix(backup.suffix + ".manifest.json").read_text())
     digest = hashlib.sha256(backup.read_bytes()).hexdigest()
@@ -80,13 +83,40 @@ def main() -> None:
         if args.application:
             api = name + "-api"
             gateway = name + "-gateway"
+            recovered_models = []
+            if args.models:
+                records = query("SELECT JSON_OBJECT('symbol',symbol,'uri',artifact_path,'metrics',metrics_json) FROM model_runs WHERE status='approved'").splitlines()
+                if not records or len(records) > 50:
+                    raise RuntimeError("Expected between 1 and 50 approved model records in backup.")
+                artifact_dir = backup.parent / (name + "-artifacts")
+                artifact_dir.mkdir(mode=0o700)
+                for record in records:
+                    row = json.loads(record)
+                    metrics = json.loads(row["metrics"]) if isinstance(row["metrics"], str) else row["metrics"]
+                    checksum = metrics.get("artifactSha256", "")
+                    uri = row["uri"]
+                    if not isinstance(uri, str) or not uri.startswith("gs://fintrack-models-304232323336/models/") or not uri.endswith(".joblib"):
+                        raise RuntimeError("Restored artifact is outside the trusted model bucket.")
+                    if len(checksum) != 64 or any(c not in "0123456789abcdef" for c in checksum):
+                        raise RuntimeError("Invalid registered artifact checksum.")
+                    target = artifact_dir / (checksum + ".joblib")
+                    run("gcloud", "storage", "cp", uri, str(target))
+                    if hashlib.sha256(target.read_bytes()).hexdigest() != checksum:
+                        raise RuntimeError("Recovered model checksum mismatch.")
+                    target.chmod(0o644)
+                    recovered_models.append(row["symbol"])
             run("docker", "run", "-d", "--rm", "--name", api, "--network", network,
                 "--memory", "2g", "--cpus", "1",
                 "-e", "MYSQL_HOST=" + name, "-e", "MYSQL_PORT=3306",
                 "-e", "MYSQL_DATABASE=fintrack_restore", "-e", "MYSQL_USER=rehearsal",
                 "-e", "MYSQL_PASSWORD=" + password, "-e", "REQUIRE_DURABLE_DATABASE=true",
-                "-e", "LLM_PROVIDER=offline", "fintrack-rehearsal-api:local")
+                "-e", "LLM_PROVIDER=offline",
+                "-e", "MODEL_ARTIFACT_BUCKET=fintrack-models-304232323336",
+                "fintrack-rehearsal-api:local")
             application_containers.append(api)
+            if args.models:
+                for target in artifact_dir.glob("*.joblib"):
+                    run("docker", "cp", str(target), api + ":/app/artifacts/" + target.name)
             run("docker", "run", "-d", "--rm", "--name", gateway, "--network", network,
                 "--memory", "1g", "--cpus", "1",
                 "-e", "FINTRACK_GATEWAY_UPSTREAM_BASE_URL=http://" + api + ":8000",
@@ -123,6 +153,13 @@ def main() -> None:
                 "gateway": gateway_health["status"], "verifiedSymbol": symbol, "verifiedStoredBars": expected_bars}
             report["scope"] = "Restored database + API + gateway + stored history route; external AI and browser UI not tested"
             report["status"] = "application_restore_verified"
+            if args.models:
+                code = (Path(__file__).parent / "check_recovered_models.py").read_text(encoding="utf-8")
+                tested = json.loads(run("docker", "exec", api, "python", "-c", code,
+                                        json.dumps(sorted(set(recovered_models)))).stdout)
+                report["models"] = tested
+                report["status"] = "model_application_restore_verified"
+                report["scope"] += "; approved artifacts checksum-verified and inference tested on stored reference features, not live provider data"
         report_path = backup.with_suffix(backup.suffix + ".restore-report.json")
         report_path.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
         print(json.dumps(report, indent=2))

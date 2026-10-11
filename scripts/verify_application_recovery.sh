@@ -20,6 +20,8 @@ print('Backup checksum verified')
 PY
 docker build -t fintrack-rehearsal-api:local "$REPO_ROOT/market-service"
 docker build -t fintrack-rehearsal-gateway:local "$REPO_ROOT/gateway-service"
-python3 "$REPO_ROOT/scripts/rehearse_mysql_restore.py" "$RECOVERY_DIR/backup.sql" --application
-gcloud storage cp "$RECOVERY_DIR/backup.sql.restore-report.json" "${BACKUP_URI}.application-restore-report.json"
+python3 "$REPO_ROOT/scripts/rehearse_mysql_restore.py" "$RECOVERY_DIR/backup.sql" --application "$@"
+REPORT_SUFFIX="application-restore-report.json"
+if [[ " $* " == *" --models "* ]]; then REPORT_SUFFIX="model-application-restore-report.json"; fi
+gcloud storage cp "$RECOVERY_DIR/backup.sql.restore-report.json" "${BACKUP_URI}.${REPORT_SUFFIX}"
 printf '\nApplication recovery rehearsal complete. Report saved privately. Production unchanged. Local backup retained at %s.\n' "$RECOVERY_DIR"
