@@ -27,15 +27,14 @@ def _enabled(value: Optional[str]) -> bool:
 
 
 def _default_mysql_tracking_uri() -> str:
-    database_url = Database().url.replace("mysql://", "mysql+pymysql://", 1)
-    parsed = urlparse(database_url)
-    return urlunparse(parsed._replace(path="/fintrack_mlflow"))
+    parsed = urlparse(Database().url)
+    return urlunparse(parsed._replace(scheme="mysql+pymysql", path="/fintrack_mlflow"))
 
 
 def _sqlalchemy_mysql_uri(uri: str) -> str:
     if not uri.startswith(("mysql://", "mysql+pymysql://")):
         return uri
-    parsed = urlparse(uri.replace("mysql://", "mysql+pymysql://", 1))
+    parsed = urlparse(uri)._replace(scheme="mysql+pymysql")
     query = dict(parse_qsl(parsed.query))
     mode = query.pop("ssl-mode", query.pop("sslmode", "")).lower()
     ca = query.pop("ssl-ca", None)
@@ -242,7 +241,7 @@ def log_training_experiment(
             }
     except Exception as error:
         if configuration["required"]:
-            raise RuntimeError(f"Required MLflow tracking failed: {error}") from error
+            raise RuntimeError(f"Required MLflow tracking failed ({type(error).__name__}); check tracking configuration.") from None
         return {
             "enabled": False,
             "status": "unavailable",
@@ -251,7 +250,8 @@ def log_training_experiment(
             "backend": configuration["backend"],
             "artifactLogged": False,
             "deepLearningArtifactLogged": False,
-            "message": str(error)[:300],
+            "message": "MLflow tracking unavailable; check the tracking database and configuration.",
+            "errorType": type(error).__name__,
             "loggedAt": utc_now(),
         }
 
