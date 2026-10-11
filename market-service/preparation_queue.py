@@ -121,7 +121,22 @@ def process_queue(database, limit=3):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Prepare queued companies in a trusted offline training job.")
     parser.add_argument("--limit", type=int, default=3)
+    parser.add_argument("--check-only", action="store_true", help="Verify dependencies and database queue without ingestion or training.")
     args = parser.parse_args()
+    if args.check_only:
+        import torch
+        database = Database()
+        database.ping()
+        queue = PreparationQueue(database)
+        queue.initialize()
+        with database.connect() as connection:
+            cursor = connection.cursor()
+            cursor.execute("SELECT status, COUNT(*) AS count FROM company_preparation GROUP BY status")
+            counts = database._rows(cursor)
+        print(json.dumps({"status": "ready", "queueCounts": counts,
+                          "torchVersion": torch.__version__, "trainingStarted": False,
+                          "automaticApproval": False}), flush=True)
+        raise SystemExit(0)
     result = process_queue(Database(), args.limit)
     print(json.dumps(result), flush=True)
     if any(row["status"] == "failed" for row in result["results"]):
