@@ -312,18 +312,47 @@ def train_symbols(
     }
 
 
+def stored_training_universe(database: Database) -> Dict[str, Any]:
+    """Discover every stored symbol, without the dashboard's 500-symbol limit."""
+    with database.connect() as connection:
+        cursor = connection.cursor()
+        cursor.execute("SELECT symbol, COUNT(*) AS bars FROM market_bars GROUP BY symbol ORDER BY symbol")
+        rows = database._rows(cursor)
+    return {
+        "eligible": [str(row["symbol"]) for row in rows if int(row["bars"]) >= 180],
+        "skipped": [{"symbol": str(row["symbol"]), "storedBars": int(row["bars"]),
+                     "reason": "At least 180 stored daily bars required"}
+                    for row in rows if int(row["bars"]) < 180],
+        "discovered": len(rows),
+    }
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Train versioned FinTrack models from persisted OHLCV data.")
-    parser.add_argument("--symbols", nargs="+", required=True, help="One or more stored Yahoo Finance symbols.")
+    selection = parser.add_mutually_exclusive_group(required=True)
+    selection.add_argument("--symbols", nargs="+", help="One or more stored Yahoo Finance symbols.")
+    selection.add_argument("--all-stored", action="store_true", help="Discover all symbols with at least 180 stored daily bars.")
+    parser.add_argument("--list-only", action="store_true", help="Report eligible symbols without training or approving models.")
     parser.add_argument("--database-url", help="MySQL URL override.")
     parser.add_argument("--artifact-dir", help="Directory for trusted joblib model artifacts.")
     arguments = parser.parse_args()
+    repository = Database(arguments.database_url)
+    universe = stored_training_universe(repository) if arguments.all_stored else {
+        "eligible": arguments.symbols, "skipped": [], "discovered": len(arguments.symbols)}
+    if arguments.list_only:
+        print(json.dumps({"status": "inventory", **universe}, indent=2))
+        return
+    if not universe["eligible"]:
+        print(json.dumps({"status": "no_eligible_symbols", **universe}, indent=2))
+        raise SystemExit(1)
     result = train_symbols(
-        arguments.symbols,
-        database=Database(arguments.database_url),
+        universe["eligible"],
+        database=repository,
         artifact_dir=Path(arguments.artifact_dir) if arguments.artifact_dir else None,
     )
-    print(json.dumps(result, indent=2))
+    print(json.dumps({**result, "universe": universe}, indent=2))
+    if result["errors"]:
+        raise SystemExit(1)
 
 
 if __name__ == "__main__":
