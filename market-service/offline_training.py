@@ -299,10 +299,16 @@ def train_symbols(
     results = []
     errors = []
     for symbol in dict.fromkeys(normalize_symbol(item) for item in symbols):
+        print(json.dumps({"event": "training_started", "symbol": symbol}), flush=True)
         try:
-            results.append(train_symbol(symbol, repository, artifact_dir))
+            result = train_symbol(symbol, repository, artifact_dir)
+            results.append(result)
+            print(json.dumps({"event": "training_finished", "symbol": symbol,
+                              "status": result.get("status"), "modelRunId": result.get("modelRunId")}), flush=True)
         except Exception as error:
             errors.append({"symbol": symbol, "error": str(error)})
+            print(json.dumps({"event": "training_failed", "symbol": symbol,
+                              "errorType": type(error).__name__}), flush=True)
     return {
         "status": "completed" if not errors else "partial" if results else "failed",
         "modelsCreated": len(results),

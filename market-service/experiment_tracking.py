@@ -7,7 +7,7 @@ import os
 from pathlib import Path
 import re
 from typing import Any, Dict, Optional
-from urllib.parse import urlparse, urlunparse
+from urllib.parse import urlparse, urlunparse, parse_qsl, urlencode
 
 from data_pipeline import normalize_symbol
 from persistence import Database, utc_now
@@ -32,9 +32,41 @@ def _default_mysql_tracking_uri() -> str:
     return urlunparse(parsed._replace(path="/fintrack_mlflow"))
 
 
+def _sqlalchemy_mysql_uri(uri: str) -> str:
+    if not uri.startswith(("mysql://", "mysql+pymysql://")):
+        return uri
+    parsed = urlparse(uri.replace("mysql://", "mysql+pymysql://", 1))
+    query = dict(parse_qsl(parsed.query))
+    mode = query.pop("ssl-mode", query.pop("sslmode", "")).lower()
+    ca = query.pop("ssl-ca", None)
+    enabled = query.pop("ssl", "").lower() in {"1", "true", "yes", "required"}
+    if ca:
+        query["ssl_ca"] = ca
+    if enabled or ca or mode in {"required", "verify_ca", "verify_identity"}:
+        query["ssl_verify_cert"] = "true"
+        query["ssl_verify_identity"] = "false" if mode == "verify_ca" else "true"
+    query.setdefault("connect_timeout", "10")
+    query.setdefault("read_timeout", "30")
+    query.setdefault("write_timeout", "30")
+    return urlunparse(parsed._replace(query=urlencode(query)))
+
+
+def _tracking_preflight(uri: str) -> None:
+    if not uri.startswith("mysql+pymysql://"):
+        return
+    # Fail once before MLflow's store constructor enters its exponential retries.
+    from sqlalchemy import create_engine
+    engine = create_engine(uri, pool_pre_ping=False)
+    try:
+        with engine.connect() as connection:
+            connection.exec_driver_sql("SELECT 1")
+    finally:
+        engine.dispose()
+
+
 def mlflow_configuration() -> Dict[str, Any]:
     configured_uri = os.getenv("MLFLOW_TRACKING_URI", "").strip()
-    tracking_uri = configured_uri or _default_mysql_tracking_uri()
+    tracking_uri = _sqlalchemy_mysql_uri(configured_uri or _default_mysql_tracking_uri())
     parsed_scheme = tracking_uri.split(":", 1)[0].lower() if ":" in tracking_uri else "file"
     artifact_root = os.getenv("MLFLOW_ARTIFACT_ROOT", "").strip() or DEFAULT_MLFLOW_ARTIFACTS.resolve().as_uri()
     return {
@@ -93,6 +125,7 @@ def log_training_experiment(
     configuration = mlflow_configuration()
     try:
         mlflow = _mlflow_module()
+        _tracking_preflight(configuration["trackingUri"])
         mlflow.set_tracking_uri(configuration["trackingUri"])
         client = mlflow.MlflowClient(tracking_uri=configuration["trackingUri"])
         experiment = client.get_experiment_by_name(configuration["experimentName"])
