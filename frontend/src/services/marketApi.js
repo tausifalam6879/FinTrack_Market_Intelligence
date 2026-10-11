@@ -102,7 +102,9 @@ const request = async (path, { method = "GET", body, timeout = 30000, retry = me
         });
         if (!response.ok) {
           const detail = await response.text();
-          const error = new Error(detail || `Request failed with status ${response.status}`);
+          let message = detail;
+          try { const parsed = JSON.parse(detail); message = parsed.detail?.message || parsed.detail || detail; } catch { /* Non-JSON gateway error. */ }
+          const error = new Error(typeof message === "string" ? message : `Request failed with status ${response.status}`);
           error.status = response.status;
           throw error;
         }
@@ -146,7 +148,9 @@ const withCache = async (name, loader) => {
       throw new Error(name === "news-feed" ? "The headline provider returned no usable headlines." : "The currency provider returned no usable positive INR rates.");
     }
     writeCache(name, data);
-    return { data, mode: "live", savedAt: data.generatedAt || new Date().toISOString() };
+    return { data, mode: "live", savedAt: data.generatedAt || new Date().toISOString(),
+      freshness: { fetchedAt: new Date().toISOString(), dataAsOf: data.dataAsOf || data.generatedAt || null,
+        notice: "Latest available provider response; quotes may be delayed. Fetch time is not market observation time." } };
   } catch (error) {
     const cached = readCache(name);
     if (cached?.data) {

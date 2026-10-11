@@ -1,5 +1,7 @@
 from contextlib import asynccontextmanager
 import time
+import os
+from request_budget import RequestBudget
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -34,8 +36,28 @@ app.add_middleware(
     allow_credentials=False,
     allow_methods=["GET", "POST", "OPTIONS"],
     allow_headers=["Content-Type", "X-Request-Id"],
-    expose_headers=["X-Response-Time-Ms"],
+    expose_headers=["X-Response-Time-Ms", "Retry-After", "X-FinTrack-Fetched-At"],
 )
+
+expensive_budget = RequestBudget(int(os.getenv("EXPENSIVE_REQUESTS_PER_MINUTE", "30")),
+                                 int(os.getenv("EXPENSIVE_REQUESTS_CONCURRENT", "2")))
+
+
+@app.middleware("http")
+async def expensive_request_limit(request, call_next):
+    expensive = request.method != "OPTIONS" and (
+        request.url.path in {"/market/analysis", "/market/predictions", "/market/compare", "/market/agent",
+                             "/market/backtest", "/market/event-impact"}
+        or (request.method == "POST" and "document" in request.url.path)
+    )
+    if expensive and not expensive_budget.acquire():
+        return JSONResponse({"detail": "Research capacity reached. Please retry after 60 seconds."},
+                            status_code=429, headers={"Retry-After": "60", "Access-Control-Allow-Origin": "*"})
+    try:
+        return await call_next(request)
+    finally:
+        if expensive:
+            expensive_budget.release()
 
 
 @app.middleware("http")

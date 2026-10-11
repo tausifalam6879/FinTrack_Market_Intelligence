@@ -16,6 +16,7 @@ RUN pip install --no-cache-dir -r requirements-runtime.txt \
 COPY --chown=fintrack:fintrack app.py runtime_health.py runtime_metrics.py market_intelligence.py agent_orchestrator.py company_catalog.py persistence.py data_pipeline.py data_operations.py operations_pipeline.py monitoring_job.py offline_training.py deep_learning.py experiment_tracking.py model_registry.py model_monitoring.py drift_monitoring.py document_rag.py official_documents.py sec_filings.py ./
 COPY --chown=fintrack:fintrack research_backtest.py ./
 COPY --chown=fintrack:fintrack event_impact.py ./
+COPY --chown=fintrack:fintrack artifact_storage.py request_budget.py ./
 RUN mkdir -p /app/data /app/artifacts \
     && chown -R fintrack:fintrack /app
 

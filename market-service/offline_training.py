@@ -192,6 +192,8 @@ def train_symbol(
     }
     joblib.dump(artifact_payload, artifact_path, compress=3)
     artifact_sha256 = _artifact_checksum(artifact_path)
+    from artifact_storage import publish_artifact
+    registered_artifact_path = publish_artifact(artifact_path, artifact_sha256)
 
     metrics = {
         **holdout_metrics,
@@ -243,7 +245,7 @@ def train_symbol(
         "id": run_id,
         "symbol": normalized,
         "model_name": selected["name"],
-        "artifact_path": str(artifact_path.resolve()),
+        "artifact_path": registered_artifact_path,
         "dataset_version": version,
         "training_start": training_period["start"],
         "training_end": training_period["end"],
@@ -268,7 +270,7 @@ def train_symbol(
         "status": run_status,
         "model": selected["name"],
         "datasetVersion": version,
-        "artifactPath": str(artifact_path.resolve()),
+        "artifactPath": registered_artifact_path,
         "artifactSha256": artifact_sha256,
         "trainingPeriod": {
             "start": run["training_start"], "end": run["training_end"], "rows": len(training),

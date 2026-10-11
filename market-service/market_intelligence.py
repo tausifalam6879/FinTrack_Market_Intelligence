@@ -369,11 +369,23 @@ class MarketComparisonRequest(BaseModel):
 def _cache_get(key: str, ttl_seconds: int = CACHE_TTL_SECONDS) -> Optional[Any]:
     item = _cache.get(key)
     if item and time.time() - item["created_at"] < ttl_seconds:
-        return item["value"]
+        value = item["value"]
+        if isinstance(value, dict):
+            return {**value, "freshness": {
+                "delivery": "server_cache", "cacheAgeSeconds": round(time.time() - item["created_at"], 1),
+                "dataAsOf": value.get("dataAsOf") or value.get("generatedAt"),
+                "notice": "Cached provider data; observation timestamps determine freshness.",
+            }}
+        return value
     return None
 
 
 def _cache_put(key: str, value: Any) -> Any:
+    if isinstance(value, dict):
+        value = {**value, "freshness": {
+            "delivery": "computed", "dataAsOf": value.get("dataAsOf") or value.get("generatedAt"),
+            "notice": "Latest computation may use delayed provider observations.",
+        }}
     _cache[key] = {"created_at": time.time(), "value": value}
     return value
 
@@ -3731,13 +3743,13 @@ def market_prediction(symbol: str) -> Dict[str, Any]:
     dataset = dataset.iloc[:-1].dropna()
     latest_features = features.dropna().iloc[-1:]
     if len(dataset) < 80 or latest_features.empty or dataset["target"].nunique() < 2:
-        raise ValueError("Not enough clean historical data to train the direction model.")
+        raise ValueError("Not enough clean historical data for direction analysis.")
 
     registry_model = None
     try:
         registry_model = approved_model(symbol)
     except Exception as error:
-        logger.warning("Approved model lookup failed for %s; using runtime fallback: %s", symbol, error)
+        logger.warning("Approved model lookup failed for %s (%s)", symbol, type(error).__name__)
 
     if registry_model:
         run = registry_model["run"]
@@ -3774,17 +3786,11 @@ def market_prediction(symbol: str) -> Dict[str, Any]:
         explanation_reference = artifact.get("explainabilityReference")
         selection_description = "Approved offline artifact that passed the final chronological holdout quality gate."
     else:
-        validation = _walk_forward_model_comparison(dataset, feature_columns)
-        selected = validation["selected"]
-        model = _candidate_models()[selected["id"]]["estimator"]
-        model.fit(dataset[feature_columns], dataset["target"])
-        evaluation_metrics = selected
-        model_run_id = None
-        model_dataset_version = None
-        serving_mode = "runtime_fallback"
-        model_training_rows = len(dataset)
-        explanation_reference = None
-        selection_description = "Runtime fallback: best of three classifiers by walk-forward validation score."
+        raise HTTPException(status_code=503, detail={
+            "code": "MODEL_UNAVAILABLE", "symbol": symbol,
+            "message": "No verified approved model is available. Prediction requires offline training and approval; other market information remains available.",
+            "trainingDuringRequest": False,
+        })
 
     raw_technical_probability = float(model.predict_proba(latest_features[feature_columns])[0][1])
     balanced_accuracy = float(evaluation_metrics["balancedAccuracy"])
@@ -3852,6 +3858,9 @@ def market_prediction(symbol: str) -> Dict[str, Any]:
         "probabilityUp": _round(probability_up * 100, 1),
         "probabilityDown": _round(probability_down * 100, 1),
         "expectedRange": {
+            "method": "20-session volatility × 1.28, minimum movement 0.5%",
+            "kind": "volatility_estimate",
+            "calibratedConfidenceInterval": False,
             "low": _round(close * (1 - range_move)),
             "high": _round(close * (1 + range_move)),
             "currency": snapshot["currency"],
@@ -3876,6 +3885,8 @@ def market_prediction(symbol: str) -> Dict[str, Any]:
             "selection": selection_description,
             "servingMode": serving_mode,
             "modelRunId": model_run_id,
+            "evaluatedAt": str(run["created_at"]),
+            "evaluationPeriod": {"start": run["holdout_start"], "end": run["holdout_end"]},
             "datasetVersion": model_dataset_version,
             "trainingRows": model_training_rows,
             "testRows": selected.get("testRows", 0),

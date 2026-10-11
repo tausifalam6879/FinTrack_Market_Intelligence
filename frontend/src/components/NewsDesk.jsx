@@ -110,7 +110,7 @@ export default function NewsDesk({ onResearch, onDataChange }) {
             </article>;
           })}
         </div>
-      ) : <div className="news-empty">No matching current headline was returned. Try another filter or refresh the feed.</div>}
+      ) : <div className="news-empty">{error ? "The news provider is unavailable and no matching saved headlines are available." : (result?.data?.articles?.length ? "No headlines match these filters. Clear the search or select All." : "The provider returned no usable headlines. Refresh the feed later.")}</div>}
 
       <div id="news-sources" className="news-footer-note">
         <span>Source: {result?.data?.source || "Yahoo Finance headlines via yfinance"}</span>

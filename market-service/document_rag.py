@@ -597,7 +597,11 @@ def answer_document_question(
                 {"role": "user", "content": f"Question: {question}\n\nEvidence:\n{evidence}"},
             ])
             used = set(re.findall(r"\[S\d+ p\.\d+\]", candidate))
-            if candidate.strip() and used and used.issubset(allowed):
+            paragraphs = [part.strip() for part in candidate.split("\n\n") if len(part.split()) >= 8]
+            every_paragraph_cited = bool(paragraphs) and all(
+                re.search(r"\[S\d+ p\.\d+\]", part) for part in paragraphs
+            )
+            if candidate.strip() and used and used.issubset(allowed) and every_paragraph_cited:
                 answer = candidate.strip()
                 generation_mode = f"{provider}_grounded"
         except RuntimeError:
@@ -609,9 +613,11 @@ def answer_document_question(
         "generationMode": generation_mode,
         "embeddingProvider": retrieval["provider"],
         "citations": [{key: match[key] for key in (
-            "citation", "documentId", "title", "reportingPeriod", "sourceUrl", "page", "score", "snippet"
+            "citation", "documentId", "title", "documentType", "reportingPeriod", "sourceUrl", "page", "score", "snippet"
         )} for match in matches],
         "generatedAt": utc_now(),
+        "evidenceStatus": "retrieved" if matches else "insufficient",
+        "evidenceNotice": "Retrieved passages support this response; references do not independently verify every generated claim." if matches else "Insufficient relevant document evidence. Add a suitable report or ask a more specific question.",
         "disclaimer": "Document-grounded educational research; not investment advice.",
     }
 

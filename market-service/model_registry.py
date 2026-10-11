@@ -12,6 +12,7 @@ import re
 from typing import Any, Dict, Optional
 
 import joblib
+from artifact_storage import resolve_artifact
 
 from persistence import Database, utc_now
 from data_operations import data_operations_snapshot
@@ -31,9 +32,9 @@ def _json_object(value: Any) -> Dict[str, Any]:
         return {}
 
 
-def _trusted_artifact_path(path_value: str, trusted_root: Optional[Path] = None) -> Path:
+def _trusted_artifact_path(path_value: str, trusted_root: Optional[Path] = None, checksum: str = "") -> Path:
     root = Path(trusted_root or os.getenv("MODEL_ARTIFACT_DIR") or DEFAULT_ARTIFACT_DIR).resolve()
-    path = Path(path_value).resolve()
+    path = resolve_artifact(path_value, root, checksum)
     try:
         path.relative_to(root)
     except ValueError as error:
@@ -81,8 +82,8 @@ def approve_model(
     quality_gate = _json_object(metrics.get("qualityGate"))
     if quality_gate.get("passed") is not True:
         raise ValueError("Model run did not pass the registered offline quality gate.")
-    artifact_path = _trusted_artifact_path(run["artifact_path"], trusted_root)
     expected_sha256 = str(metrics.get("artifactSha256") or "")
+    artifact_path = _trusted_artifact_path(run["artifact_path"], trusted_root, expected_sha256)
     artifact = _load_verified_artifact(str(artifact_path), expected_sha256)
     if artifact.get("modelRunId") != run_id or artifact.get("symbol") != run["symbol"]:
         raise ValueError("Artifact identity does not match the registered model run.")
@@ -112,10 +113,12 @@ def approved_model(
     if not run:
         return None
     metrics = _json_object(run.get("metrics_json"))
-    path = _trusted_artifact_path(run["artifact_path"], trusted_root)
+    path = _trusted_artifact_path(run["artifact_path"], trusted_root, str(metrics.get("artifactSha256") or ""))
     artifact = _load_verified_artifact(str(path), str(metrics.get("artifactSha256") or ""))
     if artifact.get("modelRunId") != run["id"] or artifact.get("symbol") != symbol:
         raise ValueError("Approved artifact identity is invalid.")
+    if artifact.get("datasetVersion") != run["dataset_version"]:
+        raise ValueError("Approved artifact dataset version is invalid.")
     return {"run": run, "metrics": metrics, "artifact": artifact}
 
 
@@ -211,7 +214,7 @@ def monitoring_snapshot(symbol: str, database: Optional[Database] = None) -> Dic
     } for row in records[:8]]
     return {
         "symbol": symbol,
-        "servingMode": "approved_artifact" if approved else "runtime_fallback",
+        "servingMode": "approved_artifact" if approved else "model_unavailable",
         "approvedModel": public_run(approved),
         "latestModelRun": public_run(latest),
         "predictionMonitoring": {

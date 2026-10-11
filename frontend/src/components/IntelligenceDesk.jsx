@@ -307,6 +307,7 @@ export default function IntelligenceDesk({ initialSymbol = "^NSEI", onProviderCh
       const nextResult = await marketApi.analysis(normalized, refresh);
       if (loadSequenceRef.current === requestId) {
         setResult(nextResult);
+        setError(nextResult.error || "");
         if (!normalized.startsWith("^") && nextResult?.data?.name) {
           setResolvedCompany((current) => current?.symbol === normalized ? current : {
             symbol: normalized,
@@ -315,8 +316,8 @@ export default function IntelligenceDesk({ initialSymbol = "^NSEI", onProviderCh
           });
         }
       }
-    } catch {
-      if (!silent && loadSequenceRef.current === requestId) setError(`Research for ${normalized} is temporarily unavailable.`);
+    } catch (failure) {
+      if (loadSequenceRef.current === requestId) setError(failure.message || `Research for ${normalized} is temporarily unavailable.`);
     } finally {
       if (loadSequenceRef.current === requestId) setLoading(false);
     }
@@ -541,10 +542,11 @@ export default function IntelligenceDesk({ initialSymbol = "^NSEI", onProviderCh
           remove={removeSavedResearch}
           openResearch={(item) => { setResolvedCompany(item); load(item.symbol); }}
         />}
-        <SimpleMeaningCard analysis={analysis} />
+          <div className="notice warning">Model: {analysis.model?.type || "Unavailable"} · Serving: {analysis.model?.servingMode || "not reported"} · Evaluation: {analysis.model?.evaluatedAt || "not reported"}. Market data can be delayed; evidence date is shown above.</div>
+          <SimpleMeaningCard analysis={analysis} />
         <div className="metric-grid essential-metric-grid">
           <Metric label="Chance of rise" value={`${analysis.probabilityUp}%`} hint={`${analysis.probabilityDown}% chance of fall · not a guarantee`} onExplain={explainMetric} />
-          <Metric label="Likely next-session range" value={`${formatNumber(analysis.expectedRange?.low)} – ${formatNumber(analysis.expectedRange?.high)}`} hint={`${analysis.expectedRange?.currency || "Local currency"} · price can move outside it`} onExplain={explainMetric} />
+            <Metric label="Volatility-based price range" value={`${formatNumber(analysis.expectedRange?.low)} – ${formatNumber(analysis.expectedRange?.high)}`} hint={`${analysis.expectedRange?.currency || "Local currency"} · not a calibrated confidence interval; price can move outside it`} onExplain={explainMetric} />
           <Metric label="Momentum (RSI)" value={formatNumber(analysis.technicalIndicators?.rsi14)} hint="30–70 usually means no extreme momentum" onExplain={explainMetric} />
         </div>
         <nav id="intelligence-detail-views" className="intelligence-view-tabs" aria-label="Intelligence detail views">
@@ -1722,12 +1724,12 @@ function ModelRegistryPanel({ status, loading, error, activeModel, operationsSta
     <div className="registry-heading">
       <div>
         <p className="eyebrow">MODEL DEPLOYMENT & MONITORING</p>
-        <h3 id="registry-title">{approvedServing ? "Approved offline model is serving" : "Runtime fallback is serving"}</h3>
+        <h3 id="registry-title">{approvedServing ? "Approved offline model is registered" : "Approved model unavailable"}</h3>
         <p>{approvedServing
           ? "The prediction uses a checksummed artifact that passed an untouched chronological holdout."
-          : "No approved artifact is available for this symbol; the existing request-time experiment remains active."}</p>
+          : "No approved artifact is registered for this symbol. Offline training and approval are required; predictions do not train a model during the request."}</p>
       </div>
-      <span className={`registry-status ${approvedServing ? "approved" : "fallback"}`}>{approvedServing ? "Approved artifact" : "Fallback mode"}</span>
+      <span className={`registry-status ${approvedServing ? "approved" : "fallback"}`}>{approvedServing ? "Approved artifact" : "Unavailable"}</span>
     </div>
     {loading && <div className="registry-state">Loading persistent model provenance…</div>}
     {!loading && error && <div className="registry-state warning">{error}</div>}
@@ -1948,6 +1950,7 @@ function DocumentRagPanel({ symbol, documents, documentsLoading, preparation, pr
     {result && <div className="rag-answer">
       <div className="rag-answer-meta"><strong>Grounded answer</strong><span>{result.generationMode.replaceAll("_", " ")} · {result.embeddingProvider}</span></div>
       <p>{result.answer}</p>
+      <p className="data-note">{result.evidenceNotice || "Review the cited document passages to verify the answer."}</p>
       <div className="rag-citations">{result.citations.map((citation) => <article key={`${citation.citation}-${citation.page}`}>
         <span>[{citation.citation} p.{citation.page}] · similarity {(Number(citation.score) * 100).toFixed(1)}%</span>
         <strong>{citation.title}</strong>
