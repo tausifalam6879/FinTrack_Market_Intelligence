@@ -588,6 +588,15 @@ def _historical_session(symbol: str, requested_date: date) -> Dict[str, Any]:
 
 def _build_analysis_brief(snapshot: Dict[str, Any], prediction: Dict[str, Any]) -> Dict[str, Any]:
     """Pre-calculate arithmetic so an LLM explains numbers instead of inventing them."""
+    if prediction.get("predictionAvailable") is False:
+        return {
+            "currentPrice": snapshot.get("price"),
+            "dailyChangePercent": snapshot.get("changePercent"),
+            "predictionAvailable": False,
+            "probabilityUp": None, "probabilityDown": None,
+            "modelHasReliableDirectionalEdge": False,
+            "limitation": prediction.get("predictionStatus", {}).get("message"),
+        }
     price = float(snapshot.get("price") or prediction.get("lastClose") or 0)
     expected_range = prediction.get("expectedRange") or {}
     low = float(expected_range.get("low") or price)
@@ -4232,6 +4241,20 @@ def _verified_tool_answer(
     company_profile: Optional[Dict[str, Any]] = None,
     news_payload: Optional[Dict[str, Any]] = None,
 ) -> str:
+    if prediction.get("predictionAvailable") is False:
+        lines = [
+            f"Research for {snapshot.get('name') or prediction.get('symbol')}.",
+            "Prediction is unavailable: no approved forecast can be reported. This is not a neutral or 50% signal.",
+        ]
+        if snapshot.get("price") is not None:
+            lines.append(f"Observed price: {snapshot['price']} {snapshot.get('currency', '')}; as of {snapshot.get('dataAsOf', 'not reported')}.")
+        if company_profile:
+            lines.append("Available company evidence: " + json.dumps({key: company_profile.get(key) for key in ("sector", "industry", "fundamentals", "performance")}, default=str))
+        for article in (news_payload or {}).get("articles", [])[:3]:
+            lines.append(f"Headline: {article.get('title')} (publisher: {article.get('publisher')}; published: {article.get('publishedAt')}).")
+        if document_requested:
+            lines.append(_verified_document_answer(prediction["symbol"], message, document_matches or []))
+        return "\n\n".join(lines)
     news = prediction["newsFactor"]
     model = prediction["model"]
     lowered = message.lower()
@@ -4881,7 +4904,10 @@ def _llm_grounding_issue(
     model_reliability_requested = any(term in lowered for term in (
         "outlook", "prediction", "forecast", "probability", "model", "score", "reliable", "bharosa",
     ))
-    if model_reliability_requested and float(prediction["model"]["balancedAccuracy"]) < 53:
+    if model_reliability_requested and prediction.get("predictionAvailable") is False:
+        if "unavailable" not in normalized_answer:
+            return "missing unavailable-model warning"
+    elif model_reliability_requested and float(prediction["model"]["balancedAccuracy"]) < 53:
         weak_markers = ["weak", "no reliable", "reliable nahi", "kamzor", "below 53", "less than 53", "53 se kam"]
         if not any(marker in normalized_answer for marker in weak_markers):
             return "missing weak-model warning"
@@ -5490,9 +5516,9 @@ async def market_agent(request: FastApiRequest):
 
     context["snapshot"] = market_snapshot(symbol)
     outcomes["market_snapshot"] = {"status": "completed", "evidenceCount": 1}
-    context["prediction"] = market_prediction(symbol)
+    context["prediction"] = market_research_analysis(symbol)
     outcomes["technical_prediction"] = {
-        "status": "completed",
+        "status": "unavailable" if context["prediction"].get("predictionAvailable") is False else "completed",
         "evidenceCount": len(context["prediction"].get("history") or []),
     }
     if "market_news" in tools:
@@ -5561,14 +5587,15 @@ async def market_agent(request: FastApiRequest):
         "outlook": prediction["outlook"],
         "probabilityUp": prediction["probabilityUp"],
         "range": prediction["expectedRange"],
-        "testAccuracy": prediction["model"]["backtestAccuracy"],
-        "balancedAccuracy": prediction["model"]["balancedAccuracy"],
-        "rocAuc": prediction["model"]["rocAuc"],
-        "walkForwardFolds": prediction["model"]["walkForwardFolds"],
+        "testAccuracy": prediction["model"].get("backtestAccuracy"),
+        "balancedAccuracy": prediction["model"].get("balancedAccuracy"),
+        "rocAuc": prediction["model"].get("rocAuc"),
+        "walkForwardFolds": prediction["model"].get("walkForwardFolds"),
         "selectedClassifier": prediction["model"]["type"],
-        "quality": prediction["model"]["quality"],
-        "newsTone": prediction["newsFactor"]["sentimentLabel"],
-        "macroSignal": prediction["macroFactor"]["signal"],
+        "quality": prediction["model"].get("quality"),
+        "predictionAvailable": prediction.get("predictionAvailable", True),
+        "newsTone": prediction["newsFactor"].get("sentimentLabel"),
+        "macroSignal": prediction["macroFactor"].get("signal"),
     }
     if any(word in lowered for word in ["rsi", "technical", "model", "outlook", "prediction", "forecast"]):
         model_context["rsi14"] = prediction["technicalIndicators"]["rsi14"]
@@ -5817,6 +5844,8 @@ async def market_agent(request: FastApiRequest):
     try:
         # Gemini is the primary generator for every question. Hybrid routing
         # reaches Ollama only when the Gemini request actually fails.
+        if prediction.get("predictionAvailable") is False:
+            raise RuntimeError("Prediction unavailable; using observed research evidence only.")
         answer, llm_provider = _provider_chat(messages, prefer_local=payload.prefer_local)
         if not answer:
             raise RuntimeError("The configured LLM returned an empty answer.")
@@ -5874,6 +5903,11 @@ async def market_agent(request: FastApiRequest):
         llm_failure = _llm_failure_code(error)
         answer = verified_fallback()
 
+    if prediction.get("predictionAvailable") is False:
+        llm_status = "evidence_only"
+        llm_provider = "deterministic"
+        llm_failure = None
+
     citations = [{key: match.get(key) for key in (
         "citation", "documentId", "title", "reportingPeriod", "sourceUrl", "page", "score", "snippet"
     )} for match in document_matches]
@@ -5918,7 +5952,8 @@ async def market_agent(request: FastApiRequest):
         "usedLiveContext": True,
         "responseCache": "miss",
         "suggestedQuestions": [
-            f"Why is {symbol} outlook {context['prediction']['outlook'].lower()}?",
+            (f"Show company fundamentals for {symbol}" if prediction.get("predictionAvailable") is False
+             else f"Why is {symbol} outlook {context['prediction']['outlook'].lower()}?"),
             f"Show recent news factors for {symbol}",
             "Compare major global indices",
         ],

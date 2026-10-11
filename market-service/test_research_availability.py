@@ -7,6 +7,24 @@ import market_intelligence as market
 
 
 class ResearchAvailabilityTests(unittest.TestCase):
+    def test_missing_prediction_brief_does_not_invent_neutral_probability(self):
+        brief = market._build_analysis_brief({"price": 125}, {"predictionAvailable": False})
+        self.assertIsNone(brief["probabilityUp"])
+        self.assertIsNone(brief["probabilityDown"])
+        self.assertNotIn("expectedUpsidePoints", brief)
+
+    def test_evidence_only_answer_includes_company_and_news_without_forecast(self):
+        answer = market._verified_tool_answer(
+            "Explain this company", {"name": "Example", "price": 125, "currency": "USD", "dataAsOf": "2026-10-11"},
+            {"symbol": "AAPL", "predictionAvailable": False}, [], {},
+            company_profile={"sector": "Technology", "fundamentals": {"revenue": 100}},
+            news_payload={"articles": [{"title": "Example announces results", "publisher": "Example publisher"}]},
+        )
+        self.assertIn("Technology", answer)
+        self.assertIn("Example announces results", answer)
+        self.assertIn("Prediction is unavailable", answer)
+        self.assertNotIn("50% chance", answer)
+
     def test_missing_model_keeps_observed_research_without_fake_probability(self):
         frame = pd.DataFrame({"Close": range(100, 220)}, index=pd.date_range("2025-01-01", periods=120))
         missing = HTTPException(503, {"code": "MODEL_UNAVAILABLE", "message": "Offline approval required."})
