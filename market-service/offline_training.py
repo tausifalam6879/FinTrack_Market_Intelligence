@@ -20,6 +20,8 @@ import joblib
 import numpy as np
 import pandas as pd
 import sklearn
+from sklearn.calibration import CalibratedClassifierCV
+from sklearn.model_selection import TimeSeriesSplit
 
 from data_pipeline import dataset_version, normalize_symbol
 from deep_learning import train_pytorch_mlp_experiment
@@ -119,7 +121,12 @@ def train_symbol(
     validation = _walk_forward_model_comparison(training, feature_columns)
     selected = validation["selected"]
 
-    evaluation_model = _candidate_models()[selected["id"]]["estimator"]
+    # Calibrate on later, disjoint folds, before the untouched final holdout.
+    # Never use random CV or the final holdout to fit the calibration mapping.
+    evaluation_model = CalibratedClassifierCV(
+        _candidate_models()[selected["id"]]["estimator"],
+        method="sigmoid", cv=TimeSeriesSplit(n_splits=3, gap=1), ensemble=True,
+    )
     evaluation_model.fit(training[feature_columns], training["target"])
     probabilities = evaluation_model.predict_proba(holdout[feature_columns])[:, 1]
     predictions = (probabilities >= 0.50).astype(int)
@@ -160,8 +167,8 @@ def train_symbol(
         deep_artifact_path,
     )
 
-    production_model = _candidate_models()[selected["id"]]["estimator"]
-    production_model.fit(dataset[feature_columns], dataset["target"])
+    # Publish precisely the estimator evaluated above, not a different refit.
+    production_model = evaluation_model
 
     version_rows = [{
         "symbol": normalized,
@@ -185,7 +192,8 @@ def train_symbol(
             feature: float(training[feature].median()) for feature in feature_columns
         },
         "datasetVersion": version,
-        "trainingDataThrough": str(dataset.index[-1].date()),
+        "trainingDataThrough": str(training.index[-1].date()),
+        "probabilityMethod": "chronological_sigmoid_v1",
         "createdAt": created_at,
         "versions": {"scikitLearn": sklearn.__version__},
         "trustNotice": "Load only artifacts created by this controlled FinTrack training pipeline.",
@@ -203,6 +211,9 @@ def train_symbol(
         "artifactSha256": artifact_sha256,
         "qualityGate": quality_gate,
         "purgeGapRows": purge_gap_rows,
+        "probabilityMethod": "chronological_sigmoid_v1",
+        "calibration": {"method": "sigmoid", "folds": 3, "gap": 1,
+                        "finalHoldoutUsedForFit": False, "servedEstimatorMatchesEvaluation": True},
         "deepLearningExperiment": deep_learning_experiment,
         "featureDriftBaseline": {
             "method": "Training-only quantile bins for Population Stability Index monitoring.",
@@ -282,6 +293,7 @@ def train_symbol(
         "baselines": baselines,
         "qualityGate": quality_gate,
         "walkForwardSelection": selected,
+        "probabilityMethod": "chronological_sigmoid_v1",
         "purgeGapRows": purge_gap_rows,
         "deepLearningExperiment": deep_learning_experiment,
         "featureDriftBaseline": metrics["featureDriftBaseline"],

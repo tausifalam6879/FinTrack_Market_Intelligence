@@ -136,7 +136,9 @@ def record_prediction(
     repository.evaluate_pending_predictions(symbol, model_data_date, reference_close)
     model_run_id = payload.get("model", {}).get("modelRunId")
     identity = re.sub(r"[^A-Za-z0-9_.-]+", "_", model_run_id or "runtime")
-    prediction_id = f"{symbol}:{model_data_date}:{identity}"
+    probability_version = payload.get("model", {}).get("localExplanation", {}).get("probabilityPath", {}).get("method")
+    suffix = ":estimator-v2" if probability_version == "estimator_probability" else ""
+    prediction_id = f"{symbol}:{model_data_date}:{identity}{suffix}"
     repository.upsert_prediction({
         "id": prediction_id,
         "symbol": symbol,

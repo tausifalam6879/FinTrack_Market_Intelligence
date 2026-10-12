@@ -3,5 +3,5 @@ steps:
     args: ['build', '-t', '${_IMAGE}-runtime', '.']
   - name: gcr.io/cloud-builders/docker
     args: ['build', '-f', 'Dockerfile.training', '--build-arg', 'RUNTIME_IMAGE=${_IMAGE}-runtime', '-t', '${_IMAGE}', '.']
-images: ['${_IMAGE}']
+images: ['${_IMAGE}-runtime', '${_IMAGE}']
 timeout: 1800s

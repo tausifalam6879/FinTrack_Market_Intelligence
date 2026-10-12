@@ -18,6 +18,8 @@ export default function EvidenceOverview({analysis,company,mode}) {
     <h3>Positive factors, negative factors and uncertainties</h3>
     <div className="metric-grid">{[['Positive factors',positive],['Negative factors',negative]].map(([title,items])=><article key={title}><h4>{title}</h4>{items.length?<ul>{items.map(item=><li key={item}>{item}</li>)}</ul>:<p>No qualifying factor found in the available fields. This does not establish that none exists.</p>}</article>)}</div>
     <h4>How strong is the direction signal?</h4>
+    <p>A 55% rise estimate means a small lean toward a higher next-session close. It does not mean a 55% price gain or 55% model accuracy. An 80% or 99% estimate is possible, but a larger number is not proof of a better model.</p>
+    {analysis.model?.calibration && <p>{analysis.model.calibration}</p>}
     <p>{separation==null?'Probability unavailable.':`The rise probability is ${probability}%, ${separation.toFixed(1)} percentage points from 50%. ${separation<8?'The model has little directional separation.':'The model leans toward one direction.'}`} This distance is not a measure of proven forecast reliability.</p>
     <p>Measured balanced accuracy: {valid(analysis.model?.balancedAccuracy)?`${analysis.model.balancedAccuracy}%`:'Unavailable'}. Market conditions can change; reported financial periods can differ; missing data is not a neutral signal.</p>
     <h4>Evidence provenance</h4>

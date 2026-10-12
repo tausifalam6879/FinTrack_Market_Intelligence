@@ -80,6 +80,9 @@ class DataTrainingPipelineTests(unittest.TestCase):
 
         trusted_artifact = joblib.load(artifact_path)
         self.assertEqual("TEST.NS", trusted_artifact["symbol"])
+        self.assertEqual("chronological_sigmoid_v1", trusted_artifact["probabilityMethod"])
+        self.assertLess(trusted_artifact["trainingDataThrough"], result["untouchedHoldout"]["start"])
+        self.assertEqual(3, len(trusted_artifact["estimator"].calibrated_classifiers_))
         self.assertEqual(result["modelRunId"], trusted_artifact["modelRunId"])
         self.assertEqual(set(trusted_artifact["featureColumns"]), set(trusted_artifact["explainabilityReference"]))
         self.assertEqual(

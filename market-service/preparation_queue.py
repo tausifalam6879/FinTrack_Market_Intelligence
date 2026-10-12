@@ -1,6 +1,7 @@
 """Durable, bounded demand queue. Only a trusted offline job trains candidates."""
 import argparse
 import json
+import os
 from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
@@ -44,10 +45,10 @@ class PreparationQueue:
             else:
                 cursor.execute("SELECT id FROM preparation_guard WHERE id=1 FOR UPDATE")
                 cursor.fetchone()
-            cursor.execute(self.database._sql("SELECT status FROM company_preparation WHERE symbol=?"), (symbol,))
-            existing = cursor.fetchone()
+            cursor.execute(self.database._sql("SELECT * FROM company_preparation WHERE symbol=?"), (symbol,))
+            existing = self.database._rows(cursor)
             if existing:
-                return {"symbol": symbol, "status": existing[0]}
+                return existing[0]
             cursor.execute("SELECT COUNT(*) FROM company_preparation WHERE status IN ('pending', 'running')")
             if int(cursor.fetchone()[0]) >= 100:
                 return {"symbol": symbol, "status": "queue_full"}
@@ -88,6 +89,59 @@ class PreparationQueue:
                 WHERE symbol=? AND lease_token=? AND status='running'"""),
                 (status, run_id, error_code, utc_now(), claim["symbol"], claim["lease_token"]))
 
+    def retry(self, symbol):
+        """Explicit operator retry; browser requests cannot reset rejected runs."""
+        symbol = normalize_symbol(symbol)
+        with self.database.connect() as connection:
+            cursor = connection.cursor()
+            if self.database.backend == "sqlite":
+                cursor.execute("BEGIN IMMEDIATE")
+            else:
+                cursor.execute("SELECT id FROM preparation_guard WHERE id=1 FOR UPDATE")
+                cursor.fetchone()
+            cursor.execute("SELECT COUNT(*) FROM company_preparation WHERE status IN ('pending', 'running')")
+            if int(cursor.fetchone()[0]) >= 100:
+                return {"symbol": symbol, "status": "queue_full"}
+            cursor.execute(self.database._sql("""UPDATE company_preparation
+                SET status='pending', attempts=0, lease_token=NULL, lease_until=NULL,
+                    error_code=NULL, model_run_id=NULL, updated_at=?
+                WHERE symbol=? AND status IN ('failed','rejected','candidate')"""), (utc_now(), symbol))
+        return self.status(symbol)
+
+
+def automatic_approval_enabled():
+    return os.getenv("PREPARATION_APPROVE_PASSING", "false").lower() == "true"
+
+
+def eligible_for_automatic_approval(result):
+    """Additional constraints; the registry still checks gate and artifact identity."""
+    holdout = result.get("untouchedHoldout") or {}
+    return (result.get("status") == "candidate"
+            and result.get("qualityGate", {}).get("passed") is True
+            and result.get("probabilityMethod") == "chronological_sigmoid_v1"
+            and holdout.get("rows", 0) >= 60
+            and holdout.get("brierScore", 1) < 0.25)
+
+
+def seed_uncovered_symbols(database):
+    """One-time migration to calibrated training; never repeatedly retry v1 failures."""
+    from offline_training import stored_training_universe
+    queue = PreparationQueue(database)
+    queue.initialize()
+    results = []
+    for symbol in stored_training_universe(database)["eligible"]:
+        if database.latest_model_run(symbol, "approved"):
+            continue
+        latest = database.latest_model_run(symbol)
+        metrics = json.loads(latest.get("metrics_json") or "{}") if latest else {}
+        if metrics.get("probabilityMethod") == "chronological_sigmoid_v1":
+            continue
+        status = queue.enqueue(symbol)
+        if status["status"] in {"candidate", "rejected", "failed"}:
+            status = queue.retry(symbol)
+        results.append({"symbol": symbol, "status": status["status"]})
+    return {"status": "coverage_queued", "results": results, "trainingStarted": False}
+
 
 def process_queue(database, limit=3):
     # Deferred import: serving containers do not need PyTorch or MLflow.
@@ -102,27 +156,45 @@ def process_queue(database, limit=3):
             break
         symbol = claim["symbol"]
         try:
-            ingestion = ingest_symbols([symbol], database=database)
+            ingestion = ingest_symbols([symbol], period="5y", database=database)
             if not any(row.get("status") == "stored" for row in ingestion.get("results", [])):
                 raise RuntimeError("INGESTION_UNAVAILABLE")
             result = train_symbol(symbol, database)
             status = result.get("status")
             if status not in {"candidate", "rejected"}:
                 raise RuntimeError("UNEXPECTED_TRAINING_STATUS")
+            if automatic_approval_enabled() and eligible_for_automatic_approval(result):
+                from model_registry import approve_model
+                approve_model(result["modelRunId"], database)
+                status = "approved"
             queue.finish(claim, status, result.get("modelRunId"))
         except Exception as error:
             # Never place database URLs, credentials or provider response bodies in public status.
             status = "failed"
             queue.finish(claim, status, error_code=type(error).__name__)
         results.append({"symbol": symbol, "status": status})
-    return {"results": results, "automaticApproval": False, "completedAt": utc_now()}
+    return {"results": results, "automaticApproval": automatic_approval_enabled(), "completedAt": utc_now()}
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Prepare queued companies in a trusted offline training job.")
     parser.add_argument("--limit", type=int, default=3)
+    parser.add_argument("--retry-symbols", nargs="+", help="Explicitly requeue terminal results; at most 10 symbols per invocation.")
+    parser.add_argument("--seed-stored", action="store_true", help="Queue stored symbols without approved or already calibrated models, then exit.")
     parser.add_argument("--check-only", action="store_true", help="Verify dependencies and database queue without ingestion or training.")
     args = parser.parse_args()
+    if args.seed_stored:
+        if args.retry_symbols or args.check_only:
+            parser.error("--seed-stored is a separate operation")
+        print(json.dumps(seed_uncovered_symbols(Database())), flush=True)
+        raise SystemExit(0)
+    if args.retry_symbols:
+        if len(args.retry_symbols) > 10 or args.check_only:
+            parser.error("Use at most 10 retry symbols without --check-only")
+        queue = PreparationQueue(Database())
+        queue.initialize()
+        for symbol in args.retry_symbols:
+            queue.retry(symbol)
     if args.check_only:
         import torch
         database = Database()
@@ -135,7 +207,7 @@ if __name__ == "__main__":
             counts = database._rows(cursor)
         print(json.dumps({"status": "ready", "queueCounts": counts,
                           "torchVersion": torch.__version__, "trainingStarted": False,
-                          "automaticApproval": False}), flush=True)
+                          "automaticApproval": automatic_approval_enabled()}), flush=True)
         raise SystemExit(0)
     result = process_queue(Database(), args.limit)
     print(json.dumps(result), flush=True)

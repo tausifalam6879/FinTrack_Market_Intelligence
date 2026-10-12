@@ -23,8 +23,10 @@ investigation; they are not repeatedly retrained by page visits.
 Run `python preparation_queue.py --limit 3` in the training container, not the
 lightweight serving container. It processes at most ten symbols per invocation,
 refreshes validated provider history, and calls the existing offline trainer.
-There is no automatic approval. A candidate must still pass the existing registry
-approval process; rejected models must not be promoted.
+Automatic approval is off by default. The opt-in
+`PREPARATION_APPROVE_PASSING=true` mode publishes only calibrated candidates
+passing the holdout and registry checks. Rejected models are never promoted.
+See [prediction coverage](PREDICTION_COVERAGE.md) for gates and the upgrade command.
 
 The worker needs the database secret, database TLS certificate, existing fixed
 network egress, and model bucket write/read permissions used by the training job.

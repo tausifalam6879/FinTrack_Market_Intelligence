@@ -21,9 +21,12 @@ def main() -> None:
     parser.add_argument("--application", action="store_true",
                         help="Also test prebuilt fintrack-rehearsal-api/gateway:local images.")
     parser.add_argument("--models", action="store_true", help="Recover approved GCS artifacts and test inference in the isolated API.")
+    parser.add_argument("--browser", action="store_true", help="Run prebuilt React/Chromium recovery image against restored gateway.")
+    parser.add_argument("--external-ai", action="store_true", help="Test actual Gemini with public restored market evidence; requires gcloud secret access.")
+    parser.add_argument("--project", default="project-424147c2-3cf6-4c26-b18")
     args = parser.parse_args()
-    if args.models and not args.application:
-        parser.error("--models requires --application")
+    if (args.models or args.browser or args.external_ai) and not args.application:
+        parser.error("Recovery extensions require --application")
     backup = args.backup.resolve(strict=True)
     manifest = json.loads(backup.with_suffix(backup.suffix + ".manifest.json").read_text())
     digest = hashlib.sha256(backup.read_bytes()).hexdigest()
@@ -35,7 +38,7 @@ def main() -> None:
     network_created = False
 
     def run(*cmd: str, **kwargs):
-        return subprocess.run(cmd, check=True, capture_output=True, timeout=180, **kwargs)
+        return subprocess.run(cmd, check=True, capture_output=True, timeout=kwargs.pop("timeout", 180), **kwargs)
 
     def query(sql: str) -> str:
         return run("docker", "exec", name, "mysql", "-uroot", "--batch",
@@ -116,6 +119,7 @@ def main() -> None:
                 "-e", "MYSQL_DATABASE=fintrack_restore", "-e", "MYSQL_USER=rehearsal",
                 "-e", "MYSQL_PASSWORD=" + password, "-e", "REQUIRE_DURABLE_DATABASE=true",
                 "-e", "LLM_PROVIDER=offline",
+                "-e", "MARKET_DATA_MODE=stored",
                 "-e", "MODEL_ARTIFACT_BUCKET=fintrack-models-304232323336",
                 "fintrack-rehearsal-api:local")
             application_containers.append(api)
@@ -147,7 +151,9 @@ def main() -> None:
             api_health = ready("http://127.0.0.1:8000")
             gateway_health = ready("http://" + gateway + ":8080")
             # Select any restored company instead of hard-coding a particular listing.
-            symbol = query("SELECT symbol FROM market_bars GROUP BY symbol ORDER BY COUNT(*) DESC, symbol LIMIT 1")
+            # Prefer an explicit ticker that the UI can open without an online
+            # company-directory lookup; still select from actual restored data.
+            symbol = query("SELECT symbol FROM market_bars GROUP BY symbol ORDER BY CASE WHEN symbol LIKE '^%' OR symbol LIKE '%.NS' OR symbol LIKE '%.BO' THEN 0 ELSE 1 END, COUNT(*) DESC, symbol LIMIT 1")
             from urllib.parse import quote
             data = request("http://" + gateway + ":8080", "/market/data-operations?symbol=" + quote(symbol, safe=""))
             expected_bars = int(query("SELECT COUNT(*) FROM market_bars WHERE symbol='" + symbol.replace("'", "''") + "'"))
@@ -165,16 +171,57 @@ def main() -> None:
                 report["models"] = tested
                 report["status"] = "model_application_restore_verified"
                 report["scope"] += "; approved artifacts checksum-verified and inference tested on stored reference features, not live provider data"
+            if args.browser:
+                browser_name = name + "-browser"
+                application_containers.append(browser_name)
+                output = run("docker", "run", "--name", browser_name, "--network", network,
+                             "--memory", "2g", "--cpus", "1", "--shm-size", "256m",
+                             "fintrack-rehearsal-browser:local", "node", "recovery/browser-check.mjs",
+                             "http://" + gateway + ":8080", symbol, timeout=300)
+                lines = [json.loads(line) for line in output.stdout.decode().splitlines() if line.startswith('{')]
+                report["browser"] = next(item for item in lines if item.get("status") == "browser_recovery_verified")
+                report["status"] = "browser_application_restore_verified"
+                report["scope"] = report["scope"].replace("external AI and browser UI not tested", "React browser research verified; external AI not tested")
+                run("docker", "cp", browser_name + ":/tmp/recovery-browser/research.png", str(backup.parent / "recovered-browser.png"))
+            if args.external_ai:
+                service = json.loads(run("gcloud", "run", "services", "describe", "fintrack-market-api",
+                                         "--project", args.project, "--region", "asia-south1", "--format=json").stdout)
+                settings = {}
+                for entry in service["spec"]["template"]["spec"]["containers"][0].get("env", []):
+                    if entry["name"] not in {"GEMINI_API_KEY", "GEMINI_MODEL", "LLM_MODEL"}:
+                        continue
+                    if "value" in entry:
+                        settings[entry["name"]] = entry["value"]
+                    else:
+                        secret = entry.get("valueFrom", {}).get("secretKeyRef", {})
+                        if secret:
+                            settings[entry["name"]] = run("gcloud", "secrets", "versions", "access", secret["key"],
+                                "--secret", secret["name"], "--project", args.project).stdout.decode().strip()
+                if not settings.get("GEMINI_API_KEY"):
+                    raise RuntimeError("Serving Gemini credential configuration was not found")
+                # Only API receives temporary outbound connectivity. The database
+                # stays on the internal network with disposable credentials.
+                run("docker", "network", "connect", "bridge", api)
+                code = (Path(__file__).parent / "check_recovered_ai.py").read_text(encoding="utf-8")
+                report["externalAI"] = json.loads(run("docker", "exec", "-i", api, "python", "-c", code,
+                    input=json.dumps(settings).encode()).stdout)
+                settings.clear()
+                report["scope"] = report["scope"].replace("external AI and browser UI not tested", "real Gemini verified; browser UI not tested").replace("external AI not tested", "real Gemini verified")
+            if args.browser and args.external_ai:
+                report["status"] = "extended_application_restore_verified"
+                report["scope"] = "Restored SQL, API, gateway, React browser research and real Gemini on restored public market evidence; model checks reported separately."
         report_path = backup.with_suffix(backup.suffix + ".restore-report.json")
         report_path.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
         print(json.dumps(report, indent=2))
     except subprocess.CalledProcessError as error:
         # Do not echo SQL or row data from database client diagnostics.
+        if "recovery/browser-check.mjs" in error.cmd:
+            print(error.stderr.decode(errors="replace")[-5000:], file=__import__('sys').stderr)
         raise SystemExit("Restore rehearsal command failed (exit %s); no production database was used."
                          % error.returncode) from None
     finally:
         for container in reversed(application_containers):
-            run("docker", "stop", "--time", "10", container)
+            subprocess.run(["docker", "rm", "-f", container], capture_output=True, timeout=30)
         if created:
             run("docker", "stop", "--time", "10", name)
         if network_created:

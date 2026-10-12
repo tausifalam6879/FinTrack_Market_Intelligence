@@ -432,6 +432,8 @@ def _history(symbol: str, period: str) -> pd.DataFrame:
     if cached is not None:
         return cached.copy()
     try:
+        if os.getenv("MARKET_DATA_MODE") == "stored":
+            raise RuntimeError("Stored market data mode")
         frame = yf.Ticker(symbol).history(period=period, interval="1d", auto_adjust=False)
     except Exception as error:
         logger.info("Live history unavailable for %s; checking persistent offline bars: %s", symbol, type(error).__name__)
@@ -601,7 +603,7 @@ def _build_analysis_brief(snapshot: Dict[str, Any], prediction: Dict[str, Any]) 
     expected_range = prediction.get("expectedRange") or {}
     low = float(expected_range.get("low") or price)
     high = float(expected_range.get("high") or price)
-    probability_up = float(prediction.get("probabilityUp") or 50)
+    probability_up = float(prediction["probabilityUp"] if prediction.get("probabilityUp") is not None else 50)
     balanced_accuracy = float(prediction.get("model", {}).get("balancedAccuracy") or 0)
     return {
         "currentPrice": _round(price),
@@ -620,6 +622,8 @@ def _build_analysis_brief(snapshot: Dict[str, Any], prediction: Dict[str, Any]) 
 
 
 def _intraday_history(symbol: str) -> pd.DataFrame:
+    if os.getenv("MARKET_DATA_MODE") == "stored":
+        raise ValueError("Intraday provider disabled in stored market data mode")
     """Return recent minute bars without making every browser poll hit Yahoo."""
     key = f"history:{symbol}:5d:1m"
     cached = _cache_get(key, QUOTE_CACHE_TTL_SECONDS)
@@ -3791,7 +3795,9 @@ def market_prediction(symbol: str) -> Dict[str, Any]:
         model_run_id = run["id"]
         model_dataset_version = run["dataset_version"]
         serving_mode = "approved_artifact"
-        model_training_rows = int(run["training_rows"]) + int(run["holdout_rows"])
+        model_training_rows = int(run["training_rows"])
+        if artifact.get("probabilityMethod") != "chronological_sigmoid_v1":
+            model_training_rows += int(run.get("holdout_rows") or 0)
         explanation_reference = artifact.get("explainabilityReference")
         selection_description = "Approved offline artifact that passed the final chronological holdout quality gate."
     else:
@@ -3804,15 +3810,18 @@ def market_prediction(symbol: str) -> Dict[str, Any]:
     raw_technical_probability = float(model.predict_proba(latest_features[feature_columns])[0][1])
     balanced_accuracy = float(evaluation_metrics["balancedAccuracy"])
     auc = float(evaluation_metrics["rocAuc"] if evaluation_metrics["rocAuc"] is not None else 0.50)
-    reliability_signal = ((balanced_accuracy - 0.50) * 0.65) + ((auc - 0.50) * 0.35)
-    reliability_weight = max(0.12, min(1.0, reliability_signal / 0.12))
-    technical_probability = 0.50 + ((raw_technical_probability - 0.50) * reliability_weight)
+    if not math.isfinite(raw_technical_probability) or not 0 <= raw_technical_probability <= 1:
+        raise ValueError("Approved estimator returned an invalid probability.")
+    reliability_weight = 1.0
+    technical_probability = raw_technical_probability
 
     news = market_news(symbol)
-    news_adjustment = float(news["sentimentScore"] or 0) * 0.05
+    news_adjustment = 0.0
     macro = _macro_adjustment(symbol)
-    macro_adjustment = float(macro["probabilityAdjustmentPoints"] or 0) / 100
-    probability_up = max(0.05, min(0.95, technical_probability + news_adjustment + macro_adjustment))
+    macro = {**macro, "probabilityAdjustmentPoints": 0.0,
+             "usage": "Research context only; not added to the model probability."}
+    macro_adjustment = 0.0
+    probability_up = technical_probability
     probability_down = 1 - probability_up
     bullish_threshold = 0.58
     bearish_threshold = 0.42
@@ -3910,15 +3919,21 @@ def market_prediction(symbol: str) -> Dict[str, Any]:
             "naiveAccuracy": _round(baseline_accuracy * 100, 1),
             "quality": quality,
             "rawTechnicalProbabilityUp": _round(raw_technical_probability * 100, 1),
+            "probabilityMethod": artifact.get("probabilityMethod", "legacy_uncalibrated"),
             "reliabilityWeight": _round(reliability_weight, 2),
             "confidenceThresholds": {"bullish": 58, "bearish": 42},
-            "calibration": "Out-of-sample skill controls shrinkage toward 50%; low-confidence results remain NEUTRAL.",
+            "calibration": (
+                "Sigmoid calibration on chronological training folds; evaluated on a separate holdout. No news overlay or artificial probability cap."
+                if artifact.get("probabilityMethod") == "chronological_sigmoid_v1" else
+                "Legacy estimator probability; calibration has not been verified. Retraining is required for chronological calibration."
+            ),
             "validation": "Expanding-window TimeSeriesSplit with a one-session gap; no random shuffle.",
             "modelsCompared": comparisons,
             "featureImportance": importance,
             "localExplanation": {
                 **local_explanation,
                 "probabilityPath": {
+                    "method": "estimator_probability",
                     "rawTechnicalProbabilityUp": _round(raw_technical_probability * 100, 1),
                     "reliabilityAdjustedProbabilityUp": _round(technical_probability * 100, 1),
                     "newsAdjustmentPoints": _round(news_adjustment * 100, 2),
@@ -4910,6 +4925,9 @@ def _llm_grounding_issue(
 ) -> Optional[str]:
     normalized_answer = answer.lower()
     lowered = message.lower()
+    if prediction.get("predictionAvailable") is False:
+        if re.search(r"\b(?:\d+(?:\.\d+)?\s*%\s*(?:chance|probability)|(?:chance|probability)\s*(?:of\s+(?:rising|falling|up|down))?\s*(?:is|:|=|of)?\s*\d)", normalized_answer):
+            return "unsupported forecast probability without an approved model"
     # A short answer can be the correct response when the user only asks what
     # one visible metric means. Reject only effectively empty/non-explanatory
     # provider output; the metric-specific checks below still enforce evidence.
@@ -5382,10 +5400,10 @@ def market_research_analysis(symbol: str) -> Dict[str, Any]:
     payload["preparation"] = {"status": "disabled", "automaticApproval": False}
     if os.getenv("ENABLE_COMPANY_PREPARATION_QUEUE", "false").lower() == "true" and payload["persistentHistoryBars"]:
         try:
-            from preparation_queue import PreparationQueue
+            from preparation_queue import PreparationQueue, automatic_approval_enabled
             queue = PreparationQueue(Database())
             queue.initialize()
-            payload["preparation"] = {**queue.enqueue(symbol), "automaticApproval": False}
+            payload["preparation"] = {**queue.enqueue(symbol), "automaticApproval": automatic_approval_enabled()}
         except Exception as error:
             logger.warning("Preparation enqueue unavailable for %s (%s)", symbol, type(error).__name__)
             payload["preparation"] = {"status": "unavailable", "automaticApproval": False}
@@ -5827,6 +5845,10 @@ async def market_agent(request: FastApiRequest):
         llm_context["documentEvidenceAvailable"] = bool(document_matches)
 
     system_prompt = _compact_agent_system_prompt(llm_context)
+    if prediction.get("predictionAvailable") is False:
+        system_prompt += (" No approved forecast is available. Explain only observed evidence. "
+                          "Never invent a price target, rise/fall probability, or buy/sell recommendation. "
+                          "If asked for a prediction, explicitly say it is unavailable.")
     recent = []
     for item in payload.recent_messages[-10:]:
         if not isinstance(item, dict) or item.get("role") not in {"user", "assistant"}:
@@ -5882,8 +5904,6 @@ async def market_agent(request: FastApiRequest):
     try:
         # Gemini is the primary generator for every question. Hybrid routing
         # reaches Ollama only when the Gemini request actually fails.
-        if prediction.get("predictionAvailable") is False:
-            raise RuntimeError("Prediction unavailable; using observed research evidence only.")
         answer, llm_provider = _provider_chat(messages, prefer_local=payload.prefer_local)
         if not answer:
             raise RuntimeError("The configured LLM returned an empty answer.")
@@ -5941,7 +5961,7 @@ async def market_agent(request: FastApiRequest):
         llm_failure = _llm_failure_code(error)
         answer = verified_fallback()
 
-    if prediction.get("predictionAvailable") is False:
+    if prediction.get("predictionAvailable") is False and not llm_answer_accepted:
         llm_status = "evidence_only"
         llm_provider = "deterministic"
         llm_failure = None

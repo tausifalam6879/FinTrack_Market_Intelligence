@@ -684,7 +684,7 @@ function PredictionOutcomeSummary({ status, loading, onOpen }) {
 }
 
 function SimpleMeaningCard({ analysis }) {
-  if (analysis.predictionAvailable === false) return <aside className="simple-meaning-card" aria-label="Research availability"><h4>Company research is available; prediction is not.</h4><p>{analysis.predictionStatus?.message}</p><p>Explore price history, company health, news and available annual reports. No rise or fall probability has been invented.</p><p>Background preparation: {analysis.preparation?.status || "not requested"}. Candidate models require separate approval before serving.</p></aside>;
+  if (analysis.predictionAvailable === false) return <aside className="simple-meaning-card" aria-label="Research availability"><h4>Company research is available; prediction is not.</h4><p>{analysis.predictionStatus?.message}</p><p>Explore price history, company health, news and available annual reports. No rise or fall probability has been invented.</p><p>Background preparation: {analysis.preparation?.status || "not requested"}. {analysis.preparation?.automaticApproval ? "Only calibrated models passing the quality checks can publish automatically. A prediction is not guaranteed." : "Candidate models require separate approval before serving."}</p></aside>;
   const probabilityUp = Number(analysis.probabilityUp);
   const probabilityDown = Number(analysis.probabilityDown);
   const rsi = Number(analysis.technicalIndicators?.rsi14);
@@ -1668,7 +1668,10 @@ function PredictionExplanation({ explanation, outlook }) {
     ...contributions.map((item) => Math.abs(Number(item.adjustedProbabilityImpactPoints) || 0)),
     0.1
   );
-  const pathSteps = [
+  const pathSteps = path.method === "estimator_probability" ? [
+    ["Estimator output", path.rawTechnicalProbabilityUp, "See calibration method below"],
+    ["Displayed probability", path.finalProbabilityUp, "No manual adjustment"]
+  ] : [
     ["Raw ML", path.rawTechnicalProbabilityUp, "Model output"],
     ["Reliability adjusted", path.reliabilityAdjustedProbabilityUp, "Walk-forward skill"],
     ["News overlay", path.newsAdjustmentPoints, "probability points", true],
@@ -1975,7 +1978,7 @@ function ModelEvidence({ model, comparisons, importance, audit }) {
       <ValidationStat label="Walk-forward folds" value={model.walkForwardFolds} />
       <ValidationStat label="Balanced accuracy" value={formatPercent(model.balancedAccuracy)} />
       <ValidationStat label="ROC AUC" value={formatPercent(model.rocAuc)} />
-      <ValidationStat label="Reliability weight" value={model.reliabilityWeight} />
+      <ValidationStat label="Probability method" value={model.probabilityMethod === "chronological_sigmoid_v1" ? "Time-ordered calibration" : "Legacy: calibration unverified"} />
       <ValidationStat label="Training rows" value={model.trainingRows} />
     </div>
     <div className="validation-columns">
