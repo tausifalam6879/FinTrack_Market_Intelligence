@@ -15,6 +15,27 @@ def decode_model_record(record: str) -> dict:
     return json.loads(bytes.fromhex(record).decode("utf-8"))
 
 
+def ensure_mysql_image():
+    """Keep cold image downloads outside the container startup deadline."""
+    print("Checking local MySQL recovery image...", flush=True)
+    inspected = subprocess.run(["docker", "image", "inspect", "mysql:8.4"],
+                               capture_output=True, timeout=30)
+    if inspected.returncode:
+        print("Downloading mysql:8.4 (up to 10 minutes); Docker progress follows.", flush=True)
+        subprocess.run(["docker", "pull", "mysql:8.4"], check=True, timeout=600)
+
+
+def cleanup_resource(kind, name):
+    """Only exact resources allocated by this invocation; never mask the error."""
+    command = ["docker", "rm", "-f", name] if kind == "container" else ["docker", "network", "rm", name]
+    try:
+        result = subprocess.run(command, capture_output=True, timeout=60)
+        if result.returncode and b"No such" not in result.stderr:
+            print(f"Cleanup could not confirm removal of temporary {kind}: {name}", flush=True)
+    except (subprocess.TimeoutExpired, OSError):
+        print(f"Cleanup timed out for temporary {kind}: {name}", flush=True)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("backup", type=Path)
@@ -46,18 +67,22 @@ def main() -> None:
 
     created = False
     try:
+        ensure_mysql_image()
         if args.application:
-            run("docker", "network", "create", "--internal", network)
             network_created = True
+            run("docker", "network", "create", "--internal", network)
         # No host ports, no network, and no persistent database volume. Empty
         # root password is restricted to this throwaway container's socket.
         password = uuid.uuid4().hex
-        run("docker", "run", "-d", "--rm", "--name", name, "--network", network if args.application else "none",
+        # A timed-out Docker client can leave a daemon-created container behind.
+        # Register cleanup BEFORE asking the daemon to create it.
+        created = True
+        print("Starting disposable MySQL (image already available)...", flush=True)
+        run("docker", "run", "--pull=never", "-d", "--rm", "--name", name, "--network", network if args.application else "none",
             "--memory", "768m", "--cpus", "1", "--tmpfs", "/var/lib/mysql",
             "-e", "MYSQL_ALLOW_EMPTY_PASSWORD=yes", "-e", "MYSQL_DATABASE=fintrack_restore",
             "-e", "MYSQL_USER=rehearsal", "-e", "MYSQL_PASSWORD=" + password,
             "mysql:8.4")
-        created = True
         deadline = time.monotonic() + 120
         while True:
             try:
@@ -113,7 +138,8 @@ def main() -> None:
                         raise RuntimeError("Recovered model checksum mismatch.")
                     target.chmod(0o644)
                     recovered_models.append(row["symbol"])
-            run("docker", "run", "-d", "--rm", "--name", api, "--network", network,
+            application_containers.append(api)
+            run("docker", "run", "--pull=never", "-d", "--rm", "--name", api, "--network", network,
                 "--memory", "2g", "--cpus", "1",
                 "-e", "MYSQL_HOST=" + name, "-e", "MYSQL_PORT=3306",
                 "-e", "MYSQL_DATABASE=fintrack_restore", "-e", "MYSQL_USER=rehearsal",
@@ -122,15 +148,14 @@ def main() -> None:
                 "-e", "MARKET_DATA_MODE=stored",
                 "-e", "MODEL_ARTIFACT_BUCKET=fintrack-models-304232323336",
                 "fintrack-rehearsal-api:local")
-            application_containers.append(api)
             if args.models:
                 for target in artifact_dir.glob("*.joblib"):
                     run("docker", "cp", str(target), api + ":/app/artifacts/" + target.name)
-            run("docker", "run", "-d", "--rm", "--name", gateway, "--network", network,
+            application_containers.append(gateway)
+            run("docker", "run", "--pull=never", "-d", "--rm", "--name", gateway, "--network", network,
                 "--memory", "1g", "--cpus", "1",
                 "-e", "FINTRACK_GATEWAY_UPSTREAM_BASE_URL=http://" + api + ":8000",
                 "fintrack-rehearsal-gateway:local")
-            application_containers.append(gateway)
 
             def request(base, path):
                 code = "import urllib.request; print(urllib.request.urlopen(" + repr(base + path) + ",timeout=10).read().decode())"
@@ -174,7 +199,7 @@ def main() -> None:
             if args.browser:
                 browser_name = name + "-browser"
                 application_containers.append(browser_name)
-                output = run("docker", "run", "--name", browser_name, "--network", network,
+                output = run("docker", "run", "--pull=never", "--name", browser_name, "--network", network,
                              "--memory", "2g", "--cpus", "1", "--shm-size", "256m",
                              "fintrack-rehearsal-browser:local", "node", "recovery/browser-check.mjs",
                              "http://" + gateway + ":8080", symbol, timeout=300)
@@ -213,6 +238,10 @@ def main() -> None:
         report_path = backup.with_suffix(backup.suffix + ".restore-report.json")
         report_path.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
         print(json.dumps(report, indent=2))
+    except subprocess.TimeoutExpired as error:
+        # TimeoutExpired's default traceback includes command-line credentials.
+        stage = "Docker image download" if list(error.cmd[:2]) == ["docker", "pull"] else "Recovery command"
+        raise SystemExit(f"{stage} timed out after {error.timeout}s. Check Cloud Shell Docker resources/network; production was not modified. Temporary cleanup attempted.") from None
     except subprocess.CalledProcessError as error:
         # Do not echo SQL or row data from database client diagnostics.
         if "recovery/browser-check.mjs" in error.cmd:
@@ -221,11 +250,11 @@ def main() -> None:
                          % error.returncode) from None
     finally:
         for container in reversed(application_containers):
-            subprocess.run(["docker", "rm", "-f", container], capture_output=True, timeout=30)
+            cleanup_resource("container", container)
         if created:
-            run("docker", "stop", "--time", "10", name)
+            cleanup_resource("container", name)
         if network_created:
-            run("docker", "network", "rm", network)
+            cleanup_resource("network", network)
 
 
 if __name__ == "__main__":

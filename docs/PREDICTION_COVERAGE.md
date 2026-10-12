@@ -54,4 +54,11 @@ usable. Remaining queued companies run on the existing hourly schedule.
 Local regression: build the three `fintrack-rehearsal-*:local` images, then run
 `python scripts/test_browser_recovery.py`. It uses synthetic data and no cloud secrets.
 
+Recovery downloads a missing MySQL image separately, with visible Docker progress
+and a ten-minute download deadline. Container startup has its own three-minute
+deadline. A timeout does not prove a database problem: check Docker availability,
+disk capacity and network access in Cloud Shell. Failed attempts clean up only
+their exact temporary container/network names; cleanup warnings identify anything
+that may need inspection. No production restore is attempted.
+
 Calibration reference: https://scikit-learn.org/stable/modules/calibration.html
