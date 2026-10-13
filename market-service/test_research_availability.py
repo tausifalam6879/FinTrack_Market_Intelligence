@@ -7,6 +7,9 @@ import market_intelligence as market
 
 
 class ResearchAvailabilityTests(unittest.TestCase):
+    def setUp(self):
+        market.clear_market_cache()
+
     def test_missing_prediction_brief_does_not_invent_neutral_probability(self):
         brief = market._build_analysis_brief({"price": 125}, {"predictionAvailable": False})
         self.assertIsNone(brief["probabilityUp"])

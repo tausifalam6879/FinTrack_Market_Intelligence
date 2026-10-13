@@ -617,7 +617,7 @@ def _build_analysis_brief(snapshot: Dict[str, Any], prediction: Dict[str, Any]) 
         "expectedUpsidePercent": _round(((high / price) - 1) * 100, 2) if price else None,
         "expectedRangeWidth": _round(high - low),
         "balancedAccuracy": _round(balanced_accuracy, 1),
-        "modelHasReliableDirectionalEdge": balanced_accuracy >= 53,
+        "modelHasReliableDirectionalEdge": not prediction.get("experimental", False) and balanced_accuracy >= 53,
     }
 
 
@@ -3133,6 +3133,10 @@ def sector_peer_intelligence(symbol: str) -> Dict[str, Any]:
 
 
 def market_news_feed(limit: int = 12) -> Dict[str, Any]:
+    feed_key = f"news-feed:{max(1, min(limit, 20))}"
+    cached = _cache_get(feed_key, 60)
+    if cached is not None:
+        return cached
     source_symbols = [
         "^NSEI", "^GSPC", "GC=F", "CL=F", "INR=X",
         "INFY.NS", "MARUTI.NS", "SUNPHARMA.NS", "NETWORK18.NS", "AAPL", "TSLA",
@@ -3152,7 +3156,7 @@ def market_news_feed(limit: int = 12) -> Dict[str, Any]:
             except Exception:
                 continue
     articles.sort(key=lambda item: str(item.get("publishedAt") or ""), reverse=True)
-    return {
+    result = {
         "articles": articles[:max(1, min(limit, 20))],
         "topics": [
             "India", "Global equities", "Technology", "Automobile", "Healthcare",
@@ -3162,6 +3166,7 @@ def market_news_feed(limit: int = 12) -> Dict[str, Any]:
         "source": "Yahoo Finance headlines via yfinance / RSS fallback",
         "status": "available" if articles else "unavailable",
     }
+    return _cache_put(feed_key, result) if articles else result
 
 
 def _macro_adjustment(symbol: str) -> Dict[str, Any]:
@@ -4256,6 +4261,13 @@ def _verified_tool_answer(
     company_profile: Optional[Dict[str, Any]] = None,
     news_payload: Optional[Dict[str, Any]] = None,
 ) -> str:
+    if prediction.get("experimental"):
+        observed = _verified_tool_answer(message, snapshot,
+            {**prediction, "experimental": False, "predictionAvailable": False}, tools, factor_payload,
+            breadth, historical, document_matches, document_requested, company_profile, news_payload)
+        return observed.replace(
+            "Prediction is unavailable: no approved forecast can be reported. This is not a neutral or 50% signal.",
+            f"Experimental estimate only: {prediction.get('probabilityUp')}% rise probability. This uncalibrated model is not approved and may be worse than a simple baseline. No reliable forecast is established.")
     if prediction.get("predictionAvailable") is False:
         lines = [
             f"Research for {snapshot.get('name') or prediction.get('symbol')}.",
@@ -5355,9 +5367,48 @@ def get_inr_currency_rates(refresh: bool = False):
         raise HTTPException(status_code=503, detail=str(error)) from error
 
 
+def _experimental_direction(frame: pd.DataFrame) -> Optional[Dict[str, Any]]:
+    """Small research-only model; never registered or represented as approved."""
+    close = frame["Close"].dropna().tail(600)
+    returns = close.pct_change()
+    features = pd.DataFrame({"return1": returns, "return5": close.pct_change(5),
+                             "trend20": close / close.rolling(20).mean() - 1,
+                             "volatility20": returns.rolling(20).std()})
+    data = features.copy()
+    data["target"] = (close.shift(-1) > close).astype(int)
+    data = data.iloc[:-1].replace([np.inf, -np.inf], np.nan).dropna()
+    latest = features.iloc[-1:].replace([np.inf, -np.inf], np.nan).dropna()
+    if len(data) < 120 or latest.empty:
+        return None
+    split = int(len(data) * 0.8)
+    train, test = data.iloc[:split - 1], data.iloc[split:]
+    if train.target.nunique() < 2 or test.target.nunique() < 2:
+        return None
+    estimator = Pipeline([("scale", StandardScaler()),
+                          ("model", LogisticRegression(C=0.1, max_iter=100, random_state=42))])
+    estimator.fit(train[features.columns], train.target)
+    tested = estimator.predict_proba(test[features.columns])[:, 1]
+    probability = float(estimator.predict_proba(latest)[0, 1])
+    return {"probabilityUp": _round(probability * 100, 1),
+            "probabilityDown": _round((1 - probability) * 100, 1),
+            "outlook": "BULLISH" if probability >= .58 else "BEARISH" if probability <= .42 else "NEUTRAL",
+            "model": {"type": "Experimental Logistic Regression", "servingMode": "experimental_runtime",
+                      "probabilityMethod": "experimental_uncalibrated", "quality": "unapproved",
+                      "trainingRows": len(train), "holdoutRows": len(test),
+                      "balancedAccuracy": _round(balanced_accuracy_score(test.target, tested >= .5) * 100, 1),
+                      "backtestAccuracy": _round(accuracy_score(test.target, tested >= .5) * 100, 1),
+                      "rocAuc": _round(roc_auc_score(test.target, tested) * 100, 1),
+                      "brierScore": _round(brier_score_loss(test.target, tested), 3),
+                      "modelsCompared": [], "featureImportance": [],
+                      "calibration": "Experimental, uncalibrated estimate. Quality gates have not been passed; holdout results may be weak. Not an approved forecast."}}
+
+
 def market_research_analysis(symbol: str) -> Dict[str, Any]:
     """Keep observed research available without manufacturing an unapproved forecast."""
     symbol = _sanitize_symbol(symbol)
+    cached = _cache_get(f"research-result:{symbol}", 60)
+    if cached is not None:
+        return cached
     try:
         return market_prediction(symbol)
     except HTTPException as error:
@@ -5407,14 +5458,28 @@ def market_research_analysis(symbol: str) -> Dict[str, Any]:
         except Exception as error:
             logger.warning("Preparation enqueue unavailable for %s (%s)", symbol, type(error).__name__)
             payload["preparation"] = {"status": "unavailable", "automaticApproval": False}
-    return payload
+    try:
+        estimate = _experimental_direction(frame)
+    except Exception as error:
+        logger.warning("Experimental estimate unavailable (%s)", type(error).__name__)
+        estimate = None
+    if estimate:
+        payload.update(estimate)
+        payload.update({"predictionAvailable": True, "experimental": True,
+                        "modelDataDate": frame.index[-1].strftime("%Y-%m-%d"),
+                        "predictionStatus": {"code": "EXPERIMENTAL_ESTIMATE", "message": "Research-only estimate, not an approved model. It may perform worse than a simple baseline. Do not treat it as a reliable trading signal."},
+                        "disclaimer": "Experimental, uncalibrated estimate; quality checks not passed. Approved-model training remains separate."})
+    return _cache_put(f"research-result:{symbol}", payload)
 
 
 @router.get("/analysis")
 def get_market_analysis(symbol: str = "^NSEI", refresh: bool = False):
     try:
         if refresh:
-            clear_market_cache()
+            normalized = _sanitize_symbol(symbol)
+            for prefix in (f"research-result:{normalized}", f"prediction:{normalized}",
+                           f"history:{normalized}:", f"snapshot:{normalized}"):
+                clear_market_cache_prefix(prefix)
         return market_research_analysis(symbol)
     except HTTPException:
         raise
@@ -5522,6 +5587,7 @@ def get_news_feed(limit: int = 12, refresh: bool = False):
     if refresh:
         # A headline refresh must not evict quote, currency or analytics caches.
         clear_market_cache_prefix("news:")
+        clear_market_cache_prefix("news-feed:")
     return market_news_feed(limit)
 
 
@@ -5845,6 +5911,8 @@ async def market_agent(request: FastApiRequest):
         llm_context["documentEvidenceAvailable"] = bool(document_matches)
 
     system_prompt = _compact_agent_system_prompt(llm_context)
+    if prediction.get("experimental"):
+        system_prompt += " This estimate is experimental and uncalibrated, not an approved model. Explicitly disclose this limitation when discussing its probability; never describe it as reliable or quality-approved."
     if prediction.get("predictionAvailable") is False:
         system_prompt += (" No approved forecast is available. Explain only observed evidence. "
                           "Never invent a price target, rise/fall probability, or buy/sell recommendation. "

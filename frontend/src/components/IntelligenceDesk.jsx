@@ -203,7 +203,7 @@ export default function IntelligenceDesk({ initialSymbol = "^NSEI", onProviderCh
     const seed = !refresh ? marketApi.seed.analysis(normalized) : null;
     if (seed) setResult(seed);
     else if (!refresh) setResult(null);
-    if (!silent || !seed) setLoading(true);
+    setLoading(true);
     if (!silent) setError("");
     setModelStatusLoading(true);
     setModelStatusError("");
@@ -513,6 +513,7 @@ export default function IntelligenceDesk({ initialSymbol = "^NSEI", onProviderCh
       {error && <div className="notice error">{error}</div>}
 
       {analysis && <>
+        {analysis.experimental && <div className="notice warning" role="status"><strong>Experimental estimate — not an approved prediction.</strong> {analysis.predictionStatus?.message} Data may be delayed; check the timestamp below.</div>}
         <div id="research-summary" className="analysis-hero">
           <div><span className="asset-label">{analysis.symbol}</span><h3>{resolvedCompany?.symbol === analysis.symbol ? resolvedCompany.name : analysis.name}</h3><p>Evidence as of {new Date(analysis.dataAsOf).toLocaleString("en-IN")}</p></div>
           <div className={`outlook outlook-${String(analysis.outlook).toLowerCase()}`}><small>Experimental outlook</small><strong>{analysis.outlook}</strong></div>
@@ -687,7 +688,7 @@ function SimpleMeaningCard({ analysis }) {
   if (analysis.predictionAvailable === false) return <aside className="simple-meaning-card" aria-label="Research availability"><h4>Company research is available; prediction is not.</h4><p>{analysis.predictionStatus?.message}</p><p>Explore price history, company health, news and available annual reports. No rise or fall probability has been invented.</p><p>Background preparation: {analysis.preparation?.status || "not requested"}. {analysis.preparation?.automaticApproval ? "Only calibrated models passing the quality checks can publish automatically. A prediction is not guaranteed." : "Candidate models require separate approval before serving."}</p></aside>;
   const probabilityUp = Number(analysis.probabilityUp);
   const probabilityDown = Number(analysis.probabilityDown);
-  const rsi = Number(analysis.technicalIndicators?.rsi14);
+  const rsi = analysis.technicalIndicators?.rsi14 == null ? NaN : Number(analysis.technicalIndicators.rsi14);
   const outlook = String(analysis.outlook || "NEUTRAL").toUpperCase();
   const direction = outlook === "BULLISH"
     ? "Model ko halki tezi ki possibility zyada dikh rahi hai."
@@ -1978,7 +1979,7 @@ function ModelEvidence({ model, comparisons, importance, audit }) {
       <ValidationStat label="Walk-forward folds" value={model.walkForwardFolds} />
       <ValidationStat label="Balanced accuracy" value={formatPercent(model.balancedAccuracy)} />
       <ValidationStat label="ROC AUC" value={formatPercent(model.rocAuc)} />
-      <ValidationStat label="Probability method" value={model.probabilityMethod === "chronological_sigmoid_v1" ? "Time-ordered calibration" : "Legacy: calibration unverified"} />
+      <ValidationStat label="Probability method" value={model.probabilityMethod === "chronological_sigmoid_v1" ? "Time-ordered calibration" : model.probabilityMethod === "experimental_uncalibrated" ? "Experimental: not calibrated" : "Legacy: calibration unverified"} />
       <ValidationStat label="Training rows" value={model.trainingRows} />
     </div>
     <div className="validation-columns">

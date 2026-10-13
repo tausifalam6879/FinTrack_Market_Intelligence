@@ -43,7 +43,7 @@ export default function NewsDesk({ onResearch, onDataChange }) {
   };
 
   useEffect(() => {
-    load(false, true);
+    load(false);
     const refreshTimer = window.setInterval(() => load(true, true), 5 * 60 * 1000);
     return () => window.clearInterval(refreshTimer);
   }, []);
@@ -68,6 +68,7 @@ export default function NewsDesk({ onResearch, onDataChange }) {
         </div>
         <div className="heading-actions">
           {result && <StatusBadge mode={result.mode} />}
+          {loading && <span role="status">Fetching latest available headlines…</span>}
           <button className="secondary-button" onClick={() => load(true)} disabled={loading}>{loading ? "Checking…" : "Refresh news"}</button>
         </div>
       </div>

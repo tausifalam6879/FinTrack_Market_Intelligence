@@ -1,5 +1,21 @@
 # Prediction probabilities, coverage and recovery
 
+## Experimental research estimates (October 2026 update)
+
+The research screen now offers a separate experimental Logistic Regression estimate
+when there is no approved artifact and enough clean, two-class price history exists.
+It uses at most 600 observations, four causal price features, a chronological 80/20
+split with a one-row gap, and publishes the evaluated estimator without holdout refit.
+It is uncalibrated and is **not** quality-gate approved. It may underperform a simple
+baseline. Both the API and UI label it `experimental_runtime`; it is not inserted
+into the approved registry or approved prediction audit. Insufficient history still
+returns no estimate. The approved-model path and worker gates are unchanged.
+
+Research-only fallback responses and aggregate news are cached for 60 seconds.
+Fetch status does not imply exchange-real-time prices. The UI shows loading while
+refreshing; provider timestamps remain authoritative. Use
+`bash scripts/deploy_research_response_fix.sh` for the serving-only staged rollout.
+
 The previous serving calculation shrank the estimator output toward 50% using
 holdout balanced accuracy and AUC, added heuristic news/macro points, and clipped
 the result to 5–95%. This was not fitted probability calibration. It explains why
