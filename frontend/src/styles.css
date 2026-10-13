@@ -1510,6 +1510,17 @@ footer p { margin: 5px 0 0; }
 .portfolio-panel button { padding: 9px 13px; border: 1px solid #aac5cf; border-radius: 8px; background: white; color: #124952; cursor: pointer; }
 .portfolio-panel button:disabled { opacity: .6; cursor: default; }
 .portfolio-panel small { display: block; }
+.event-upcoming { padding: 16px; margin-top: 18px; border: 1px solid #c6dfe5; border-radius: 12px; background: #edf6f9; }
+.event-upcoming h4 { margin: 0; }
+.event-upcoming p { margin: 8px 0 14px; }
+.event-upcoming ul { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 220px), 1fr)); gap: 12px; list-style: none; padding: 0; margin: 0; }
+.event-upcoming li { display: grid; gap: 6px; padding: 14px; border-radius: 10px; background: white; border: 1px solid #d3e4e9; }
+.event-upcoming time { color: #136376; font-weight: 700; }
+.event-upcoming small, .event-source { color: #526975; font-size: 13px; }
+.event-date-form select { padding: 10px; border: 1px solid #aac5cf; border-radius: 8px; background: white; color: #193444; width: 100%; min-width: 0; }
+.event-date-form label { min-width: 0; max-width: 100%; }
+.event-date-form .event-empty { flex-basis: 100%; margin: 0; }
+.event-date-form button:not(:disabled) { background: #087f91; color: white; border-color: #087f91; }
 @media (max-width: 600px) { .portfolio-panel { padding: 14px; } .portfolio-form label { width: 100%; } }
 .research-report section { margin-top: 20px; }
 .fintrack-report-print-copy { display: none; }
