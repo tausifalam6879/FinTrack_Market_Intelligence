@@ -55,7 +55,10 @@ class ResearchAvailabilityTests(unittest.TestCase):
             result = market.market_research_analysis("AAPL")
         self.assertFalse(result["predictionAvailable"])
         self.assertIsNone(result["probabilityUp"])
-        self.assertIsNone(result["expectedRange"]["low"])
+        self.assertLess(result["expectedRange"]["low"], result["lastClose"])
+        self.assertGreater(result["expectedRange"]["high"], result["lastClose"])
+        self.assertFalse(result["expectedRange"]["calibratedConfidenceInterval"])
+        self.assertEqual(result["technicalIndicators"]["rsi14"], 100)
         self.assertEqual(len(result["history"]), 90)
         persist.assert_called_once()
 

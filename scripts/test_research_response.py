@@ -1,7 +1,7 @@
 import copy
 import unittest
 
-from check_research_response import validate_analysis
+from check_research_response import validate_analysis, validate_indicators
 
 
 class ResearchResponseTests(unittest.TestCase):
@@ -53,6 +53,18 @@ class ResearchResponseTests(unittest.TestCase):
         self.approved['history'] = []
         with self.assertRaises(ValueError):
             validate_analysis(self.approved, 'TEST')
+
+    def test_indicator_check(self):
+        data = {'technicalIndicators': {'rsi14': 0}, 'expectedRange': {'low': 90, 'high': 110}}
+        validate_indicators(data, 'TEST')
+        for value in (None, float('nan'), True, 101):
+            data['technicalIndicators']['rsi14'] = value
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                validate_indicators(data, 'TEST')
+        data['technicalIndicators']['rsi14'] = 50
+        data['expectedRange']['high'] = None
+        with self.assertRaises(ValueError):
+            validate_indicators(data, 'TEST')
 
 
 if __name__ == '__main__':

@@ -41,7 +41,19 @@ def main():
     for symbol in ('INFY.NS', 'AAPL', 'RELIANCE.NS'):
         data = request_json(base + '/market/analysis?symbol=' + symbol)
         print(symbol, validate_analysis(data, symbol), flush=True)
+        validate_indicators(data, symbol)
     print('Health, news and research response checks passed.')
+
+
+def validate_indicators(data, symbol):
+    indicators = data.get('technicalIndicators') or {}
+    price_range = data.get('expectedRange') or {}
+    values = [indicators.get('rsi14'), price_range.get('low'), price_range.get('high')]
+    if not all(type(value) in (int, float) and math.isfinite(value) for value in values):
+        raise ValueError(f'{symbol}: RSI or volatility range missing/invalid')
+    rsi, low, high = values
+    if not (0 <= rsi <= 100 and 0 <= low <= high):
+        raise ValueError(f'{symbol}: RSI or volatility range out of bounds')
 
 
 if __name__ == '__main__':

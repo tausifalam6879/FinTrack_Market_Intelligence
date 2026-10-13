@@ -5403,6 +5403,35 @@ def _experimental_direction(frame: pd.DataFrame) -> Optional[Dict[str, Any]]:
                       "calibration": "Experimental, uncalibrated estimate. Quality gates have not been passed; holdout results may be weak. Not an approved forecast."}}
 
 
+def _observed_research_indicators(close: pd.Series, currency: str) -> Dict[str, Any]:
+    """Descriptive indicators do not require an approved forecasting model."""
+    close = pd.to_numeric(close, errors="coerce").replace([np.inf, -np.inf], np.nan).dropna()
+    close = close[close > 0]
+    rsi = None
+    if len(close) >= 15:
+        changes = close.diff().tail(14)
+        gain = float(changes.clip(lower=0).mean())
+        loss = float(-changes.clip(upper=0).mean())
+        rsi = (100 - 100 / (1 + gain / loss)) if loss > 0 else (100 if gain > 0 else 50)
+    volatility = float(close.pct_change().tail(20).std()) if len(close) >= 21 else None
+    movement = max(0.005, volatility * 1.28) if volatility is not None else None
+    return {
+        "expectedRange": {
+            "method": "20-session volatility × 1.28, minimum movement 0.5%",
+            "kind": "volatility_estimate", "calibratedConfidenceInterval": False,
+            "low": _round(max(0, close.iloc[-1] * (1 - movement))) if movement is not None else None,
+            "high": _round(close.iloc[-1] * (1 + movement)) if movement is not None else None,
+            "currency": currency,
+        },
+        "technicalIndicators": {
+            "rsi14": _round(rsi, 1),
+            "sma20": _round(close.rolling(20).mean().iloc[-1]) if len(close) else None,
+            "sma50": _round(close.rolling(50).mean().iloc[-1]) if len(close) else None,
+            "dailyVolatility20d": _round(volatility * 100, 2) if volatility is not None else None,
+        },
+    }
+
+
 def market_research_analysis(symbol: str) -> Dict[str, Any]:
     """Keep observed research available without manufacturing an unapproved forecast."""
     symbol = _sanitize_symbol(symbol)
@@ -5430,14 +5459,8 @@ def market_research_analysis(symbol: str) -> Dict[str, Any]:
         "outlook": "UNAVAILABLE", "predictionAvailable": False,
         "predictionStatus": {"code": "MODEL_UNAVAILABLE", "message": message},
         "probabilityUp": None, "probabilityDown": None,
-        "expectedRange": {"low": None, "high": None, "currency": snapshot["currency"]},
+        **_observed_research_indicators(close, snapshot["currency"]),
         "lastClose": _round(close.iloc[-1]),
-        "technicalIndicators": {
-            "rsi14": None,
-            "sma20": _round(close.rolling(20).mean().iloc[-1]),
-            "sma50": _round(close.rolling(50).mean().iloc[-1]),
-            "dailyVolatility20d": _round(close.pct_change().rolling(20).std().iloc[-1] * 100),
-        },
         "model": {"type": "Unavailable", "servingMode": "unavailable", "modelsCompared": [], "featureImportance": []},
         "newsFactor": {}, "macroFactor": {"factors": []},
         "riskBenchmark": market_risk_context(symbol, frame),
