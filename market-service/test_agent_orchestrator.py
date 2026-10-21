@@ -35,7 +35,7 @@ class AgentOrchestratorTests(unittest.TestCase):
         tools = [step["tool"] for step in plan["steps"]]
 
         self.assertIn("company_document_rag", tools)
-        self.assertIn("company_fundamentals", tools)
+        self.assertEqual(["company_document_rag"], tools)
         self.assertNotIn("market_breadth", tools)
         self.assertNotIn("global_market_overview", tools)
         self.assertFalse(plan["safety"]["llmChoosesTools"])

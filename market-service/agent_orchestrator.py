@@ -206,10 +206,11 @@ def build_agent_plan(
         "market comparison", "behaved versus", "historical metric",
     )) or " var " in f" {lowered} "
 
-    # Every market-agent response is anchored to the selected symbol and model
-    # context, so follow-up questions cannot silently drift to a different asset.
+    # The selected symbol anchors every answer. Only fetch prediction evidence
+    # when the question actually needs it; a report lookup must not train a model.
     require("market_snapshot", "Anchor the response to the selected asset and current timestamped quote.")
-    require("technical_prediction", "Keep probabilistic model context and its limitations available.")
+    if model_request or technical_request or risk_request or comprehensive:
+        require("technical_prediction", "Provide the requested model, technical or historical-risk evidence.")
     add_intent("current_market_context")
 
     if model_request or technical_request or comprehensive:
@@ -262,6 +263,16 @@ def build_agent_plan(
         if not is_index:
             require("company_fundamentals", "Add basic company context for an otherwise general question.")
         require("market_news", "Add recent headlines for a general research answer.")
+
+    if document_request and not comprehensive and not any((
+        model_request, technical_request, news_request, macro_request,
+        breadth_request, global_request, peer_request, requested_date,
+    )):
+        # Debt/risk/revenue words in a filing question refer to the filing, not
+        # today's quote, model or the provider's entire financial profile.
+        reasons = {"company_document_rag": reasons["company_document_rag"]} if not is_index else reasons
+        if not is_index:
+            intents = ["document_research"]
 
     ordered_tools = [tool for tool in TOOL_CATALOG if tool in reasons]
     return {

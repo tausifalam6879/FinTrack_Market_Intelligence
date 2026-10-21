@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import argparse
+from collections import OrderedDict
 from datetime import datetime, timezone
 import hashlib
 import json
 import os
 from pathlib import Path
 import re
+import time
 from threading import Lock
 from typing import Any, Dict, Iterable, List, Optional
 from urllib.parse import quote
@@ -42,6 +44,76 @@ EMBEDDING_DIMENSIONS = 768
 MARKET_EVIDENCE_VERSION = "evidence-v2"
 _MARKET_EVIDENCE_LOCKS: Dict[str, Lock] = {}
 _MARKET_EVIDENCE_LOCKS_GUARD = Lock()
+_RETRIEVAL_CACHE = OrderedDict()
+_RETRIEVAL_CACHE_LOCK = Lock()
+_RETRIEVAL_CACHE_TTL = 120
+_RETRIEVAL_CACHE_BYTES = 32 * 1024 * 1024
+
+
+def _rag_cache_get(key):
+    with _RETRIEVAL_CACHE_LOCK:
+        item = _RETRIEVAL_CACHE.get(key)
+        if item is None:
+            return None
+        if time.monotonic() - item[0] >= _RETRIEVAL_CACHE_TTL:
+            _RETRIEVAL_CACHE.pop(key, None)
+            return None
+        _RETRIEVAL_CACHE.move_to_end(key)
+        return item[1]
+
+
+def _rag_cache_put(key, value, size=0):
+    # Bound both entry count and matrix memory on small Cloud Run instances.
+    if size > _RETRIEVAL_CACHE_BYTES:
+        return value
+    with _RETRIEVAL_CACHE_LOCK:
+        _RETRIEVAL_CACHE[key] = (time.monotonic(), value, size)
+        _RETRIEVAL_CACHE.move_to_end(key)
+        while len(_RETRIEVAL_CACHE) > 64 or sum(item[2] for item in _RETRIEVAL_CACHE.values()) > _RETRIEVAL_CACHE_BYTES:
+            _RETRIEVAL_CACHE.popitem(last=False)
+    return value
+
+
+def _retrieval_repository(database):
+    repository = database or Database()
+    # Runtime startup already migrates the database. Direct callers still get
+    # initialization, but repeated questions need not run DDL on every request.
+    key = ("schema", hashlib.sha256(repository.url.encode()).hexdigest())
+    if database is not None or _rag_cache_get(key) is None:
+        repository.initialize_schema()
+        _rag_cache_put(key, True)
+    return repository
+
+
+def _retrieval_index(repository, symbol, provider, sources, *, lexical=False):
+    # Check the source manifest on every request. Replacing/adding/deleting a
+    # report in another instance changes this key before cached text is reused.
+    manifest = sorted(tuple(str(source.get(key) or "") for key in (
+        "id", "file_sha256", "embedding_provider", "created_at", "chunk_count"
+    )) for source in sources)
+    revision = hashlib.sha256(json.dumps(manifest).encode()).hexdigest()
+    database_key = hashlib.sha256(repository.url.encode()).hexdigest()
+    key = ("index", database_key, symbol, provider, revision, lexical)
+    cached = _rag_cache_get(key)
+    if cached is not None:
+        return cached
+    providers = list(dict.fromkeys(source["embedding_provider"] for source in sources)) if lexical else [provider]
+    rows = [row for source_provider in providers for row in repository.document_chunks(symbol, source_provider)]
+    vectorizer = None
+    if not rows:
+        return rows, None, vectorizer
+    if lexical:
+        vectorizer = TfidfVectorizer(stop_words="english", ngram_range=(1, 2))
+        matrix = vectorizer.fit_transform([row["text"] for row in rows])
+        size = matrix.data.nbytes + matrix.indices.nbytes + matrix.indptr.nbytes
+    else:
+        matrix = np.asarray([json.loads(row["embedding_json"]) for row in rows], dtype=np.float32)
+        size = matrix.nbytes
+    # The numeric matrix now owns the vectors; retaining their long JSON strings
+    # as well would waste most of the memory budget on a large annual report.
+    rows = [{key: value for key, value in row.items() if key != "embedding_json"} for row in rows]
+    size += sum(len(str(row)) * 2 for row in rows)
+    return _rag_cache_put(key, (rows, matrix, vectorizer), size)
 
 
 class DocumentQuestion(BaseModel):
@@ -102,7 +174,7 @@ def _gemini_embeddings(texts: List[str]) -> np.ndarray:
     api_key = os.getenv("GEMINI_API_KEY", "").strip()
     if not api_key:
         raise RuntimeError("GEMINI_API_KEY is not configured for semantic embeddings.")
-    timeout = max(10, int(os.getenv("RAG_EMBEDDING_TIMEOUT_MS", "30000")) // 1000)
+    timeout = max(1.0, int(os.getenv("RAG_EMBEDDING_TIMEOUT_MS", "8000")) / 1000)
     vectors: List[List[float]] = []
     endpoint = "https://generativelanguage.googleapis.com/v1beta/openai/embeddings"
     for start in range(0, len(texts), 20):
@@ -506,36 +578,40 @@ def retrieve_chunks(
     clean_question = _clean_text(question)
     if len(clean_question) < 3:
         raise ValueError("Ask a document question containing at least three characters.")
-    repository = database or Database()
-    repository.initialize_schema()
+    repository = _retrieval_repository(database)
     sources = repository.document_sources(normalized)
     if not sources:
         return {"symbol": normalized, "question": clean_question, "matches": [], "provider": None}
 
     providers = [source["embedding_provider"] for source in sources]
     provider = GEMINI_EMBEDDING_PROVIDER if GEMINI_EMBEDDING_PROVIDER in providers else providers[0]
-    rows = repository.document_chunks(normalized, provider)
+    rows, matrix, _ = _retrieval_index(repository, normalized, provider, sources)
     if not rows:
         return {"symbol": normalized, "question": clean_question, "matches": [], "provider": provider}
     try:
-        query_vector = embed_texts([clean_question], provider)[0]
-        matrix = np.asarray([json.loads(row["embedding_json"]) for row in rows], dtype=np.float32)
+        query_key = ("query", provider, hashlib.sha256((os.getenv("GEMINI_API_KEY", "") + "|" + clean_question).encode()).hexdigest())
+        query_vector = _rag_cache_get(query_key)
+        if query_vector is None:
+            query_vector = embed_texts([clean_question], provider)[0]
+            _rag_cache_put(query_key, query_vector, query_vector.nbytes)
     except RuntimeError:
         if provider != GEMINI_EMBEDDING_PROVIDER:
             raise
         # Stored text remains usable without the cloud embedding service. Rebuild
         # both sides in one local vector space; never compare unlike embeddings.
-        rows = [row for source_provider in dict.fromkeys(providers)
-                for row in repository.document_chunks(normalized, source_provider)]
-        vectorizer = TfidfVectorizer(stop_words="english", ngram_range=(1, 2))
         try:
-            matrix = vectorizer.fit_transform([row["text"] for row in rows]).toarray()
+            rows, matrix, vectorizer = _retrieval_index(repository, normalized, provider, sources, lexical=True)
+            if not rows:
+                return {"symbol": normalized, "question": clean_question, "matches": [], "provider": "local-tfidf-fallback"}
             query_vector = vectorizer.transform([clean_question]).toarray()[0]
         except ValueError:
             return {"symbol": normalized, "question": clean_question, "matches": [], "provider": "local-tfidf-fallback"}
         provider = "local-tfidf-fallback"
-    matrix_norms = np.linalg.norm(matrix, axis=1)
-    scores = matrix @ query_vector / np.maximum(matrix_norms * np.linalg.norm(query_vector), 1e-12)
+    if provider == "local-tfidf-fallback":
+        matrix_norms = np.sqrt(matrix.multiply(matrix).sum(axis=1)).A1
+    else:
+        matrix_norms = np.linalg.norm(matrix, axis=1)
+    scores = np.asarray(matrix @ query_vector).ravel() / np.maximum(matrix_norms * np.linalg.norm(query_vector), 1e-12)
     ranked = np.argsort(scores)[::-1][:max(1, min(int(limit), 8))]
     matches = []
     query_terms = set(re.findall(r"\b\w\w+\b", clean_question.lower())) - ENGLISH_STOP_WORDS

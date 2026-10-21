@@ -24,6 +24,7 @@ import numpy as np
 import pandas as pd
 import yfinance as yf
 from fastapi import APIRouter, HTTPException, Request as FastApiRequest
+from starlette.concurrency import run_in_threadpool
 from pydantic import BaseModel, Field
 from sklearn.ensemble import HistGradientBoostingClassifier, RandomForestClassifier
 from sklearn.linear_model import LogisticRegression
@@ -2725,12 +2726,28 @@ def _analyst_estimate_intelligence(
     }
 
 
-def company_research(symbol: str) -> Dict[str, Any]:
+def company_research(symbol: str, sections: Optional[set[str]] = None) -> Dict[str, Any]:
     symbol = _sanitize_symbol(symbol)
     key = f"company:{symbol}"
     cached = _cache_get(key)
     if cached is not None:
         return cached
+    if sections is not None:
+        key += ":sections:" + ",".join(sorted(sections))
+        cached = _cache_get(key)
+        if cached is not None:
+            return cached
+
+    def needed(section: str) -> bool:
+        return sections is None or section in sections
+
+    def optional(section: str, getter, default=None):
+        if not needed(section):
+            return default
+        try:
+            return getter()
+        except Exception:
+            return default
 
     ticker = yf.Ticker(symbol)
     frame = _history(symbol, "1y")
@@ -2739,86 +2756,26 @@ def company_research(symbol: str) -> Dict[str, Any]:
         info = ticker.get_info() or {}
     except Exception:
         info = {}
-    try:
-        calendar = ticker.calendar or {}
-    except Exception:
-        calendar = {}
-    try:
-        earnings_dates = ticker.get_earnings_dates(limit=6)
-    except Exception:
-        earnings_dates = None
-    try:
-        income_statement = ticker.income_stmt
-    except Exception:
-        income_statement = None
-    try:
-        balance_sheet = ticker.balance_sheet
-    except Exception:
-        balance_sheet = None
-    try:
-        cash_flow = ticker.cashflow
-    except Exception:
-        cash_flow = None
-    try:
-        quarterly_income = ticker.quarterly_income_stmt
-    except Exception:
-        quarterly_income = None
-    try:
-        major_holders = ticker.major_holders
-    except Exception:
-        major_holders = None
-    try:
-        institutional_holders = ticker.institutional_holders
-    except Exception:
-        institutional_holders = None
-    try:
-        mutual_fund_holders = ticker.mutualfund_holders
-    except Exception:
-        mutual_fund_holders = None
-    try:
-        insider_transactions = ticker.insider_transactions
-    except Exception:
-        insider_transactions = None
-    try:
-        insider_purchases = ticker.insider_purchases
-    except Exception:
-        insider_purchases = None
-    try:
-        insider_roster = ticker.insider_roster_holders
-    except Exception:
-        insider_roster = None
-    try:
-        earnings_estimate = ticker.earnings_estimate
-    except Exception:
-        earnings_estimate = None
-    try:
-        revenue_estimate = ticker.revenue_estimate
-    except Exception:
-        revenue_estimate = None
-    try:
-        eps_revisions = ticker.eps_revisions
-    except Exception:
-        eps_revisions = None
-    try:
-        eps_trend = ticker.eps_trend
-    except Exception:
-        eps_trend = None
-    try:
-        growth_estimates = ticker.growth_estimates
-    except Exception:
-        growth_estimates = None
-    try:
-        dividends = ticker.dividends
-    except Exception:
-        dividends = None
-    try:
-        splits = ticker.splits
-    except Exception:
-        splits = None
-    try:
-        capital_gains = ticker.capital_gains
-    except Exception:
-        capital_gains = None
+    calendar = optional("catalysts", lambda: ticker.calendar or {}, {})
+    earnings_dates = optional("catalysts", lambda: ticker.get_earnings_dates(limit=6))
+    income_statement = optional("statements", lambda: ticker.income_stmt)
+    balance_sheet = optional("statements", lambda: ticker.balance_sheet)
+    cash_flow = optional("statements", lambda: ticker.cashflow)
+    quarterly_income = optional("statements", lambda: ticker.quarterly_income_stmt)
+    major_holders = optional("ownership", lambda: ticker.major_holders)
+    institutional_holders = optional("ownership", lambda: ticker.institutional_holders)
+    mutual_fund_holders = optional("ownership", lambda: ticker.mutualfund_holders)
+    insider_transactions = optional("ownership", lambda: ticker.insider_transactions)
+    insider_purchases = optional("ownership", lambda: ticker.insider_purchases)
+    insider_roster = optional("ownership", lambda: ticker.insider_roster_holders)
+    earnings_estimate = optional("estimates", lambda: ticker.earnings_estimate)
+    revenue_estimate = optional("estimates", lambda: ticker.revenue_estimate)
+    eps_revisions = optional("estimates", lambda: ticker.eps_revisions)
+    eps_trend = optional("estimates", lambda: ticker.eps_trend)
+    growth_estimates = optional("estimates", lambda: ticker.growth_estimates)
+    dividends = optional("actions", lambda: ticker.dividends)
+    splits = optional("actions", lambda: ticker.splits)
+    capital_gains = optional("actions", lambda: ticker.capital_gains)
 
     close = frame["Close"].astype(float)
     fifty_two_week_low = _round(frame["Low"].min()) if "Low" in frame else None
@@ -2859,7 +2816,7 @@ def company_research(symbol: str) -> Dict[str, Any]:
         capital_gains,
         catalysts.get("events"),
     )
-    news_evidence = market_news(symbol, 8)
+    news_evidence = optional("news", lambda: market_news(symbol, 8), {"articles": [], "intelligence": {}})
     result = {
         "symbol": symbol,
         "name": info.get("longName") or info.get("shortName") or snapshot["name"],
@@ -4269,13 +4226,14 @@ def _verified_tool_answer(
             "Prediction is unavailable: no approved forecast can be reported. This is not a neutral or 50% signal.",
             f"Experimental estimate only: {prediction.get('probabilityUp')}% rise probability. This uncalibrated model is not approved and may be worse than a simple baseline. No reliable forecast is established.")
     if prediction.get("predictionAvailable") is False:
-        lines = [
-            f"Research for {snapshot.get('name') or prediction.get('symbol')}.",
-            "Prediction is unavailable: no approved forecast can be reported. This is not a neutral or 50% signal.",
-        ]
+        lines = [f"Research for {snapshot.get('name') or prediction.get('symbol')}."]
+        if not prediction.get("analysisNotRequested"):
+            lines.append("Prediction is unavailable: no approved forecast can be reported. This is not a neutral or 50% signal.")
         if snapshot.get("price") is not None:
             lines.append(f"Observed price: {snapshot['price']} {snapshot.get('currency', '')}; as of {snapshot.get('dataAsOf', 'not reported')}.")
         if company_profile:
+            if company_profile.get("summary"):
+                lines.append(str(company_profile["summary"])[:1600])
             identity = [str(company_profile[key]) for key in ("sector", "industry") if company_profile.get(key)]
             if identity:
                 lines.append("Company profile: " + " — ".join(identity) + ".")
@@ -4309,7 +4267,9 @@ def _verified_tool_answer(
             lines.append(f"Headline: {article.get('title')} (publisher: {article.get('publisher')}; published: {article.get('publishedAt')}).")
         if document_requested:
             lines.append(_verified_document_answer(prediction["symbol"], message, document_matches or []))
-        return "\n\n".join(lines)
+        observed_answer = "\n\n".join(lines)
+        if not prediction.get("analysisNotRequested"):
+            return observed_answer
     news = prediction["newsFactor"]
     model = prediction["model"]
     lowered = message.lower()
@@ -4358,7 +4318,7 @@ def _verified_tool_answer(
         factor_lines.append(f"- {item['name']}: {move:+.2f}% - {impact}")
 
     brief = _build_analysis_brief(snapshot, prediction)
-    evidence_lines = [
+    evidence_lines = [] if prediction.get("analysisNotRequested") else [
         f"- {prediction['name']} price: {brief['currentPrice']} {prediction['expectedRange']['currency']}; "
         f"daily move {float(brief['dailyChangePercent'] or 0):+.2f}%.",
         f"- Model outlook: {prediction['outlook']}; probability-up {brief['probabilityUp']}% aur "
@@ -4851,6 +4811,12 @@ def _verified_tool_answer(
                 "\n\nProfitability, returns and capital-efficiency evidence\n"
                 "- Provider ne aligned annual income-statement aur balance-sheet rows return nahi kiye; missing margins, ROA, ROE ya ROIC invent nahi kiye gaye."
             )
+    if prediction.get("analysisNotRequested"):
+        factor_section = "\n\nRelevant market factors\n" + "\n".join(factor_lines) if factor_lines else ""
+        return (observed_answer + historical_section + factor_section + breadth_line + catalyst_section
+                + news_section + financial_trend_section + ownership_section + estimate_revision_section
+                + dividend_action_section + earnings_quality_section + liquidity_debt_section
+                + profitability_returns_section + document_section)
     return (
         f"{prediction['name']} ke liye model ka current scenario {prediction['outlook']} hai, lekin ise guaranteed "
         "direction ya trading call nahi samajhna chahiye.\n\n"
@@ -5231,6 +5197,13 @@ def _llm_grounding_issue(
         }
         if not any(citation in normalized_answer for citation in allowed_citations):
             return "missing indexed document citation"
+        used_citations = set(re.findall(r"\[s\d+ p\.\d+\]", normalized_answer))
+        if not used_citations.issubset(allowed_citations):
+            return "unknown indexed document citation"
+        if document_requested:
+            paragraphs = [part for part in answer.split("\n") if len(part.split()) >= 8]
+            if any(not re.search(r"\[S\d+ p\.\d+\]", part, re.I) for part in paragraphs):
+                return "uncited document claim"
     return None
 
 
@@ -5614,6 +5587,98 @@ def get_news_feed(limit: int = 12, refresh: bool = False):
     return market_news_feed(limit)
 
 
+def _agent_company_sections(intents: List[str]) -> set[str]:
+    sections = set()
+    mapping = {
+        "company_catalyst_analysis": {"catalysts"},
+        "financial_statement_trend_analysis": {"statements"},
+        "ownership_and_insider_analysis": {"ownership"},
+        "analyst_estimate_revision_analysis": {"estimates"},
+        "dividend_and_corporate_action_analysis": {"actions", "catalysts"},
+        "earnings_quality_and_capital_allocation_analysis": {"statements"},
+        "liquidity_and_debt_capacity_analysis": {"statements"},
+        "profitability_returns_and_efficiency_analysis": {"statements"},
+    }
+    for intent in intents:
+        sections.update(mapping.get(intent, set()))
+    return sections
+
+
+def _unrequested_agent_prediction(symbol: str, snapshot: Dict[str, Any]) -> Dict[str, Any]:
+    """Internal empty context, never an unavailable forecast shown on the dashboard."""
+    return {
+        "symbol": symbol, "name": snapshot.get("name") or symbol,
+        "outlook": "NOT_REQUESTED", "analysisNotRequested": True,
+        "predictionAvailable": False, "probabilityUp": None,
+        "expectedRange": {"currency": snapshot.get("currency")},
+        "model": {"type": "Not requested"}, "technicalIndicators": {},
+        "newsFactor": {}, "macroFactor": {"factors": []}, "history": [],
+        "disclaimer": "Evidence-grounded educational research; not investment advice.",
+    }
+
+
+def _collect_agent_evidence(plan, symbol, question, requested_date):
+    """Bound concurrency while letting independent I/O overlap off the event loop."""
+    tools = {step["tool"] for step in plan["steps"]}
+    snapshot = market_snapshot(symbol) if "market_snapshot" in tools else {"symbol": symbol, "name": symbol}
+    context = {"snapshot": snapshot}
+    outcomes = {}
+    if "market_snapshot" in tools:
+        outcomes["market_snapshot"] = {"status": "completed", "evidenceCount": 1}
+    jobs = {}
+    if "technical_prediction" in tools:
+        jobs["technical_prediction"] = ("prediction", lambda: market_research_analysis(symbol))
+    if "company_fundamentals" in tools:
+        jobs["company_fundamentals"] = ("company", lambda: company_research(symbol, sections=_agent_company_sections(plan["intents"])))
+    for tool, key, function in (
+        ("market_news", "news", lambda: market_news(symbol, 6)),
+        ("macro_market_factors", "macroFactors", macro_factors),
+        ("historical_market_session", "historicalSession", lambda: _historical_session(symbol, requested_date)),
+        ("sector_peer_comparison", "sectorPeers", lambda: sector_peer_intelligence(symbol)),
+        ("market_breadth", "breadth", market_breadth),
+        ("global_market_overview", "globalOverview", global_overview),
+    ):
+        if tool in tools:
+            jobs[tool] = (key, function)
+    if "company_document_rag" in tools:
+        from document_rag import retrieve_chunks
+        jobs["company_document_rag"] = ("documentEvidence", lambda: retrieve_chunks(symbol, question, 5))
+    with ThreadPoolExecutor(max_workers=4, thread_name_prefix="agent-evidence") as executor:
+        futures = {executor.submit(function): (tool, key) for tool, (key, function) in jobs.items()}
+        for future in as_completed(futures):
+            tool, key = futures[future]
+            try:
+                value = future.result()
+            except (RuntimeError, ValueError) as error:
+                if tool != "company_document_rag":
+                    raise
+                logger.warning("Agent document retrieval failed for %s (%s)", symbol, type(error).__name__)
+                context[key] = {"matches": [], "provider": None}
+                outcomes[tool] = {"status": "unavailable", "evidenceCount": 0,
+                                  "message": "Indexed document retrieval is temporarily unavailable."}
+                continue
+            context[key] = value
+            count = {
+                "prediction": lambda: len(value.get("history") or []),
+                "news": lambda: len(value.get("articles") or []),
+                "macroFactors": lambda: len(value.get("factors") or []),
+                "sectorPeers": lambda: len(value.get("peers") or []),
+                "breadth": lambda: int(value.get("coverageCount") or 0),
+                "globalOverview": lambda: len(value.get("markets") or []),
+                "documentEvidence": lambda: len(value.get("matches") or []),
+            }.get(key, lambda: 1)()
+            status = "completed"
+            if key == "prediction" and value.get("predictionAvailable") is False:
+                status = "unavailable"
+            elif key == "documentEvidence" and not count:
+                status = "no_evidence"
+            elif key == "sectorPeers" and not count:
+                status = value.get("status", "unavailable")
+            outcomes[tool] = {"status": status, "evidenceCount": count}
+    context.setdefault("prediction", _unrequested_agent_prediction(symbol, snapshot))
+    return context, outcomes
+
+
 @router.post("/agent")
 async def market_agent(request: FastApiRequest):
     try:
@@ -5635,96 +5700,48 @@ async def market_agent(request: FastApiRequest):
     except Exception as error:
         raise HTTPException(status_code=422, detail=f"Invalid market agent request: {error}") from error
 
+    # Parsing is async; synchronous provider/DB/LLM work must not block health
+    # checks and every other visitor while this request waits for network I/O.
+    return await run_in_threadpool(_execute_market_agent, payload)
+
+
+def _execute_market_agent(payload: MarketAgentRequest):
+    started = time.monotonic()
     symbol = _infer_symbol(payload.message, payload.symbol)
     cache_key = None
-    # Do not cache follow-up conversations: their meaning can depend on the
-    # preceding user/assistant messages.  This keeps a cached answer both
-    # correct and isolated to the exact standalone request that produced it.
-    if AGENT_RESPONSE_CACHE_TTL_SECONDS and not payload.recent_messages:
-        cache_key = _agent_response_cache_key(payload.message, symbol, payload.prefer_local)
-        cached_response = _cache_get(cache_key, AGENT_RESPONSE_CACHE_TTL_SECONDS)
-        if cached_response is not None:
-            response = dict(cached_response)
-            response["responseCache"] = "hit"
-            return response
-    lowered = payload.message.lower()
-    requested_date = _extract_requested_date(payload.message)
+    # UI instructions mention concepts such as 'model' even for a company
+    # question. Route from the actual question, retaining the reports section.
+    question = payload.message.split("User question:", 1)[-1].strip()
+    routing_question = question
+    retrieval_question = question
+    if "section: reports and rag" in payload.message.lower():
+        routing_question = "Indexed document question: " + question
+    if payload.recent_messages and re.fullmatch(r"(?:why|how|really|are you sure|explain more|sure|pakka|kyun|kaise)[?.!\s]*", question, re.I):
+        previous = next((str(item.get("content", "")) for item in reversed(payload.recent_messages)
+                         if item.get("role") == "user"), "")
+        routing_question += " " + previous
+        retrieval_question += " " + previous.split("User question:", 1)[-1]
+    lowered = routing_question.lower()
+    requested_date = _extract_requested_date(routing_question)
     plan = build_agent_plan(
-        payload.message,
+        routing_question,
         symbol,
         requested_date,
         is_index=symbol in GLOBAL_INDICES or symbol in MACRO_FACTORS,
     )
     tools = [step["tool"] for step in plan["steps"]]
-    outcomes: Dict[str, Dict[str, Any]] = {}
-    context: Dict[str, Any] = {}
-
-    context["snapshot"] = market_snapshot(symbol)
-    outcomes["market_snapshot"] = {"status": "completed", "evidenceCount": 1}
-    context["prediction"] = market_research_analysis(symbol)
-    outcomes["technical_prediction"] = {
-        "status": "unavailable" if context["prediction"].get("predictionAvailable") is False else "completed",
-        "evidenceCount": len(context["prediction"].get("history") or []),
-    }
-    if "market_news" in tools:
-        context["news"] = market_news(symbol, 6)
-        outcomes["market_news"] = {
-            "status": "completed",
-            "evidenceCount": len(context["news"].get("articles") or []),
-        }
-    if "macro_market_factors" in tools:
-        context["macroFactors"] = macro_factors()
-        outcomes["macro_market_factors"] = {
-            "status": "completed",
-            "evidenceCount": len(context["macroFactors"].get("factors") or []),
-        }
-    if "historical_market_session" in tools and requested_date:
-        context["historicalSession"] = _historical_session(symbol, requested_date)
-        outcomes["historical_market_session"] = {"status": "completed", "evidenceCount": 1}
-    if "company_fundamentals" in tools:
-        context["company"] = company_research(symbol)
-        outcomes["company_fundamentals"] = {"status": "completed", "evidenceCount": 1}
-    if "sector_peer_comparison" in tools:
-        context["sectorPeers"] = sector_peer_intelligence(symbol)
-        peer_count = len(context["sectorPeers"].get("peers") or [])
-        outcomes["sector_peer_comparison"] = {
-            "status": "completed" if peer_count else context["sectorPeers"].get("status", "unavailable"),
-            "evidenceCount": peer_count,
-            **({"message": context["sectorPeers"].get("message")} if not peer_count else {}),
-        }
-    if "market_breadth" in tools:
-        context["breadth"] = market_breadth()
-        outcomes["market_breadth"] = {
-            "status": "completed",
-            "evidenceCount": int(context["breadth"].get("coverageCount") or 0),
-        }
-    if "global_market_overview" in tools:
-        context["globalOverview"] = global_overview()
-        outcomes["global_market_overview"] = {
-            "status": "completed",
-            "evidenceCount": len(context["globalOverview"].get("markets") or []),
-        }
-    if "company_document_rag" in tools:
-        try:
-            # Runtime import avoids a module cycle: document_rag reuses this
-            # module's provider adapter for optional grounded generation.
-            from document_rag import retrieve_chunks
-            context["documentEvidence"] = retrieve_chunks(symbol, payload.message, 5)
-            document_count = len(context["documentEvidence"].get("matches") or [])
-            outcomes["company_document_rag"] = {
-                "status": "completed" if document_count else "no_evidence",
-                "evidenceCount": document_count,
-                **({"message": "No retrievable indexed company evidence was found; no document claim was invented."}
-                   if not document_count else {}),
-            }
-        except (RuntimeError, ValueError) as error:
-            logger.warning("Agent document retrieval failed for %s: %s", symbol, error)
-            context["documentEvidence"] = {"matches": [], "provider": None}
-            outcomes["company_document_rag"] = {
-                "status": "unavailable",
-                "evidenceCount": 0,
-                "message": "Indexed document retrieval is temporarily unavailable.",
-            }
+    # Document retrieval checks the current source manifest on every request;
+    # never reuse a generated answer after a report was replaced or removed.
+    if AGENT_RESPONSE_CACHE_TTL_SECONDS and not payload.recent_messages and "company_document_rag" not in tools:
+        cache_key = _agent_response_cache_key(payload.message, symbol, payload.prefer_local)
+        cached_response = _cache_get(cache_key, AGENT_RESPONSE_CACHE_TTL_SECONDS)
+        if cached_response is not None:
+            response = dict(cached_response)
+            response["responseCache"] = "hit"
+            response["timings"] = {"evidenceMs": 0, "totalMs": round((time.monotonic() - started) * 1000, 2)}
+            return response
+    context, outcomes = _collect_agent_evidence(plan, symbol, retrieval_question, requested_date)
+    evidence_ms = round((time.monotonic() - started) * 1000, 2)
 
     prediction = context["prediction"]
     analysis_brief = _build_analysis_brief(context["snapshot"], prediction)
@@ -5760,6 +5777,9 @@ async def market_agent(request: FastApiRequest):
         ],
         "derivedCalculations": analysis_brief,
     }
+    if prediction.get("analysisNotRequested"):
+        for key in ("model", "drivers", "derivedCalculations"):
+            llm_context.pop(key, None)
     if _requests_risk_analysis(lowered):
         llm_context["historicalRiskAndBenchmark"] = prediction.get("riskBenchmark")
     if "historicalSession" in context:
@@ -5787,6 +5807,8 @@ async def market_agent(request: FastApiRequest):
         liquidity_debt = context["company"].get("liquidityDebtIntelligence") or {}
         profitability_returns = context["company"].get("profitabilityReturnsIntelligence") or {}
         llm_context["company"] = {
+            "name": context["company"].get("name"),
+            "businessSummary": str(context["company"].get("summary") or "")[:1600],
             "sector": context["company"]["sector"],
             "industry": context["company"]["industry"],
             "performance": context["company"]["performance"],
@@ -5895,6 +5917,12 @@ async def market_agent(request: FastApiRequest):
                 },
             } if "profitability_returns_and_efficiency_analysis" in plan["intents"] else {}),
         }
+        requested_sections = _agent_company_sections(plan["intents"])
+        for key, section in (("catalysts", "catalysts"),
+                             ("financialStatementTrends", "statements"),
+                             ("ownershipAndInsiderActivity", "ownership")):
+            if section not in requested_sections:
+                llm_context["company"].pop(key, None)
     if context.get("sectorPeers", {}).get("status") == "available":
         peer_context = context["sectorPeers"]
         llm_context["sectorPeerComparison"] = {
@@ -5936,7 +5964,7 @@ async def market_agent(request: FastApiRequest):
     system_prompt = _compact_agent_system_prompt(llm_context)
     if prediction.get("experimental"):
         system_prompt += " This estimate is experimental and uncalibrated, not an approved model. Explicitly disclose this limitation when discussing its probability; never describe it as reliable or quality-approved."
-    if prediction.get("predictionAvailable") is False:
+    if prediction.get("predictionAvailable") is False and not prediction.get("analysisNotRequested"):
         system_prompt += (" No approved forecast is available. Explain only observed evidence. "
                           "Never invent a price target, rise/fall probability, or buy/sell recommendation. "
                           "If asked for a prediction, explicitly say it is unavailable.")
@@ -5953,7 +5981,7 @@ async def market_agent(request: FastApiRequest):
             "role": "user",
             "content": (
                 f"Question: {payload.message}\nEvidence: "
-                f"{json.dumps(llm_context, default=str, separators=(',', ':'))[:6000]}"
+                f"{json.dumps(llm_context, default=str, separators=(',', ':'))}"
             ),
         },
     ]
@@ -5979,7 +6007,7 @@ async def market_agent(request: FastApiRequest):
         if document_only:
             return _verified_document_answer(symbol, payload.message, document_matches)
         return _verified_tool_answer(
-            payload.message,
+            routing_question,
             context["snapshot"],
             prediction,
             tools,
@@ -5993,6 +6021,10 @@ async def market_agent(request: FastApiRequest):
         )
 
     try:
+        if document_only and not document_matches:
+            # No generator can answer a filing question without any passages.
+            # Return the explicit evidence boundary without a paid network wait.
+            raise RuntimeError("No indexed document evidence available.")
         # Gemini is the primary generator for every question. Hybrid routing
         # reaches Ollama only when the Gemini request actually fails.
         answer, llm_provider = _provider_chat(messages, prefer_local=payload.prefer_local)
@@ -6005,7 +6037,7 @@ async def market_agent(request: FastApiRequest):
                 llm_status = "connected_repaired"
         grounding_issue = _llm_grounding_issue(
             answer,
-            payload.message,
+            routing_question,
             prediction,
             context.get("macroFactors") or {"factors": []},
             context.get("historicalSession"),
@@ -6023,7 +6055,7 @@ async def market_agent(request: FastApiRequest):
                 llm_status = "fallback_after_grounding"
                 grounding_issue = _llm_grounding_issue(
                     answer,
-                    payload.message,
+                    routing_question,
                     prediction,
                     context.get("macroFactors") or {"factors": []},
                     context.get("historicalSession"),
@@ -6087,6 +6119,7 @@ async def market_agent(request: FastApiRequest):
     response = {
         "answer": answer,
         "symbol": symbol,
+        "generatedAt": datetime.now(timezone.utc).isoformat(),
         "llmUsed": llm_used,
         "llmProvider": llm_provider,
         "llmStatus": llm_status,
@@ -6098,8 +6131,9 @@ async def market_agent(request: FastApiRequest):
         "toolTrace": execution_trace,
         "evidenceSources": evidence_sources,
         "citations": citations,
-        "usedLiveContext": True,
+        "usedLiveContext": "market_snapshot" in tools,
         "responseCache": "miss",
+        "timings": {"evidenceMs": evidence_ms, "totalMs": round((time.monotonic() - started) * 1000, 2)},
         "suggestedQuestions": [
             (f"Show company fundamentals for {symbol}" if prediction.get("predictionAvailable") is False
              else f"Why is {symbol} outlook {context['prediction']['outlook'].lower()}?"),

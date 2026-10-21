@@ -1,1 +1,2 @@
 gateway-service/mvnw text eol=lf
+scripts/deploy_agent_speed_fix.sh text eol=lf
