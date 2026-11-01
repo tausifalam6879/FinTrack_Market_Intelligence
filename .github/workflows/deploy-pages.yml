@@ -32,10 +32,10 @@ jobs:
         working-directory: frontend
         run: npm ci
 
-      - name: Build frontend with Render API
+      - name: Build frontend with configured backend
         working-directory: frontend
         env:
-          VITE_MARKET_API_BASE_URL: https://fintrack-gateway-304232323336.asia-south1.run.app
+          VITE_MARKET_API_BASE_URL: ${{ vars.FINTRACK_PUBLIC_API_URL || 'https://fintrack-gateway-304232323336.asia-south1.run.app' }}
         run: npm run build
 
       - name: Configure GitHub Pages

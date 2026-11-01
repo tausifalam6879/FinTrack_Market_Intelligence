@@ -1,0 +1,31 @@
+# An independent VM/server with Docker Compose. Ports bind locally for a TLS proxy.
+services:
+  api:
+    build: ./market-service
+    restart: unless-stopped
+    env_file: .env.recovery
+    environment:
+      PORT: "8000"
+      APP_ENV: production
+      APP_VERSION: independent-recovery
+      REQUIRE_DURABLE_DATABASE: "true"
+      MODEL_ARTIFACT_DIR: /app/artifacts
+      MODEL_ARTIFACT_BUCKET: fintrack-models-304232323336
+      MODEL_ARTIFACT_OFFLINE_ONLY: "true"
+      ENABLE_COMPANY_PREPARATION_QUEUE: "false"
+    volumes:
+      - ./backups/recovery/artifacts:/app/artifacts:ro
+      - ./secrets/aiven-ca.pem:/etc/secrets/ca.pem:ro
+    ports:
+      - "127.0.0.1:8000:8000"
+  gateway:
+    build: ./gateway-service
+    restart: unless-stopped
+    environment:
+      PORT: "8081"
+      FINTRACK_GATEWAY_UPSTREAM_BASE_URL: http://api:8000
+    ports:
+      - "127.0.0.1:8081:8081"
+    depends_on:
+      api:
+        condition: service_healthy

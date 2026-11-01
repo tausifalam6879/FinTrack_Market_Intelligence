@@ -1,2 +1,3 @@
 gateway-service/mvnw text eol=lf
 scripts/deploy_agent_speed_fix.sh text eol=lf
+scripts/export_backend_recovery.sh text eol=lf

@@ -15,11 +15,13 @@ def resolve_artifact(value, root, checksum):
         raise ValueError("Artifact is outside the configured trusted bucket/prefix.")
     if not key.endswith(".joblib") or len(checksum) != 64 or any(c not in "0123456789abcdef" for c in checksum):
         raise ValueError("Invalid artifact extension or checksum.")
-    from google.cloud import storage
     root.mkdir(parents=True, exist_ok=True)
     target = root / (checksum + ".joblib")
     if target.is_file() and hashlib.sha256(target.read_bytes()).hexdigest() == checksum:
         return target
+    if os.getenv("MODEL_ARTIFACT_OFFLINE_ONLY", "false").lower() == "true":
+        raise ValueError("Verified model is missing from the independent artifact mirror.")
+    from google.cloud import storage
     with NamedTemporaryFile(dir=root, delete=False) as stream:
         temporary = Path(stream.name)
     try:
