@@ -19,6 +19,8 @@ class SectorPeerIntelligenceTests(unittest.TestCase):
         directory = pd.DataFrame({'name': ['Selected', 'Peer One', 'Peer Two'],
                                   'rating': ['Buy', None, 'Hold']}, index=['NEWCO', 'PEER1', 'PEER2'])
         with patch.object(market, '_company_profile', return_value=({'sector': 'Technology'}, {})), \
+             patch.object(market, '_stored_sector_peers', return_value={}), \
+             patch.object(market, 'Database'), \
              patch.object(market.yf, 'screen', side_effect=RuntimeError('custom screen blocked')), \
              patch.object(market.yf, 'Sector', return_value=Mock(top_companies=directory)):
             result = market.sector_peer_intelligence('NEWCO')

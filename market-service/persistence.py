@@ -647,10 +647,22 @@ class Database:
                     region = VALUES(region),
                     currency = VALUES(currency),
                     source = VALUES(source),
-                    metadata_json = VALUES(metadata_json),
+                    metadata_json = CASE
+                        WHEN JSON_CONTAINS_PATH(metadata_json, 'one', '$._sectorPeerSnapshot')
+                        THEN JSON_SET(VALUES(metadata_json), '$._sectorPeerSnapshot', JSON_EXTRACT(metadata_json, '$._sectorPeerSnapshot'))
+                        ELSE VALUES(metadata_json) END,
                     updated_at = VALUES(updated_at)
             """
         else:
+            snapshot_merge = (
+                "CASE WHEN companies.metadata_json::jsonb ? '_sectorPeerSnapshot' THEN "
+                "(excluded.metadata_json::jsonb || jsonb_build_object('_sectorPeerSnapshot', companies.metadata_json::jsonb -> '_sectorPeerSnapshot'))::text "
+                "ELSE excluded.metadata_json END"
+                if self.backend == "postgresql" else
+                "CASE WHEN json_type(companies.metadata_json, '$._sectorPeerSnapshot') IS NOT NULL "
+                "THEN json_set(excluded.metadata_json, '$._sectorPeerSnapshot', json_extract(companies.metadata_json, '$._sectorPeerSnapshot')) "
+                "ELSE excluded.metadata_json END"
+            )
             statement = self._sql("""
                 INSERT INTO companies (
                     symbol, name, exchange, sector, industry, region, currency,
@@ -664,9 +676,9 @@ class Database:
                     region = excluded.region,
                     currency = excluded.currency,
                     source = excluded.source,
-                    metadata_json = excluded.metadata_json,
+                    metadata_json = SNAPSHOT_MERGE,
                     updated_at = excluded.updated_at
-            """)
+            """).replace("SNAPSHOT_MERGE", snapshot_merge)
         values = (
             company["symbol"], company.get("name") or company["symbol"], company.get("exchange"),
             company.get("sector"), company.get("industry"), company.get("region"),
@@ -675,6 +687,32 @@ class Database:
         )
         with self.connect() as connection:
             connection.cursor().execute(statement, values)
+
+    def store_peer_snapshot(self, symbol: str, payload: Dict[str, Any]) -> None:
+        """Atomically retain public provider evidence for an already researched company."""
+        if payload.get("status") != "available" or payload.get("symbol") != symbol:
+            raise ValueError("Only matching, available peer evidence can be retained.")
+        encoded = json.dumps(payload, allow_nan=False)
+        if len(encoded.encode("utf-8")) > 100_000:
+            raise ValueError("Peer evidence exceeds storage limit.")
+        if self.backend == "mysql":
+            statement = "UPDATE companies SET metadata_json=JSON_SET(metadata_json, '$._sectorPeerSnapshot', CAST(%s AS JSON)) WHERE symbol=%s"
+        elif self.backend == "postgresql":
+            statement = "UPDATE companies SET metadata_json=jsonb_set(metadata_json::jsonb, '{_sectorPeerSnapshot}', %s::jsonb)::text WHERE symbol=%s"
+        else:
+            statement = "UPDATE companies SET metadata_json=json_set(metadata_json, '$._sectorPeerSnapshot', json(?)) WHERE symbol=?"
+        with self.connect() as connection:
+            connection.cursor().execute(statement, (encoded, symbol))
+
+    def load_peer_snapshot(self, symbol: str) -> Optional[Dict[str, Any]]:
+        with self.connect() as connection:
+            cursor = connection.cursor()
+            cursor.execute(self._sql("SELECT metadata_json FROM companies WHERE symbol=?"), (symbol,))
+            row = cursor.fetchone()
+        if not row:
+            return None
+        value = json.loads(row[0]).get("_sectorPeerSnapshot")
+        return value if isinstance(value, dict) else None
 
     def upsert_market_bars(self, bars: Iterable[Dict[str, Any]]) -> int:
         rows = list(bars)

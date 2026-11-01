@@ -3108,6 +3108,25 @@ def _sector_directory_peers(symbol: str, info: Dict[str, Any], region: str, suff
         return {}
 
 
+def _stored_sector_peers(symbol: str, sector: str, region: str) -> Dict[str, Any]:
+    try:
+        snapshot = Database().load_peer_snapshot(symbol)
+        if not snapshot or snapshot.get("status") != "available" or snapshot.get("symbol") != symbol:
+            return {}
+        if snapshot.get("sector") != sector or snapshot.get("region") != region.upper():
+            return {}
+        observed = datetime.fromisoformat(snapshot["generatedAt"])
+        age = (datetime.now(timezone.utc) - observed).total_seconds()
+        if age < 0 or age > 86400:
+            return {}
+        return {**snapshot, "discoveryMode": "stored_provider_snapshot", "coverageLevel": "partial",
+                "coverageNotice": f"Live peer discovery is unavailable. Showing retained provider evidence from {snapshot['generatedAt']} (at most 24 hours old). These financial values are not live.",
+                "snapshotAgeSeconds": round(age, 1)}
+    except Exception as error:
+        logger.warning("Stored peer evidence unavailable for %s (%s)", symbol, type(error).__name__)
+        return {}
+
+
 def sector_peer_intelligence(symbol: str) -> Dict[str, Any]:
     symbol = _sanitize_symbol(symbol)
     if symbol.startswith("^"):
@@ -3118,6 +3137,15 @@ def sector_peer_intelligence(symbol: str) -> Dict[str, Any]:
         }
     key = f"sector-peers:{symbol}"
     cached = _cache_get(key, PEER_CACHE_TTL_SECONDS)
+    if cached and cached.get("discoveryMode") == "stored_provider_snapshot":
+        try:
+            age = (datetime.now(timezone.utc) - datetime.fromisoformat(cached["generatedAt"])).total_seconds()
+            if not 0 <= age <= 86400:
+                cached = None
+            else:
+                cached["snapshotAgeSeconds"] = round(age, 1)
+        except (KeyError, TypeError, ValueError):
+            cached = None
     if cached is not None and (cached.get("status") == "available"
                                or cached.get("freshness", {}).get("cacheAgeSeconds", 0) < 30):
         return cached
@@ -3172,10 +3200,15 @@ def sector_peer_intelligence(symbol: str) -> Dict[str, Any]:
             "source": "Yahoo Finance equity screener via yfinance",
         }
     if result.get("status") != "available":
-        recovered = _sector_directory_peers(symbol, info, region, suffix)
+        recovered = _stored_sector_peers(symbol, sector, region) or _sector_directory_peers(symbol, info, region, suffix)
         if recovered:
             result = recovered
     result["profileEvidence"] = profile_evidence
+    if result.get("status") == "available" and result.get("discoveryMode") != "stored_provider_snapshot":
+        try:
+            Database().store_peer_snapshot(symbol, result)
+        except Exception as error:
+            logger.warning("Peer evidence retention unavailable for %s (%s)", symbol, type(error).__name__)
     return _cache_put(key, result)
 
 

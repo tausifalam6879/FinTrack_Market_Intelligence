@@ -15,6 +15,23 @@ A public market-research dashboard for company analysis, global indices, news an
 
 Quotes may be delayed. Cached data and snapshots are labelled; predictions are experiments, not guaranteed returns or trading instructions.
 
+### Company coverage
+
+Search is dynamic: the dashboard's example companies are not an allowlist.
+Provider-supported listed tickers can be researched on demand across supported
+markets. Prediction first uses an approved model when available; otherwise the
+experimental direction model needs at least 120 clean labelled feature rows
+(more raw daily prices are needed for rolling features). Private/unlisted firms,
+new listings with short history and missing provider data cannot be promised a
+forecast. There is no fixed company-count cap, but provider and server limits
+still apply. Search coverage is not the same as guaranteed prediction coverage.
+
+Peer discovery first uses the detailed screener. If that fails, the service can
+use matching provider evidence retained in MySQL for at most 24 hours, explicitly
+labelled as a snapshot. A separate US sector directory can recover company names
+with partial financial coverage; it is never used as a substitute for Indian or
+Japanese peers. No missing valuation or forecast number is invented.
+
 ## System at a glance
 
 ```mermaid

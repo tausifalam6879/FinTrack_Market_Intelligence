@@ -1558,9 +1558,10 @@ function SectorPeerPanel({ data, loading, error }) {
   const metricValue = (value, suffix = "") => value === null || value === undefined ? "—" : `${Number(value).toFixed(2)}${suffix}`;
   return <section className="peer-panel" aria-labelledby="sector-peer-title">
     <div className="peer-heading">
-      <div><p className="eyebrow">SECTOR PEER INTELLIGENCE</p><h3 id="sector-peer-title">How does {selected.name || selected.symbol} compare with similar companies?</h3><p>{data.sector} · {data.region} · {data.coverageLevel === "partial" ? "provider sector directory; financial coverage limited" : "dynamically discovered by comparable market size"}</p></div>
+      <div><p className="eyebrow">SECTOR PEER INTELLIGENCE</p><h3 id="sector-peer-title">How does {selected.name || selected.symbol} compare with similar companies?</h3><p>{data.sector} · {data.region} · {data.discoveryMode === "stored_provider_snapshot" ? "retained provider snapshot; check observation date" : data.coverageLevel === "partial" ? "provider sector directory; financial coverage limited" : "dynamically discovered by comparable market size"}</p></div>
       <span>{data.peers.length} {data.coverageLevel === "partial" ? "sector peers · partial data" : "peers"}</span>
     </div>
+    {data.coverageNotice && <p className="notice warning" role="status">{data.coverageNotice}</p>}
     <div className="peer-summary-grid">
       <PeerSummary label="Market-cap rank" value={selected.marketCapRank ? `#${selected.marketCapRank} of ${rows.length}` : "—"} hint={comparison.marketCap} />
       <PeerSummary label="Trailing P/E" value={metricValue(selected.trailingPE, "x")} hint={`${comparison.trailingPE} · median ${metricValue(medians.trailingPE, "x")}`} />
@@ -1583,7 +1584,7 @@ function SectorPeerPanel({ data, loading, error }) {
         </tr>)}</tbody>
       </table>
     </div>
-    <p className="peer-method">{data.coverageNotice && <>{data.coverageNotice} </>}<strong>Method:</strong> {data.method} Provider coverage: {data.providerCoverage || rows.length} listings. {data.disclaimer} Missing financial fields remain blank; reporting periods may differ across companies.</p>
+    <p className="peer-method"><strong>Method:</strong> {data.method} Provider coverage: {data.providerCoverage || rows.length} listings. {data.disclaimer} Missing financial fields remain blank; reporting periods may differ across companies.</p>
   </section>;
 }
 
