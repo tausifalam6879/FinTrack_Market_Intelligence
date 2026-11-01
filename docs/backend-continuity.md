@@ -5,7 +5,8 @@
 The repository contains deployable source, a Render blueprint, an independent
 Docker Compose deployment, an artifact export command and a configurable Pages
 backend URL. These are recovery tools, not proof of a running standby server.
-Do not switch public traffic until the alternate backend passes the checks below.
+The Render gateway has passed health, news, research and AI routing checks.
+Approved-model independence still requires installing the verified mirror.
 
 The Aiven database is shared application storage, not a second backend or proof
 of a database backup. Keep a recent verified database export outside Google Cloud
@@ -79,7 +80,25 @@ retain source citations, and news/MLOps pages load in a real browser. Restart th
 alternate services and repeat the approved-model check with GCS credentials
 absent. Test Aiven connectivity and Gemini from the alternate host itself.
 
-## 4. Switch the public website
+## 4. Google-first automatic switching
+
+The Pages workflow enables `VITE_MARKET_FAILOVER_ENABLED=true` and sets the
+fallback to `https://fintrack-market-gateway.onrender.com`. Google remains the
+default primary. On network failure, request timeout or HTTP 500/502/503/504,
+research GET requests and read-only agent/comparison/document-answer POSTs try
+Render sequentially. The browser skips the failed primary for 60 seconds, then
+the next eligible request tries Google first again. No background polling is
+required. An expired account returning a permission error (403), rather than a
+server/network error, needs manual cutover after checking the cause.
+
+Input errors, permissions, rate limits and malformed responses do not trigger
+failover. Document preparation writes are never replayed on another host.
+Each host keeps the endpoint's existing timeout; a slow request can therefore
+wait for that timeout before switching. A sleeping Render service can add delay.
+Responses mark `_delivery.fallback` for diagnostics. Cached browser responses
+do not prove either server is healthy. There is no uptime guarantee on Free.
+
+### Manual cutover / rollback
 
 In GitHub repository Settings > Secrets and variables > Actions > Variables set
 `FINTRACK_PUBLIC_API_URL` to the verified alternate HTTPS gateway URL. Run the
@@ -87,8 +106,9 @@ In GitHub repository Settings > Secrets and variables > Actions > Variables set
 news and MLOps on the public website. Change the variable back and rebuild to
 roll back. The default remains the current Cloud Run gateway until this step.
 
-This is an explicit cutover, not automatic production failover. Cached browser
-responses do not prove the alternate server is running.
+For a frontend build without automatic switching, set
+`VITE_MARKET_FAILOVER_ENABLED=false` in the workflow and rebuild. Local development
+retains its existing GET-only hosted fallback; local POSTs stay local.
 
 ## 5. Remaining Google dependencies
 

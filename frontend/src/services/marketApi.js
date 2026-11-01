@@ -7,6 +7,9 @@ const HOSTED_FALLBACK_API = String(
 ).replace(/\/$/, "");
 const USING_LOCAL_API = /^(?:https?:\/\/)?(?:localhost|127\.0\.0\.1)(?::|\/|$)/i.test(API_BASE);
 const CACHE_PREFIX = "fintrack.market.intelligence.v1";
+const HOSTED_FAILOVER_ENABLED = import.meta.env.VITE_MARKET_FAILOVER_ENABLED === "true";
+const READ_ONLY_POSTS = new Set(["/market/agent", "/market/compare", "/market/documents/ask"]);
+let primaryUnavailableUntil = 0;
 
 const cacheKey = (name) => `${CACHE_PREFIX}.${name}`;
 
@@ -74,18 +77,22 @@ const seedResult = (name) => {
 };
 
 const request = async (path, { method = "GET", body, timeout = 30000, retry = method === "GET" } = {}) => {
-  // A developer may open the Vite app before starting the local Java/Spring
-  // services. Public read-only data should still work in that state, while
-  // POST requests (AI questions, document preparation, comparisons) remain on
-  // the explicitly configured local backend.
-  const apiBases = method === "GET" && USING_LOCAL_API && HOSTED_FALLBACK_API !== API_BASE
-    ? [API_BASE, HOSTED_FALLBACK_API]
+  // Replay only research reads. Document preparation can write shared state
+  // and must never be repeated on another host after an ambiguous failure.
+  const canFailover = HOSTED_FALLBACK_API !== API_BASE && (
+    (USING_LOCAL_API && method === "GET")
+    || (!USING_LOCAL_API && HOSTED_FAILOVER_ENABLED
+      && (method === "GET" || READ_ONLY_POSTS.has(path.split("?")[0])))
+  );
+  // A short circuit avoids making every click wait on a known failed primary.
+  // The next request after one minute tries Google again before using Render.
+  const apiBases = canFailover
+    ? Date.now() < primaryUnavailableUntil ? [HOSTED_FALLBACK_API] : [API_BASE, HOSTED_FALLBACK_API]
     : [API_BASE];
   let lastError;
   for (let baseIndex = 0; baseIndex < apiBases.length; baseIndex += 1) {
     const apiBase = apiBases[baseIndex];
-    const localFallbackAvailable = apiBase === API_BASE && USING_LOCAL_API && apiBases.length > 1;
-    const attempts = localFallbackAvailable ? 1 : retry ? 2 : 1;
+    const attempts = canFailover ? 1 : retry ? 2 : 1;
     for (let attempt = 0; attempt < attempts; attempt += 1) {
       const controller = new AbortController();
       // Each endpoint already supplies a timeout that reflects its cost.
@@ -109,12 +116,13 @@ const request = async (path, { method = "GET", body, timeout = 30000, retry = me
           throw error;
         }
         const payload = await response.json();
+        if (apiBase === API_BASE) primaryUnavailableUntil = 0;
         const gateway = response.headers.get("X-FinTrack-Gateway");
-        if (gateway && payload && typeof payload === "object" && !Array.isArray(payload)) {
+        if (payload && typeof payload === "object" && !Array.isArray(payload)) {
           return {
             ...payload,
             _delivery: {
-              gateway,
+              gateway: gateway || null,
               requestId: response.headers.get("X-Request-Id") || null,
               responseTimeMs: response.headers.get("X-Response-Time-Ms") || null,
               fallback: apiBase !== API_BASE
@@ -124,10 +132,16 @@ const request = async (path, { method = "GET", body, timeout = 30000, retry = me
         return payload;
       } catch (error) {
         lastError = error;
-        // A timed-out request has already consumed its full user-facing
-        // budget. Retrying it immediately doubles the wait without improving
-        // the current interaction; transient gateway/network failures can
-        // still use the normal retry path.
+        const unavailable = error.name === "AbortError"
+          || error instanceof TypeError
+          || [500, 502, 503, 504].includes(error.status);
+        if (canFailover && unavailable) {
+          if (apiBase === API_BASE) primaryUnavailableUntil = Date.now() + 60000;
+          break;
+        }
+        // Invalid inputs, rate limits, permissions and malformed responses
+        // must not be turned into traffic on a different server.
+        if (canFailover) throw error;
         const retryable = error.name !== "AbortError" && (!error.status || [502, 503, 504].includes(error.status));
         if (!retryable) throw error;
         const retryCurrentBase = attempt + 1 < attempts;
