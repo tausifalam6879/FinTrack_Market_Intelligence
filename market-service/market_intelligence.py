@@ -2726,16 +2726,63 @@ def _analyst_estimate_intelligence(
     }
 
 
+def _company_profile(symbol: str, ticker=None) -> tuple[Dict[str, Any], Dict[str, Any]]:
+    """Recover classification without inventing fundamentals or changing listings."""
+    key = f"profile-metadata:{symbol}"
+    fields = ("sector", "industry", "longName", "shortName", "exchange", "currency")
+    try:
+        info = (ticker if ticker is not None else yf.Ticker(symbol)).get_info() or {}
+        if not isinstance(info, dict) or str(info.get("symbol", symbol)).upper() != symbol:
+            info = {}
+    except Exception as error:
+        logger.warning("Company profile unavailable for %s (%s)", symbol, type(error).__name__)
+        info = {}
+    evidence = {"source": "Yahoo Finance company profile", "fetchedAt": datetime.now(timezone.utc).isoformat(),
+                "fallbackUsed": False}
+    if info.get("sector"):
+        evidence["classificationAvailable"] = True
+        _cache_put(key, {"info": {k: info[k] for k in fields if info.get(k)}, "evidence": evidence})
+        return info, evidence
+    cached = _cache_get(key, 86400)
+    if cached:
+        metadata = cached["info"]
+        evidence = {**cached["evidence"], "source": "Cached Yahoo Finance profile metadata", "fallbackUsed": True}
+    else:
+        metadata = {}
+        if not symbol.startswith("^"):
+            try:
+                quotes = yf.Search(symbol, max_results=5, news_count=0, lists_count=0,
+                                   include_nav_links=False, include_research=False,
+                                   timeout=5, raise_errors=False).quotes or []
+                match = next((q for q in quotes if str(q.get("symbol", "")).upper() == symbol), {})
+                metadata = {k: match[k] for k in fields if match.get(k)}
+                metadata["sector"] = match.get("sectorDisp") or match.get("sector")
+                metadata["industry"] = match.get("industryDisp") or match.get("industry")
+                metadata = {k: v for k, v in metadata.items() if v}
+                evidence = {**evidence, "source": "Yahoo Finance exact-symbol search metadata", "fallbackUsed": True}
+                if metadata.get("sector"):
+                    _cache_put(key, {"info": metadata, "evidence": evidence})
+            except Exception as error:
+                logger.warning("Profile metadata fallback unavailable for %s (%s)", symbol, type(error).__name__)
+    # Only identity/classification metadata is recovered. No stale or search
+    # financial numbers are substituted for missing current fundamentals.
+    info = {**metadata, **{k: v for k, v in info.items() if v is not None and v != ""}}
+    evidence["classificationAvailable"] = bool(info.get("sector"))
+    return info, evidence
+
+
 def company_research(symbol: str, sections: Optional[set[str]] = None) -> Dict[str, Any]:
     symbol = _sanitize_symbol(symbol)
     key = f"company:{symbol}"
     cached = _cache_get(key)
-    if cached is not None:
+    if cached is not None and (cached.get("profileEvidence", {}).get("classificationAvailable") is not False
+                               or cached.get("freshness", {}).get("cacheAgeSeconds", 0) < 30):
         return cached
     if sections is not None:
         key += ":sections:" + ",".join(sorted(sections))
         cached = _cache_get(key)
-        if cached is not None:
+        if cached is not None and (cached.get("profileEvidence", {}).get("classificationAvailable") is not False
+                                   or cached.get("freshness", {}).get("cacheAgeSeconds", 0) < 30):
             return cached
 
     def needed(section: str) -> bool:
@@ -2752,10 +2799,7 @@ def company_research(symbol: str, sections: Optional[set[str]] = None) -> Dict[s
     ticker = yf.Ticker(symbol)
     frame = _history(symbol, "1y")
     snapshot = market_snapshot(symbol)
-    try:
-        info = ticker.get_info() or {}
-    except Exception:
-        info = {}
+    info, profile_evidence = _company_profile(symbol, ticker)
     calendar = optional("catalysts", lambda: ticker.calendar or {}, {})
     earnings_dates = optional("catalysts", lambda: ticker.get_earnings_dates(limit=6))
     income_statement = optional("statements", lambda: ticker.income_stmt)
@@ -2865,6 +2909,7 @@ def company_research(symbol: str, sections: Optional[set[str]] = None) -> Dict[s
         "newsIntelligence": news_evidence["intelligence"],
         "dataAsOf": snapshot["dataAsOf"],
         "source": "Yahoo Finance via yfinance",
+        "profileEvidence": profile_evidence,
         "missingDataNotice": "Some fundamentals may be unavailable for indices, commodities or unsupported listings.",
     }
     return _cache_put(key, result)
@@ -3032,18 +3077,17 @@ def sector_peer_intelligence(symbol: str) -> Dict[str, Any]:
         }
     key = f"sector-peers:{symbol}"
     cached = _cache_get(key, PEER_CACHE_TTL_SECONDS)
-    if cached is not None:
+    if cached is not None and (cached.get("status") == "available"
+                               or cached.get("freshness", {}).get("cacheAgeSeconds", 0) < 30):
         return cached
 
-    try:
-        info = yf.Ticker(symbol).get_info() or {}
-    except Exception as error:
-        logger.warning("Peer profile lookup failed for %s: %s", symbol, error)
-        info = {}
+    info, profile_evidence = _company_profile(symbol)
     sector = str(info.get("sector") or "").strip()
     region, suffix = _peer_region_and_suffix(symbol)
     if not sector:
-        return _cache_put(key, _build_sector_peer_payload(symbol, info, [], region=region, suffix=suffix))
+        return _cache_put(key, {"status": "unavailable", "symbol": symbol,
+            "message": "Company classification could not be retrieved from the provider. Retry shortly.",
+            "source": "Yahoo Finance via yfinance", "profileEvidence": profile_evidence})
 
     try:
         base_conditions = [
@@ -3086,6 +3130,7 @@ def sector_peer_intelligence(symbol: str) -> Dict[str, Any]:
             "message": "Dynamic sector peers are temporarily unavailable from the market-data provider.",
             "source": "Yahoo Finance equity screener via yfinance",
         }
+    result["profileEvidence"] = profile_evidence
     return _cache_put(key, result)
 
 

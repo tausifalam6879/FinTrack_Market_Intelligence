@@ -95,11 +95,11 @@ test('event study shows returned windows without inventing missing benchmark dat
   await page.getByRole('button',{name:'Advanced model details',exact:true}).click();
   await page.route('**/market/event-impact?*',r=>r.fulfill({status:200,contentType:'application/json',body:JSON.stringify({eventDate:'2024-02-01',baselineDate:'2024-01-31',baselinePrice:100,benchmarkSymbol:null,windows:[{sessions:1,status:'available',date:'2024-02-01',price:110,returnPercent:10,benchmarkReturnPercent:null,excessReturnPoints:null}],method:'Matched dates',limitations:'No causal claim'})}));
   const panel=page.getByRole('region',{name:'Event impact analysis'});
-  await panel.getByLabel('Event date',{exact:true}).fill('2024-02-01');
+  await panel.getByLabel('Announcement date',{exact:true}).fill('2024-02-01');
   await panel.getByRole('button',{name:'Analyze event window'}).click();
   await expect(panel).toContainText('Benchmark: Unavailable');
   await expect(panel).toContainText('10%');
-  await panel.getByLabel('Event date',{exact:true}).fill('2024-03-01');
+  await panel.getByLabel('Announcement date',{exact:true}).fill('2024-03-01');
   await expect(panel).not.toContainText('Baseline session:');
 });
 

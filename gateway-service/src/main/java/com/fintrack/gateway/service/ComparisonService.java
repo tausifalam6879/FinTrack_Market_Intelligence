@@ -69,7 +69,13 @@ public class ComparisonService {
                     response.put("cache", "spring-memory-miss");
                     response.put("durationMs", Math.round((System.nanoTime() - started) / 100_000.0) / 10.0);
                     response.put("generatedAt", Instant.now().toString());
-                    cache.put(key, new CachedComparison(Instant.now(), Map.copyOf(response)));
+                    // A transient failure must not hide a recovered company for
+                    // the full five-minute cache window.
+                    if (errors.isEmpty()) {
+                        cache.put(key, new CachedComparison(Instant.now(), Map.copyOf(response)));
+                    } else {
+                        cache.remove(key);
+                    }
                     return Mono.just(response);
                 });
     }
