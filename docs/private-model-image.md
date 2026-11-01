@@ -21,6 +21,30 @@ The second image includes verified models, the current application code and
 These files remain present across container restarts because they are image
 contents. This does not require a persistent disk.
 
+If the package index is unavailable and the previously verified local runtime
+`fintrack-rehearsal-api:local` is present, the recovery-only base can reuse those
+installed versions while copying current application modules:
+
+```powershell
+docker build --network none --platform linux/amd64 -f market-service/Dockerfile.recovery-base -t fintrack-market-base:recovery market-service
+docker build --network none --platform linux/amd64 -t fintrack-market-mirror:recovery backups/render-model-image
+```
+
+This path requires that local runtime image. It is not a change to the regular
+Cloud Run/Render Dockerfile and does not refresh installed dependency versions.
+
+Run the actual model test (the host reads public approved identities; the
+inference container then runs with networking disabled, no Google credentials,
+a read-only filesystem and a 512 MiB memory limit):
+
+```powershell
+.\market-service\.venv\Scripts\python.exe scripts/verify_model_mirror_image.py --symbols '^NSEI' 'RELIANCE.NS' 'AAOI' '9700.F' --report backups/render-model-image/offline-verification.json
+```
+
+The symbol list is a verification sample of currently approved models, not a
+company allowlist. Use a new report filename for repeated runs. Real database
+integration and serving through Render remain separate acceptance checks.
+
 Before publishing, test the image with networking disabled: verify all file
 checksums, then load and perform inference for the models currently approved in
 the database. Merely including all 44 files does not approve candidates or prove
