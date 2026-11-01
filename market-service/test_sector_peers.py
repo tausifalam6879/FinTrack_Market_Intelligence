@@ -1,4 +1,7 @@
 import unittest
+from unittest.mock import Mock, patch
+import pandas as pd
+import market_intelligence as market
 
 from market_intelligence import (
     _build_sector_peer_payload,
@@ -9,6 +12,34 @@ from market_intelligence import (
 
 
 class SectorPeerIntelligenceTests(unittest.TestCase):
+    def tearDown(self):
+        market.clear_market_cache()
+
+    def test_directory_fallback_recovers_sector_names_without_fake_financials(self):
+        directory = pd.DataFrame({'name': ['Selected', 'Peer One', 'Peer Two'],
+                                  'rating': ['Buy', None, 'Hold']}, index=['NEWCO', 'PEER1', 'PEER2'])
+        with patch.object(market, '_company_profile', return_value=({'sector': 'Technology'}, {})), \
+             patch.object(market.yf, 'screen', side_effect=RuntimeError('custom screen blocked')), \
+             patch.object(market.yf, 'Sector', return_value=Mock(top_companies=directory)):
+            result = market.sector_peer_intelligence('NEWCO')
+        self.assertEqual('available', result['status'])
+        self.assertEqual('sector_directory_fallback', result['discoveryMode'])
+        self.assertEqual(['PEER1', 'PEER2'], [row['symbol'] for row in result['peers']])
+        self.assertIsNone(result['peerMedians']['marketCap'])
+        self.assertIsNone(result['peerMedians']['trailingPE'])
+        self.assertIsNone(result['selected']['marketCapRank'])
+        self.assertEqual('partial', result['coverageLevel'])
+
+    def test_us_directory_is_not_used_for_indian_or_japanese_listings(self):
+        with patch.object(market.yf, 'Sector') as directory:
+            self.assertEqual({}, market._sector_directory_peers('NEW.NS', {'sector':'Technology'}, 'in', '.NS'))
+            self.assertEqual({}, market._sector_directory_peers('9999.T', {'sector':'Technology'}, 'jp', '.T'))
+        directory.assert_not_called()
+
+    def test_failed_directory_does_not_manufacture_peers(self):
+        with patch.object(market.yf, 'Sector', side_effect=RuntimeError('offline')):
+            self.assertEqual({}, market._sector_directory_peers('NEW', {'sector':'Technology'}, 'us', ''))
+
     def test_financial_scorecard_converts_fractions_without_filling_missing_data(self):
         row=_peer_quote({'symbol':'AAPL','returnOnEquity':.2,'revenueGrowth':-.1,'operatingMargins':0},'AAPL')
         self.assertEqual(20,row['returnOnEquityPercent'])

@@ -2980,6 +2980,7 @@ def _build_sector_peer_payload(
     *,
     region: str,
     suffix: str,
+    allow_missing_cap: bool = False,
 ) -> Dict[str, Any]:
     sector = str(info.get("sector") or "").strip()
     if not sector:
@@ -3011,13 +3012,17 @@ def _build_sector_peer_payload(
         if quote_type != "EQUITY" or candidate_symbol in seen or not _peer_listing_matches(candidate_symbol, region, suffix):
             continue
         normalized = _peer_quote(raw, symbol)
-        if normalized["marketCap"] is None:
+        if normalized["marketCap"] is None and not allow_missing_cap:
             continue
         seen.add(candidate_symbol)
         candidates.append(normalized)
 
     target_cap = selected.get("marketCap")
-    if target_cap and target_cap > 0:
+    if allow_missing_cap:
+        # Directory order comes from the provider; missing capitalization must
+        # not be treated as zero or used to claim size similarity.
+        pass
+    elif target_cap and target_cap > 0:
         candidates.sort(key=lambda item: abs(math.log(max(float(item["marketCap"]), 1) / float(target_cap))))
     else:
         candidates.sort(key=lambda item: float(item.get("marketCap") or 0), reverse=True)
@@ -3045,7 +3050,7 @@ def _build_sector_peer_payload(
     }
     ranked = sorted([selected, *peers], key=lambda item: float(item.get("marketCap") or -1), reverse=True)
     market_cap_rank = next((index + 1 for index, item in enumerate(ranked) if item["symbol"] == symbol), None)
-    selected["marketCapRank"] = market_cap_rank
+    selected["marketCapRank"] = market_cap_rank if all(row.get("marketCap") is not None for row in ranked) else None
 
     return {
         "status": "available",
@@ -3065,6 +3070,42 @@ def _build_sector_peer_payload(
         "generatedAt": datetime.now(timezone.utc).isoformat(),
         "disclaimer": "Relative market evidence only; above/below a peer median is not a buy, sell or valuation recommendation.",
     }
+
+
+def _sector_directory_peers(symbol: str, info: Dict[str, Any], region: str, suffix: str) -> Dict[str, Any]:
+    """Separate GET-based Yahoo sector directory when custom screening fails.
+
+    This directory is US-scoped; never silently substitute US peers for an
+    Indian/Japanese/other listing. Missing financial fields remain missing.
+    """
+    if region != "us" or suffix:
+        return {}
+    sector = str(info.get("sector") or "").strip()
+    key = re.sub(r"[^a-z0-9]+", "-", sector.lower()).strip("-")
+    if not key:
+        return {}
+    try:
+        directory = yf.Sector(key).top_companies
+        if not isinstance(directory, pd.DataFrame) or directory.empty:
+            return {}
+        quotes = [{"symbol": str(ticker).upper(), "longName": row.get("name"),
+                   "averageAnalystRating": row.get("rating"), "quoteType": "EQUITY"}
+                  for ticker, row in directory.iterrows()]
+        result = _build_sector_peer_payload(symbol, info, quotes, region=region, suffix=suffix,
+                                            allow_missing_cap=True)
+        if result.get("status") != "available":
+            return {}
+        result.update({
+            "source": "Yahoo Finance sector company directory via yfinance",
+            "discoveryMode": "sector_directory_fallback", "coverageLevel": "partial",
+            "providerCoverage": len(quotes),
+            "method": "Provider sector directory for US listings, in provider order. These are sector peers, not verified closest-size peers. Medians use only supplied financial values; absent values remain unavailable.",
+            "coverageNotice": "The detailed screener is temporarily unavailable. Sector company names are available from a separate provider endpoint; missing valuation fields are not estimated.",
+        })
+        return result
+    except Exception as error:
+        logger.warning("Sector directory unavailable for %s (%s)", symbol, type(error).__name__)
+        return {}
 
 
 def sector_peer_intelligence(symbol: str) -> Dict[str, Any]:
@@ -3130,6 +3171,10 @@ def sector_peer_intelligence(symbol: str) -> Dict[str, Any]:
             "message": "Dynamic sector peers are temporarily unavailable from the market-data provider.",
             "source": "Yahoo Finance equity screener via yfinance",
         }
+    if result.get("status") != "available":
+        recovered = _sector_directory_peers(symbol, info, region, suffix)
+        if recovered:
+            result = recovered
     result["profileEvidence"] = profile_evidence
     return _cache_put(key, result)
 
