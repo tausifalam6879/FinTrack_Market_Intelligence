@@ -113,6 +113,12 @@ const request = async (path, { method = "GET", body, timeout = 30000, retry = me
           try { const parsed = JSON.parse(detail); message = parsed.detail?.message || parsed.detail || detail; } catch { /* Non-JSON gateway error. */ }
           const error = new Error(typeof message === "string" ? message : `Request failed with status ${response.status}`);
           error.status = response.status;
+          // Cloud Run can reject requests at Google's edge when the service
+          // is unavailable. Do not confuse this HTML response with app JSON
+          // permission/input errors, which must stay on the primary.
+          error.platformUnavailable = response.status === 403
+            && (response.headers.get("Content-Type") || "").includes("text/html")
+            && /Your client does not have permission to get URL/i.test(detail);
           throw error;
         }
         const payload = await response.json();
@@ -134,6 +140,7 @@ const request = async (path, { method = "GET", body, timeout = 30000, retry = me
         lastError = error;
         const unavailable = error.name === "AbortError"
           || error instanceof TypeError
+          || error.platformUnavailable === true
           || [500, 502, 503, 504].includes(error.status);
         if (canFailover && unavailable) {
           if (apiBase === API_BASE) primaryUnavailableUntil = Date.now() + 60000;

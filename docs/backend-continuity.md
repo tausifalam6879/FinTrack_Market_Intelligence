@@ -88,8 +88,10 @@ default primary. On network failure, request timeout or HTTP 500/502/503/504,
 research GET requests and read-only agent/comparison/document-answer POSTs try
 Render sequentially. The browser skips the failed primary for 60 seconds, then
 the next eligible request tries Google first again. No background polling is
-required. An expired account returning a permission error (403), rather than a
-server/network error, needs manual cutover after checking the cause.
+required. Google's recognisable HTML 403 edge rejection also triggers fallback;
+application JSON permission errors still do not. Other unexpected platform error
+formats need investigation rather than silently treating every client error as
+an outage.
 
 Input errors, permissions, rate limits and malformed responses do not trigger
 failover. Document preparation writes are never replayed on another host.

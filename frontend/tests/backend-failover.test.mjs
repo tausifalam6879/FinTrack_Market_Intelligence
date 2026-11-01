@@ -90,6 +90,16 @@ test('document preparation is never replayed on backup', async () => {
   assert.equal(h.calls.length, 1);
 });
 
+test('Google edge HTML rejection can fail over while application 403 cannot', async () => {
+  const h = harness(url => url.startsWith(primary) ? {
+    ...response(403),
+    headers: { get: key => key === 'Content-Type' ? 'text/html; charset=UTF-8' : null },
+    text: async () => '<html>Your client does not have permission to get URL /market/analysis</html>',
+  } : response());
+  assert.equal((await h.request('/market/analysis'))._delivery.fallback, true);
+  assert.equal(h.calls.length, 2);
+});
+
 test('two failed servers return an error, with no unbounded retries', async () => {
   const h = harness(() => response(503));
   await assert.rejects(h.request('/market/news-feed'));
