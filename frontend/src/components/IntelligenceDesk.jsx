@@ -6,6 +6,8 @@ import ResearchReport from "./ResearchReport";
 import EvidenceOverview from "./EvidenceOverview";
 import EventImpactPanel from "./EventImpactPanel";
 import SmartAlerts from './SmartAlerts';
+import ResearchReadiness, {NextSessionAudit, ResearchChangeSummary} from './ResearchReadiness';
+import {researchChanges} from '../services/researchChanges';
 import { marketApi } from "../services/marketApi";
 
 const presets = [
@@ -117,6 +119,17 @@ export default function IntelligenceDesk({ initialSymbol = "^NSEI", onProviderCh
   const [operationsStatus, setOperationsStatus] = useState(null);
   const [operationsStatusError, setOperationsStatusError] = useState("");
   const loadSequenceRef = useRef(0);
+  const lastResearchRef = useRef(marketApi.seed.analysis(initialSymbol)?.data || null);
+  const [researchChange,setResearchChange] = useState(null);
+  const [storedCompanies, setStoredCompanies] = useState(() => marketApi.seed.companies());
+
+  useEffect(() => {
+    let active = true;
+    marketApi.storedResearch().then(() => {
+      if (active) setStoredCompanies(marketApi.seed.companies());
+    }).catch(() => undefined);
+    return () => { active = false; };
+  }, []);
 
   useEffect(() => { setSymbol(initialSymbol); setDraftSymbol(initialSymbol); }, [initialSymbol]);
 
@@ -176,6 +189,9 @@ export default function IntelligenceDesk({ initialSymbol = "^NSEI", onProviderCh
       return undefined;
     }
     let active = true;
+    const localMatches = marketApi.seed.companies(clean, 6);
+    setCompanyMatches(localMatches);
+    setSearchingCompanies(false);
     const timer = window.setTimeout(async () => {
       setSearchingCompanies(true);
       setCompanySearchError("");
@@ -186,33 +202,38 @@ export default function IntelligenceDesk({ initialSymbol = "^NSEI", onProviderCh
         if (!(response.items || []).length) setCompanySearchError(`No public company matched “${clean}”.`);
       } catch {
         if (active) {
-          setCompanyMatches([]);
-          setCompanySearchError("Company directory is temporarily unavailable.");
+          setCompanyMatches(localMatches);
+          setCompanySearchError(localMatches.length ? "" : "Company directory is temporarily unavailable.");
         }
       } finally {
         if (active) setSearchingCompanies(false);
       }
     }, 180);
     return () => { active = false; window.clearTimeout(timer); };
-  }, [companySearchOpen, draftSymbol]);
+  }, [companySearchOpen, draftSymbol, storedCompanies]);
 
   const load = async (nextSymbol = symbol, refresh = false, silent = false) => {
     const normalized = nextSymbol.trim().toUpperCase();
     if (!normalized) return;
     const requestId = ++loadSequenceRef.current;
-    const seed = !refresh ? marketApi.seed.analysis(normalized) : null;
+    const seed = marketApi.seed.analysis(normalized);
+    if(lastResearchRef.current?.symbol!==normalized)setResearchChange(null);
+    lastResearchRef.current=seed?.data || (lastResearchRef.current?.symbol===normalized ? lastResearchRef.current : null);
     if (seed) setResult(seed);
     else if (!refresh) setResult(null);
     setLoading(true);
     if (!silent) setError("");
-    setModelStatusLoading(true);
+    setModelStatusLoading(!marketApi.seed.modelStatus(normalized)?.data);
     setModelStatusError("");
-    setExperimentsLoading(true);
+    setExperimentsLoading(!marketApi.seed.experiments(normalized)?.data);
     setExperimentsError("");
-    setPeerComparisonLoading(!normalized.startsWith("^"));
+    setPeerComparisonLoading(!normalized.startsWith("^") && !marketApi.seed.peers(normalized)?.data);
     setPeerComparisonError("");
-    setCompanyResearch(null);
-    setCompanyResearchLoading(!normalized.startsWith("^"));
+    setCompanyResearch(marketApi.seed.company(normalized)?.data || null);
+    setModelStatus(marketApi.seed.modelStatus(normalized)?.data || null);
+    setExperiments(marketApi.seed.experiments(normalized)?.data || null);
+    setPeerComparison(marketApi.seed.peers(normalized)?.data || null);
+    setCompanyResearchLoading(!normalized.startsWith("^") && !marketApi.seed.company(normalized)?.data);
     setCompanyResearchError("");
     setDocumentsLoading(true);
     setDocumentPreparation(null);
@@ -222,6 +243,21 @@ export default function IntelligenceDesk({ initialSymbol = "^NSEI", onProviderCh
     setCompanySearchOpen(false);
     setCompanyMatches([]);
     setSymbol(normalized); setDraftSymbol(normalized);
+    let freshAnalysisApplied = false;
+    let freshCompanyApplied = false;
+    let freshPeersApplied = false;
+    // MySQL previews are provider-free and race independently of online refresh.
+    void marketApi.storedResearch(normalized).then((response) => {
+      if (loadSequenceRef.current !== requestId) return;
+      const stored = response.data;
+      if (!freshAnalysisApplied && stored?.analysis?.data) {
+        const preview = marketApi.seed.analysis(normalized) || stored.analysis;
+        setResult({ ...preview, mode: "stored" });
+        lastResearchRef.current=preview.data;
+      }
+      if (!freshCompanyApplied && stored?.company?.data) { setCompanyResearch(marketApi.seed.company(normalized)?.data || stored.company.data); setCompanyResearchLoading(false); }
+      if (!freshPeersApplied && stored?.peers?.data) { setPeerComparison(marketApi.seed.peers(normalized)?.data || stored.peers.data); setPeerComparisonLoading(false); }
+    }).catch(() => undefined);
     const startSecondaryRequests = () => {
       // The summary is the interaction the visitor asked for. Model
       // monitoring, experiments, peers, fundamentals and document inventory
@@ -247,7 +283,7 @@ export default function IntelligenceDesk({ initialSymbol = "^NSEI", onProviderCh
             }
           })
         : marketApi.peerComparison(normalized, refresh)
-          .then((response) => { if (loadSequenceRef.current === requestId) setPeerComparison(response.data || response); })
+          .then((response) => { if (loadSequenceRef.current === requestId) { freshPeersApplied = true; setPeerComparison(response.data || response); } })
           .catch(() => {
             if (loadSequenceRef.current === requestId) {
               setPeerComparison(null);
@@ -263,7 +299,7 @@ export default function IntelligenceDesk({ initialSymbol = "^NSEI", onProviderCh
             }
           })
         : marketApi.company(normalized, refresh)
-          .then((response) => { if (loadSequenceRef.current === requestId) setCompanyResearch(response.data || response); })
+          .then((response) => { if (loadSequenceRef.current === requestId) { freshCompanyApplied = true; setCompanyResearch(response.data || response); } })
           .catch(() => {
             if (loadSequenceRef.current === requestId) {
               setCompanyResearch(null);
@@ -303,11 +339,15 @@ export default function IntelligenceDesk({ initialSymbol = "^NSEI", onProviderCh
       // automatic side effect of every company search.
       void Promise.allSettled([monitoringRequest, experimentsRequest, peersRequest, companyRequest, documentsRequest, identityRequest]);
     };
+    startSecondaryRequests();
     try {
       const nextResult = await marketApi.analysis(normalized, refresh);
       if (loadSequenceRef.current === requestId) {
+        freshAnalysisApplied = nextResult.mode === "live";
+        if(freshAnalysisApplied){const change=researchChanges(lastResearchRef.current,nextResult.data);if(change)setResearchChange(change);}
+        lastResearchRef.current=nextResult.data;
         setResult(nextResult);
-        setError(nextResult.error || "");
+        setError(nextResult.error ? "Latest data is unavailable. Previously stored research remains visible." : "");
         if (!normalized.startsWith("^") && nextResult?.data?.name) {
           setResolvedCompany((current) => current?.symbol === normalized ? current : {
             symbol: normalized,
@@ -321,10 +361,26 @@ export default function IntelligenceDesk({ initialSymbol = "^NSEI", onProviderCh
     } finally {
       if (loadSequenceRef.current === requestId) setLoading(false);
     }
-    if (loadSequenceRef.current === requestId) startSecondaryRequests();
   };
 
   useEffect(() => { load(initialSymbol, false, true); }, [initialSymbol]);
+  useEffect(() => {
+    const reconnect = () => { void load(symbol, true, true); };
+    window.addEventListener("online", reconnect);
+    return () => window.removeEventListener("online", reconnect);
+  }, [symbol]);
+  useEffect(()=>{
+    const updated=event=>{
+      if(event.detail.symbol!==symbol)return;
+      const next=event.detail.result;
+      const change=researchChanges(lastResearchRef.current,next.data);if(change)setResearchChange(change);
+      lastResearchRef.current=next.data;
+      setResult(next);setError('');
+      void marketApi.modelStatus(symbol).then(setModelStatus).catch(()=>undefined);
+    };
+    window.addEventListener('fintrack:research-updated',updated);
+    return()=>window.removeEventListener('fintrack:research-updated',updated);
+  },[symbol]);
 
   const analysis = result?.data;
   const history = useMemo(() => analysis?.history || [], [analysis]);
@@ -354,7 +410,8 @@ export default function IntelligenceDesk({ initialSymbol = "^NSEI", onProviderCh
       load(clean);
       return;
     }
-    const availableMatch = companyMatches.find((item) => item.symbol.toUpperCase() === clean.toUpperCase()) || companyMatches[0];
+    const matches = companyMatches.length ? companyMatches : marketApi.seed.companies(clean, 8);
+    const availableMatch = matches.find((item) => item.symbol.toUpperCase() === clean.toUpperCase()) || matches[0];
     if (availableMatch) {
       selectCompany(availableMatch);
       return;
@@ -495,12 +552,12 @@ export default function IntelligenceDesk({ initialSymbol = "^NSEI", onProviderCh
       <div className="intelligence-company-search">
         <form className="symbol-search" onSubmit={(event) => { event.preventDefault(); resolveAndLoad(); }}>
           <input value={draftSymbol} onChange={(event) => { setDraftSymbol(event.target.value); setResolvedCompany(null); setCompanySearchOpen(true); }} placeholder="Company name or ticker, e.g. Amazon, CSCO, RELIANCE.NS" aria-label="Company name or market ticker" autoComplete="off" />
-          <button className="primary-button" disabled={resolvingCompany || searchingCompanies || loading}>{resolvingCompany || searchingCompanies ? "Finding company…" : loading ? "Loading research…" : "Run research"}</button>
+          <button className="primary-button" disabled={resolvingCompany || (searchingCompanies && !companyMatches.length)}>{resolvingCompany ? "Finding company…" : loading ? "Refreshing research…" : "Run research"}</button>
         </form>
         {companySearchOpen && draftSymbol.trim().length >= 2 && !draftSymbol.trim().startsWith("^") && !isExplicitIndianTicker(draftSymbol) && <div className="company-search-results intelligence-search-results" aria-label="Matching companies">
           {searchingCompanies && <div className="company-search-state">Finding the correct market ticker…</div>}
           {!searchingCompanies && companySearchError && <div className="company-search-state error">{companySearchError}</div>}
-          {!searchingCompanies && companyMatches.map((company) => <button type="button" key={company.symbol} onClick={() => selectCompany(company)}>
+          {companyMatches.map((company) => <button type="button" key={company.symbol} onClick={() => selectCompany(company)}>
             <span><strong>{company.name}</strong><small>{company.symbol} · {company.exchange}</small></span>
             <span><b>Use this company →</b></span>
           </button>)}
@@ -508,8 +565,11 @@ export default function IntelligenceDesk({ initialSymbol = "^NSEI", onProviderCh
         {resolvedCompany && resolvedCompany.symbol === symbol && <div className="resolved-company">Resolved to <strong>{resolvedCompany.name}</strong><span>{resolvedCompany.symbol} · {resolvedCompany.exchange}</span></div>}
       </div>
       <div className="preset-row">{presets.map(([value, label]) => <button key={value} className={symbol === value ? "sector active" : "sector"} onClick={() => { setResolvedCompany({ symbol: value, name: label, exchange: value.endsWith(".NS") ? "NSE" : value.startsWith("^") ? "Index" : "US" }); load(value); }}>{label}</button>)}</div>
+      {!!storedCompanies.length && <details className="stored-research-directory"><summary>Previously stored companies ({storedCompanies.length})</summary><div className="preset-row">{storedCompanies.map((company) => <button type="button" className="sector" key={company.symbol} onClick={() => selectCompany(company)}>{company.name} · {company.symbol}</button>)}</div></details>}
+      <ResearchReadiness savedSymbols={savedResearch.map(item=>item.symbol)} currentSymbol={symbol} onSelect={selectCompany} />
       {result?.mode === "snapshot" && <div className="notice warning">Showing packaged verified research while the live backend refreshes this symbol in the background.</div>}
       {result?.mode === "cache" && <div className="notice warning">Showing the last verified browser research while the live backend reconnects.</div>}
+      {result?.mode === "stored" && <div className="notice warning" role="status">Showing previously stored research. Observation date: {result.data?.dataAsOf || "unavailable"}. {loading ? "Checking for newer data in the background." : "Check the observation date before using these values."}</div>}
       {error && <div className="notice error">{error}</div>}
 
       {analysis && <>
@@ -570,6 +630,8 @@ export default function IntelligenceDesk({ initialSymbol = "^NSEI", onProviderCh
         {activeView === "mlops" && <EventImpactPanel symbol={analysis.symbol} catalysts={companyResearch?.symbol===analysis.symbol?companyResearch.catalysts:null} />}
         {activeView === "mlops" && <OperationsSummary status={modelStatus} loading={modelStatusLoading} error={modelStatusError} />}
         {activeView === "mlops" && <PredictionOutcomeSummary status={modelStatus} loading={modelStatusLoading} onOpen={() => setActiveView("mlops")} />}
+        {activeView === "mlops" && <ResearchChangeSummary change={researchChange} />}
+        {activeView === "mlops" && <NextSessionAudit audit={modelStatus?.predictionMonitoring?.sessionAudit} />}
         {activeView === "mlops" && <ModelRegistryPanel status={modelStatus} loading={modelStatusLoading} error={modelStatusError} activeModel={analysis.model} operationsStatus={operationsStatus} operationsError={operationsStatusError} />}
         {activeView === "mlops" && <ExperimentTrackingPanel data={experiments} loading={experimentsLoading} error={experimentsError} />}
         {activeView === "documents" && !symbol.startsWith("^") && <DocumentRagPanel
@@ -671,14 +733,16 @@ function SavedResearchPanel({ items, selected, rows, loading, error, toggle, rem
 
 function PredictionOutcomeSummary({ status, loading, onOpen }) {
   const monitoring = status?.predictionMonitoring;
-  const evaluated = monitoring?.evaluated ?? monitoring?.rollingQuality?.evaluatedTotal ?? 0;
-  const pending = Math.max(0, (monitoring?.totalStored ?? 0) - evaluated);
+  const audit=monitoring?.sessionAudit;
+  const evaluated = audit?.evaluated ?? monitoring?.evaluated ?? monitoring?.rollingQuality?.evaluatedTotal ?? 0;
+  const pending = audit?.pending ?? Math.max(0, (monitoring?.totalStored ?? 0) - evaluated);
+  const accuracy = audit ? audit.windows?.[0]?.accuracy : monitoring?.observedAccuracy;
   return <aside className="prediction-outcome-summary" aria-label="Prediction outcome tracking">
     <div><span>PREDICTION OUTCOME TRACKING</span><strong>{loading ? "Checking stored predictions…" : `${monitoring?.totalStored ?? 0} predictions stored`}</strong></div>
     <dl>
       <div><dt>Evaluated</dt><dd>{loading ? "—" : evaluated}</dd></div>
       <div><dt>Awaiting session</dt><dd>{loading ? "—" : pending}</dd></div>
-      <div><dt>Observed accuracy</dt><dd>{loading || monitoring?.observedAccuracy === null || monitoring?.observedAccuracy === undefined ? "Awaiting outcomes" : `${monitoring.observedAccuracy}%`}</dd></div>
+      <div><dt>{audit ? 'Binary accuracy · latest 20' : 'Legacy outlook match'}</dt><dd>{loading || accuracy == null ? "Awaiting outcomes" : `${accuracy}%`}</dd></div>
     </dl>
     <button type="button" onClick={onOpen}>Open audit & MLOps →</button>
   </aside>;
@@ -1726,6 +1790,17 @@ function ModelRegistryPanel({ status, loading, error, activeModel, operationsSta
   const rolling20 = monitoring?.rollingQuality?.windows?.find((item) => item.window === 20);
   const driftFeatures = (drift?.features || []).filter((item) => item.psi !== null && item.psi !== undefined).slice(0, 4);
   const approvedServing = status?.servingMode === "approved_artifact";
+  const factorResearch = status?.marketFactorResearch;
+  const factorCapture = status?.pointInTimeFactors;
+  const horizonResearch = status?.horizonResearch;
+  const failedChecks = Object.entries(latest?.qualityGate?.checks || {}).filter(([, passed]) => !passed);
+  const checkNames = {
+    balancedAccuracyAtLeast52Percent: "Balanced accuracy below 52%",
+    rocAucAtLeast52Percent: "ROC AUC below 52% or unavailable",
+    brierScoreAtMost0_255: "Probability error exceeds the limit",
+    "brierScoreAtMost0.255": "Probability error exceeds 0.255",
+    matchesOrBeatsBestNaiveBaseline: "Does not beat the best naive baseline"
+  };
   return <section id="model-operations" className={`registry-panel ${approvedServing ? "registry-approved" : "registry-fallback"}`} aria-labelledby="registry-title">
     <div className="registry-heading">
       <div>
@@ -1745,13 +1820,92 @@ function ModelRegistryPanel({ status, loading, error, activeModel, operationsSta
       <ValidationStat label="Holdout ROC AUC" value={approved?.holdout?.rocAuc ? `${approved.holdout.rocAuc}%` : "—"} />
       <ValidationStat label="Dataset version" value={approved?.datasetVersion || latest?.datasetVersion || "Runtime data"} />
       <ValidationStat label="Stored predictions" value={monitoring?.totalStored ?? 0} />
-      <ValidationStat label="Observed accuracy" value={monitoring?.observedAccuracy === null || monitoring?.observedAccuracy === undefined ? "Awaiting outcomes" : `${monitoring.observedAccuracy}%`} />
+      <ValidationStat label="Legacy outlook match" value={monitoring?.observedAccuracy === null || monitoring?.observedAccuracy === undefined ? "Awaiting outcomes" : `${monitoring.observedAccuracy}%`} />
     </div>}
     {!loading && !error && !approved && latest && <div className="registry-rejection">
       <strong>Latest offline run: {latest.status}</strong>
       <span>{latest.model} · holdout balanced accuracy {latest.holdout.balancedAccuracy}% · ROC AUC {latest.holdout.rocAuc ?? "—"}%</span>
       <small>A weak or unapproved model is never promoted automatically.</small>
+      {failedChecks.length > 0 && <small>Failed checks: {failedChecks.map(([name]) => checkNames[name] || name).join("; ")}.</small>}
     </div>}
+    {!loading && !error && latest?.walkForwardCandidates?.length > 0 && <details className="registry-training-evidence">
+      <summary>Offline classifier comparison · {latest.walkForwardCandidates.length} candidates</summary>
+      <p>Latest run: {latest.status}. Selected features: {latest.featureSchema}. The scores below use training-only chronological validation; the final holdout is reported separately above.</p>
+      <div className="table-scroll"><table className="model-table">
+        <thead><tr><th>Classifier</th><th>Features</th><th>Validation balanced accuracy</th><th>Validation ROC AUC</th><th>Brier</th></tr></thead>
+        <tbody>{latest.walkForwardCandidates.map(item => <tr key={item.id}>
+          <td>{item.name}</td><td>{item.featureSchema || "legacy7"} ({item.featureCount || 7})</td>
+          <td>{(item.balancedAccuracy * 100).toFixed(1)}%</td><td>{item.rocAuc == null ? "—" : `${(item.rocAuc * 100).toFixed(1)}%`}</td><td>{item.brierScore.toFixed(3)}</td>
+        </tr>)}</tbody>
+      </table></div>
+    </details>}
+    {!loading && !error && horizonResearch && <details className="registry-training-evidence" aria-label="Research horizon comparison">
+      <summary>Research horizons · 1, 5 and 10 trading sessions</summary>
+      <p>Each horizon is a different target. A longer-horizon result is not daily accuracy. The serving prediction remains unchanged.</p>
+      <div className="table-scroll"><table className="model-table">
+        <thead><tr><th>Trading sessions ahead</th><th>Research classifier</th><th>Non-overlapping test outcomes</th><th>Balanced accuracy</th><th>Best naive control</th><th>Model edge</th><th>ROC AUC</th><th>Horizon purge</th><th>Forward shadow history</th></tr></thead>
+        <tbody>{horizonResearch.results.map(row => <tr key={row.horizonSessions}>
+          <td>{row.horizonSessions}</td><td>{row.selected?.name || row.status.replaceAll('_',' ')}{row.reason && <small>{row.reason}</small>}{row.holdout && <small>{row.holdout.start} to {row.holdout.end}</small>}</td>
+          <td>{row.holdout?.nonOverlappingOutcomes ?? '—'}</td>
+          <td>{row.holdout?.balancedAccuracy == null ? 'Not evaluable' : `${(row.holdout.balancedAccuracy*100).toFixed(1)}%`}</td>
+          <td>{row.bestNaiveBalancedAccuracy == null ? '—' : `${(row.bestNaiveBalancedAccuracy*100).toFixed(1)}%`}</td>
+          <td>{row.balancedAccuracyEdge == null ? '—' : `${(row.balancedAccuracyEdge*100).toFixed(1)} pp`}</td>
+          <td>{row.holdout?.rocAuc == null ? '—' : `${(row.holdout.rocAuc*100).toFixed(1)}%`}</td>
+          <td>{row.purgeGapRows ?? row.horizonSessions} sessions</td>
+          <td>{row.shadowHistory?.records?.length ? `${row.shadowHistory.evaluated} scored / ${row.shadowHistory.pending} pending; latest ${row.shadowHistory.records[0].modelDataDate}` : 'Awaiting collection'}</td>
+        </tr>)}</tbody>
+      </table></div>
+      <p>{horizonResearch.featureScope}</p><p>{horizonResearch.limitation}</p>
+    </details>}
+    {!loading && !error && factorCapture?.status === 'collecting' && <details className="registry-training-evidence" aria-label="Timestamped factor history">
+      <summary>Timestamped news and fundamental history</summary>
+      <p>Availability uses the time this system first observed the data, not its accounting-period end or an assumed earlier publication date. Cached research is not backfilled.</p>
+      {factorCapture.families.length ? <div className="table-scroll"><table className="model-table">
+        <thead><tr><th>Factor family</th><th>Observations</th><th>First observed</th><th>Latest observed</th></tr></thead>
+        <tbody>{factorCapture.families.map(row => <tr key={row.family}><td>{row.family}</td><td>{row.observations}</td><td>{row.first_observed}</td><td>{row.last_observed}</td></tr>)}</tbody>
+      </table></div> : <p>No dated factor observations yet.</p>}
+      <p>These observations prepare future multi-factor training. Existing classifiers are unchanged; insufficient history is not represented as a trained model.</p>
+      {factorCapture.trainingReadiness?.status && <p>Training readiness: {factorCapture.trainingReadiness.status.replaceAll('_',' ')}. Usable labelled sessions: {factorCapture.trainingReadiness.commonLabelledRows}. Training {factorCapture.trainingReadiness.trainingRows}/100; holdout {factorCapture.trainingReadiness.holdoutRows}/30.</p>}
+    </details>}
+    {!loading && !error && factorResearch && <details className="registry-training-evidence">
+      <summary>Market-factor research · awaiting future validation</summary>
+      <p>Research only; this experiment does not replace the serving model. Benchmark: {factorResearch.benchmarkSymbol}. Selected features: {factorResearch.selected?.featureSchema}.</p>
+      <div className="registry-metrics">
+        <ValidationStat label="Matched price-only control" value={`${(factorResearch.matchedControl.balancedAccuracy * 100).toFixed(1)}% balanced`} />
+        <ValidationStat label="Research historical result" value={`${(factorResearch.holdout.balancedAccuracy * 100).toFixed(1)}% balanced`} />
+        <ValidationStat label="Historical ROC AUC" value={factorResearch.holdout.rocAuc == null ? "—" : `${(factorResearch.holdout.rocAuc * 100).toFixed(1)}%`} />
+        <ValidationStat label="Future shadow outcome" value={String(factorResearch.shadowOutcome?.status || "pending").replaceAll("_", " ")} />
+      </div>
+      <p>Test period: {factorResearch.holdout.start} to {factorResearch.holdout.end} ({factorResearch.holdout.rows} rows). {factorResearch.marketDataPolicy}</p>
+      <p>{factorResearch.limitation}</p>
+      {factorResearch.shadowHistory?.records && <div className="research-shadow-history">
+        <h4>Prospective shadow history</h4>
+        <p>{factorResearch.shadowHistory.evaluated} evaluated · {factorResearch.shadowHistory.pending} pending · {factorResearch.shadowHistory.excluded} late snapshots excluded. No automatic promotion.</p>
+        <p>Future balanced accuracy: {factorResearch.shadowHistory.balancedAccuracy == null ? "Awaiting both outcome classes" : `${(factorResearch.shadowHistory.balancedAccuracy * 100).toFixed(1)}%`}. Future Brier: {factorResearch.shadowHistory.brierScore == null ? "Awaiting outcomes" : factorResearch.shadowHistory.brierScore.toFixed(3)}.</p>
+        {factorResearch.shadowHistory.baselineComparisons?.length > 0 && <section aria-label="Prospective baseline comparison">
+          <h4>Classifier vs simple baselines</h4>
+          <p>Scores use identical matched outcomes. Older forecasts without recorded controls remain unavailable. Momentum is a direction-only rule, so it has no probability-error score.</p>
+          <div className="table-scroll"><table className="model-table">
+            <thead><tr><th>Control</th><th>Matched outcomes</th><th>Model balanced accuracy</th><th>Control balanced accuracy</th><th>Difference</th><th>Model / control Brier</th><th>Model-only / control-only correct</th></tr></thead>
+            <tbody>{factorResearch.shadowHistory.baselineComparisons.map(item => <tr key={item.id}>
+              <td>{item.label}</td><td>{item.pairedOutcomes} ({item.missingBaseline} unavailable)</td>
+              <td>{item.model.balancedAccuracy == null ? "Awaiting both classes" : `${(item.model.balancedAccuracy*100).toFixed(1)}%`}</td>
+              <td>{item.baseline.balancedAccuracy == null ? "Awaiting both classes" : `${(item.baseline.balancedAccuracy*100).toFixed(1)}%`}</td>
+              <td>{item.balancedAccuracyDifference == null ? "—" : `${(item.balancedAccuracyDifference*100).toFixed(1)} pp`}</td>
+              <td>{item.model.brierScore?.toFixed(3) ?? "—"} / {item.baseline.brierScore?.toFixed(3) ?? "Not scored"}</td>
+              <td>{item.modelOnlyCorrect} / {item.baselineOnlyCorrect}</td>
+            </tr>)}</tbody>
+          </table></div>
+          <p>Observed differences are not proof of future skill. A matched sample of 60 outcomes permits manual review; it never triggers automatic promotion.</p>
+        </section>}
+        <div className="table-scroll"><table className="model-table">
+          <thead><tr><th>Forecast session</th><th>Recorded at</th><th>Rise probability</th><th>Outcome status</th></tr></thead>
+          <tbody>{factorResearch.shadowHistory.records.map(item => <tr key={item.modelDataDate}>
+            <td>{item.modelDataDate}</td><td>{item.generatedAt}</td><td>{(item.probabilityUp * 100).toFixed(1)}%</td><td>{item.status.replaceAll("_", " ")}</td>
+          </tr>)}</tbody>
+        </table></div>
+      </div>}
+    </details>}
     {!loading && !error && monitoring?.records?.length > 0 && <div className="registry-audit">
       {monitoring.records.slice(0, 4).map((item) => <article key={item.id}>
         <span>{item.modelDataDate}</span>
@@ -1771,7 +1925,7 @@ function ModelRegistryPanel({ status, loading, error, activeModel, operationsSta
         <ValidationStat label="Recent feature rows" value={`${drift?.recentObservations || 0}/${drift?.minimumObservations || 20}`} />
         <ValidationStat label="Mean PSI" value={drift?.meanPsi ?? "Collecting"} />
         <ValidationStat label="Maximum PSI" value={drift?.maxPsi ?? "Collecting"} />
-        <ValidationStat label="Rolling 20 accuracy" value={rolling20?.accuracy === null || rolling20?.accuracy === undefined ? `${rolling20?.evaluated || 0}/20 outcomes` : `${rolling20.accuracy}%`} />
+        <ValidationStat label="Legacy 20 outlook match" value={rolling20?.accuracy === null || rolling20?.accuracy === undefined ? `${rolling20?.evaluated || 0}/20 outcomes` : `${rolling20.accuracy}%`} />
         <ValidationStat label="Artifact data age" value={retraining?.artifactDataAgeDays === undefined ? "No approved run" : `${retraining.artifactDataAgeDays} days`} />
         <ValidationStat label="Auto retraining" value={retraining?.automaticRetraining ? "Enabled" : "Disabled - approval gate"} />
       </div>
@@ -2010,7 +2164,7 @@ function ModelEvidence({ model, comparisons, importance, audit }) {
           <small>{item.status === "evaluated" ? `Actual: ${item.actualDirection} (${item.actualReturnPercent}%) · ${item.correct ? "correct" : "not correct"}` : "Awaiting next session"}</small>
         </article>)}</div>}
     </div>
-    <p className="method-note">Target: next trading session direction. Validation uses expanding historical windows with a one-session gap. Low out-of-sample skill shrinks confidence toward 50%, and only probabilities outside 42%-58% become directional. Feature importance is a diagnostic, not proof of causality.</p>
+    <p className="method-note">Target: next trading session direction. Validation uses expanding historical windows with a one-session gap. Approved probabilities come directly from the evaluated estimator. Probabilities outside 42%-58% receive a directional outlook; that label does not establish predictive skill. Feature importance is a diagnostic, not proof of causality.</p>
   </section>;
 }
 
